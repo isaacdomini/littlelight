@@ -10,6 +10,21 @@
 #   STORAGE_PATH  MinIO data (the photo library), bind-mounted at /data
 #   BACKUP_PATH   nightly pg_dump archives (docker/backup/pg-backup.sh)
 # Off-site copies of both folders: docker/backup/offsite-backup.sh from host cron.
+#
+# Configuration: .env (from .env.example) is used ONLY for ${VAR} interpolation in this file. No
+# service gets the whole file (no env_file): each one receives exactly the variables listed in
+# its `environment:` block, so e.g. api/worker never see POSTGRES_PASSWORD, the other services'
+# role passwords, SMTP or tunnel credentials. A new app variable must be added to .env.example
+# AND to the x-app-env anchor (or the service's own block) below.
+#
+# Database roles (docs/plans/step-2.md 2.2) and start order:
+#   db -> db-init   (superuser: creates/converges roles supabase_auth_admin, littlelight_api,
+#                    littlelight_worker, viewer, pipeline, ... and the auth/pgboss schemas)
+#      -> auth      (GoTrue as supabase_auth_admin; runs its own migrations, then /health)
+#      -> migrate   (superuser: app migrations; they reference auth.users)
+#      -> api       (littlelight_api, RLS enforced) / worker (littlelight_worker)
+# Never enable log_statement=all, log_parameter_max_length_on_error > 0 or pg_stat_statements
+# parameter capture on `db`: request claims and encryption keys travel as bind parameters.
 name: littlelight
 
 x-logging: &logging
@@ -20,10 +35,43 @@ x-logging: &logging
 
 x-app: &app
   restart: unless-stopped
-  env_file:
-    - path: .env
-      required: true
   logging: *logging
+
+# Superuser connection + role passwords: db-init and migrate only.
+x-bootstrap-env: &bootstrap-env
+  NODE_ENV: production
+  TZ: ${TZ:-UTC}
+  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/littlelight
+  AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}
+  API_DB_PASSWORD: ${API_DB_PASSWORD:?Set API_DB_PASSWORD in .env}
+  WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:?Set WORKER_DB_PASSWORD in .env}
+
+# Shared by api and worker; each adds its own DATABASE_URL (app role) and service settings.
+# Optional values default to "" (the apps treat empty as unset).
+x-app-env: &app-env
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  TZ: ${TZ:-UTC}
+  PUBLIC_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+  DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set DATA_ENCRYPTION_KEY in .env}
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://storage:9000}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+  S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+  VISION_PROVIDER: ${VISION_PROVIDER:-openai}
+  VISION_MODEL: ${VISION_MODEL:-gpt-6-luna}
+  VISION_REASONING_EFFORT: ${VISION_REASONING_EFFORT:-none}
+  CHAT_MODEL: ${CHAT_MODEL:-gpt-6-luna}
+  CHAT_REASONING_EFFORT: ${CHAT_REASONING_EFFORT:-low}
+  EMBED_MODEL: ${EMBED_MODEL:-text-embedding-3-small}
+  EMBED_DIMS: ${EMBED_DIMS:-1024}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  SENTRY_DSN: ${SENTRY_DSN:-}
 
 # Node services: non-root image user, no capabilities, read-only root filesystem.
 x-hardened: &hardened
@@ -53,18 +101,39 @@ services:
       start_period: 30s
       start_interval: 1s
 
-  # One-shot: creates the supabase_auth_admin role + auth schema GoTrue needs, then migrates.
-  migrate:
+  # One-shot: Postgres roles (supabase_auth_admin for GoTrue, littlelight_api, littlelight_worker,
+  # viewer, pipeline, ...), the auth schema GoTrue needs and the pgboss schema. Idempotent; it
+  # re-applies passwords/attributes from .env on every start (also the step after a restore).
+  db-init:
+    <<: *hardened
     build:
       context: .
       dockerfile: packages/db/Dockerfile
-    env_file:
-      - path: .env
-        required: true
+    image: littlelight-db-tools
+    command: ["pnpm", "db:bootstrap"]
     restart: "no"
     logging: *logging
+    environment: *bootstrap-env
     depends_on:
       db:
+        condition: service_healthy
+
+  # One-shot: app migrations (no seed in production). Runs after GoTrue is healthy, i.e. after
+  # GoTrue's own migrations created auth.users, which the app tables reference.
+  migrate:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: packages/db/Dockerfile
+    image: littlelight-db-tools
+    command: ["pnpm", "db:migrate"]
+    restart: "no"
+    logging: *logging
+    environment: *bootstrap-env
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
         condition: service_healthy
 
   auth:
@@ -72,9 +141,9 @@ services:
     restart: unless-stopped
     logging: *logging
     depends_on:
-      migrate:
+      db-init:
         condition: service_completed_successfully
-    # Explicit environment only (no env_file): GoTrue never sees the superuser DATABASE_URL.
+    # Explicit environment only: GoTrue never sees the superuser or app-role credentials.
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: "9999"
@@ -175,6 +244,19 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: prod
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgres://littlelight_api:${API_DB_PASSWORD:?Set API_DB_PASSWORD in .env}@db:5432/littlelight
+      API_HOST: 0.0.0.0
+      API_PORT: "3000"
+      # App emails (invites); one of the two, later steps.
+      POSTMARK_TOKEN: ${POSTMARK_TOKEN:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # Entitlement webhooks, later steps.
+      REVENUECAT_API_KEY: ${REVENUECAT_API_KEY:-}
+      REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -194,6 +276,11 @@ services:
       context: .
       dockerfile: apps/worker/Dockerfile
       target: prod
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgres://littlelight_worker:${WORKER_DB_PASSWORD:?Set WORKER_DB_PASSWORD in .env}@db:5432/littlelight
+      HEARTBEAT_INTERVAL_MS: ${HEARTBEAT_INTERVAL_MS:-10000}
+      HEARTBEAT_STALE_MS: ${HEARTBEAT_STALE_MS:-30000}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -208,7 +295,7 @@ services:
       start_interval: 3s
 
   # nginx: SPA + /api/ and /auth/ proxies (docker/nginx/default.conf). Needs no app secrets,
-  # so it gets no env_file.
+  # so it gets no environment.
   web:
     build:
       context: .

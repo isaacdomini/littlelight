@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
-# Littlelight one-shot migrate job: bootstraps the GoTrue role/schema (supabase_auth_admin, auth)
-# and runs the SQL migrations. Build context: repo root (docs/plans/step-1.md 2.13).
-# Same image in dev and prod; dev compose overrides the command to also seed.
+# Littlelight database tools image (Compose one-shots `db-init` and `migrate`). Build context:
+# repo root (docs/plans/step-1.md 2.13, step-2.md 2.13).
+#   db-init : pnpm db:bootstrap   roles (GoTrue's supabase_auth_admin, app roles) + auth schema
+#   migrate : pnpm db:migrate     (re-runs the idempotent bootstrap) + SQL migrations; dev also seeds
+# Same image in dev and prod.
 #
 # `pnpm deploy` makes a standalone copy with only @littlelight/db's own dependencies (pg,
 # node-pg-migrate, tsx). A filtered `pnpm install` would also pull in the workspace root's
@@ -35,8 +37,12 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE}
 ARG PNPM_VERSION
+# pnpm_config_verify_deps_before_run=false: without it every `pnpm db:*` first runs an install
+# that, under NODE_ENV=production, tries to prune devDependencies (tsx) from the deployed
+# node_modules. It only fails today because the files are root-owned/read-only; never let it.
 ENV CI=true \
     npm_config_update_notifier=false \
+    pnpm_config_verify_deps_before_run=false \
     NODE_ENV=production
 RUN apk add --no-cache tini && npm i -g pnpm@${PNPM_VERSION} && npm cache clean --force
 # Root-owned and read-only for the runtime user. Same paths as the repo, so

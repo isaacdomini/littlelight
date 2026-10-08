@@ -54,6 +54,20 @@ describe("beatOnce", () => {
     expect(UPSERT_STORAGE_DOWN_SQL).toContain("to_timestamp(0)");
   });
 
+  it("advances updated_at on every upsert (insert and conflict update), storage up or down", () => {
+    for (const sql of [UPSERT_OK_SQL, UPSERT_STORAGE_DOWN_SQL]) {
+      expect(sql.split("VALUES")[0]).toContain("updated_at");
+      expect(sql.split("VALUES")[1]?.split("ON CONFLICT")[0]).toContain("now()");
+      expect(sql.split("DO UPDATE SET")[1]).toContain("updated_at = now()");
+    }
+  });
+
+  it("prunes on updated_at (always advancing), never on last_seen_at, and spares own row", () => {
+    expect(PRUNE_SQL).toContain("updated_at < now() - interval '1 day'");
+    expect(PRUNE_SQL).not.toContain("last_seen_at");
+    expect(PRUNE_SQL).toContain("worker_id <> $1");
+  });
+
   it("records only a sanitized category in details, never the raw message", async () => {
     const { deps, calls } = makeDeps(async () => {
       throw new Error("failed http://storage:9000 secret=abc");

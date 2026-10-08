@@ -2,9 +2,13 @@ import os from "node:os";
 import { HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
 import { errorCategory } from "./clients";
 
-// Worker heartbeat (docs/plans/step-1.md 2.9). Every interval: HeadBucket on S3_BUCKET, then
-// upsert this worker's `worker_heartbeats` row. `last_seen_at` advances ONLY when storage is
-// reachable, so `healthcheck.ts` (row fresh within HEARTBEAT_STALE_MS) also proves storage.
+// Worker heartbeat (docs/plans/step-1.md 2.9, docs/plans/step-2.md 2.12). Every interval:
+// HeadBucket on S3_BUCKET, then upsert this worker's `worker_heartbeats` row.
+// - `last_seen_at` advances ONLY when storage is reachable, so `healthcheck.ts` (row fresh within
+//   HEARTBEAT_STALE_MS) also proves storage.
+// - `updated_at` advances on EVERY successful write, storage up or down. Pruning keys off it, so
+//   a live worker whose storage is down (last_seen_at stale or epoch) is never pruned by a peer.
+// Runs directly as `littlelight_worker` (direct grant + policy on this table; no SET ROLE).
 
 /** Unique per container (`--scale worker=3` gives each replica its own hostname). */
 export function workerId(): string {
@@ -41,8 +45,8 @@ export interface HeartbeatResult {
 /** Storage reachable: refresh `last_seen_at`. */
 export const UPSERT_OK_SQL = `
 INSERT INTO worker_heartbeats
-  (worker_id, hostname, pid, version, started_at, last_seen_at, storage_ok, details)
-VALUES ($1, $2, $3, $4, $5, now(), true, $6::jsonb)
+  (worker_id, hostname, pid, version, started_at, last_seen_at, storage_ok, details, updated_at)
+VALUES ($1, $2, $3, $4, $5, now(), true, $6::jsonb, now())
 ON CONFLICT (worker_id) DO UPDATE SET
   hostname = EXCLUDED.hostname,
   pid = EXCLUDED.pid,
@@ -50,28 +54,35 @@ ON CONFLICT (worker_id) DO UPDATE SET
   started_at = EXCLUDED.started_at,
   last_seen_at = now(),
   storage_ok = true,
-  details = EXCLUDED.details`;
+  details = EXCLUDED.details,
+  updated_at = now()`;
 
 /**
  * Storage unreachable: record it but do NOT advance `last_seen_at`. A brand-new row starts at
  * the epoch so it is stale from the first beat (healthcheck fails until storage recovers).
+ * `updated_at` still advances: the worker is alive, so its row must survive peers' pruning.
  */
 export const UPSERT_STORAGE_DOWN_SQL = `
 INSERT INTO worker_heartbeats
-  (worker_id, hostname, pid, version, started_at, last_seen_at, storage_ok, details)
-VALUES ($1, $2, $3, $4, $5, to_timestamp(0), false, $6::jsonb)
+  (worker_id, hostname, pid, version, started_at, last_seen_at, storage_ok, details, updated_at)
+VALUES ($1, $2, $3, $4, $5, to_timestamp(0), false, $6::jsonb, now())
 ON CONFLICT (worker_id) DO UPDATE SET
   hostname = EXCLUDED.hostname,
   pid = EXCLUDED.pid,
   version = EXCLUDED.version,
   started_at = EXCLUDED.started_at,
   storage_ok = false,
-  details = EXCLUDED.details`;
+  details = EXCLUDED.details,
+  updated_at = now()`;
 
-/** Remove rows of workers gone for a day (never this worker's own row). */
+/**
+ * Remove rows of workers that have not written ANY heartbeat for a day (never this worker's own
+ * row). Keyed on the always-advancing `updated_at`, not `last_seen_at`, so a live worker with
+ * storage down is not deleted (step-1 review S5).
+ */
 export const PRUNE_SQL = `
 DELETE FROM worker_heartbeats
-WHERE last_seen_at < now() - interval '1 day' AND worker_id <> $1`;
+WHERE updated_at < now() - interval '1 day' AND worker_id <> $1`;
 
 async function checkStorage(
   s3: HeartbeatStorage,

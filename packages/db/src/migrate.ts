@@ -3,7 +3,7 @@
  * (docs/plans/step-1.md 2.7). Tracked in `public.pgmigrations`.
  *
  * CLI (via package scripts):
- *   tsx src/migrate.ts up [count]      — bootstrap (roles/auth schema) then apply pending migrations
+ *   tsx src/migrate.ts up [count]      — bootstrap (roles/auth/pgboss schemas) then apply pending migrations
  *   tsx src/migrate.ts down [count]    — revert `count` migrations (default 1; `all` reverts everything)
  *
  * Programmatic use (integration tests): `runMigrations({ direction, count, databaseUrl, bootstrap })`.
@@ -12,7 +12,7 @@
 import { fileURLToPath } from "node:url";
 import { type RunnerOption, runner } from "node-pg-migrate";
 import { bootstrapFromEnv } from "./bootstrap.js";
-import { requireDatabaseUrl } from "./env.js";
+import { knownSecrets, requireDatabaseUrl } from "./env.js";
 import { describeError } from "./redact.js";
 
 export const MIGRATIONS_DIR = fileURLToPath(new URL("../migrations", import.meta.url));
@@ -55,7 +55,7 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<Appl
   const shouldBootstrap = options.bootstrap ?? direction === "up";
 
   if (shouldBootstrap) {
-    await bootstrapFromEnv(env);
+    await bootstrapFromEnv(env, log);
   }
 
   const applied = await runner({
@@ -103,7 +103,7 @@ function isMain(): boolean {
 
 if (isMain()) {
   main().catch((err: unknown) => {
-    console.error(describeError(err, [process.env.AUTH_DB_PASSWORD ?? ""]));
+    console.error(describeError(err, knownSecrets()));
     process.exit(1);
   });
 }

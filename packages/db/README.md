@@ -1,36 +1,143 @@
 # @littlelight/db
 
-Database bootstrap, migrations and seed for Littlelight. Owned by `security-engineer`
-(`CLAUDE.md` file ownership). Runs as the one-shot `migrate` Compose service before `auth`, `api`
-and `worker` start.
+Database bootstrap, migrations, seed and generated row types for Littlelight. Owned by
+`security-engineer` (`CLAUDE.md` file ownership). Runs as the one-shot `db-init` and `migrate`
+Compose services (docs/plans/step-2.md).
 
 ## What runs, in order
 
-1. **Bootstrap** (`src/bootstrap.ts`, idempotent script, not a migration): creates/converges the
-   GoTrue database user `supabase_auth_admin` (NOINHERIT CREATEROLE LOGIN NOREPLICATION, password
-   from `AUTH_DB_PASSWORD`), the `auth` schema owned by it, `GRANT CREATE ON DATABASE`, its
-   `search_path = auth`, and the NOLOGIN JWT-claim roles `anon`, `authenticated`, `service_role`.
-   Mirrors `supabase/auth` `hack/init_postgres.sql`. GoTrue then runs its own migrations inside
-   `auth.*` on container start.
-2. **Migrations** (`migrations/*.sql`, node-pg-migrate, tracked in `public.pgmigrations`):
-   plain SQL with `-- Up Migration` / `-- Down Migration` markers. Every migration must have a
-   working down (PRD: "Each migration is reversible"), and every RLS policy change needs a test.
-3. **Seed** (`src/seed.ts`): idempotent. Step 1 is a no-op; step 2 adds the demo family.
+```
+db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then /health)
+                                         └─► migrate (pnpm db:migrate [&& pnpm db:seed]) ─► api, worker
+```
 
-pg-boss creates and owns the `pgboss` schema itself on the worker's first `boss.start()`. It is
-deliberately outside these migrations; do not add it here.
+1. **Bootstrap** (`src/bootstrap.ts`, idempotent script, not a migration): Postgres roles, the
+   GoTrue `auth` schema and the pg-boss `pgboss` schema (see "Roles"). Passwords come from
+   `AUTH_DB_PASSWORD`, `API_DB_PASSWORD`, `WORKER_DB_PASSWORD` and reach Postgres only as bind
+   parameters (`set_config` → `DO` block), so they never appear in statement text or logs; the
+   `DO` block re-raises any failure from an `EXCEPTION` handler (message + SQLSTATE, passwords
+   masked) so a failing `CREATE/ALTER ROLE … PASSWORD` cannot reach the server log as error
+   CONTEXT either. Re-run on every `db:migrate`; a second run changes nothing.
+2. **GoTrue migrations** run when the `auth` container starts: `auth.users` must exist before our
+   migrations because `profiles.user_id` references it. The first step-2 migration fails with
+   `auth.users is missing: start the auth (GoTrue) service before running migrations` otherwise.
+3. **Migrations** (`migrations/*.sql`, node-pg-migrate, tracked in `public.pgmigrations`): plain
+   SQL with `-- Up Migration` / `-- Down Migration` markers, one transaction per run. Every
+   migration has a working down; every RLS policy change needs a test.
+4. **Seed** (`src/seed.ts`): the demo family, dev only (`SEED_DEMO_FAMILY=true` and
+   `NODE_ENV !== production`), idempotent.
+
+## Roles
+
+| Role | Login | Purpose |
+| --- | --- | --- |
+| `postgres` | superuser | `db-init`, `migrate`, seed, backups. Never the api/worker. |
+| `supabase_auth_admin` | yes | GoTrue only; owns `auth.*`. |
+| `littlelight_api` | yes, NOINHERIT | API connection role. Has **no** privileges on app tables: every unit of work must `SET LOCAL ROLE authenticated \| viewer \| service_role`; a query outside that fails with `permission denied`. |
+| `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
+| `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). |
+| `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link, the allow-listed columns of `photos`, `photo_derivatives` (thumb/display), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Nothing else, no writes, and nothing once the link is expired/revoked or the baby is deleted. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, read-only `profiles`/`babies`/`milestones`/`share_rules`). Never invites, tokens, chat, members, viewer sessions. Hard-deletes only rows trashed > 30 days. |
+| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
+| `anon` | no | No grants (exists only because GoTrue mints the claim). |
+
+Only `postgres` can read `pgmigrations` or `auth.*`. Every table in `public` has
+`ENABLE` + `FORCE ROW LEVEL SECURITY`; policies are written `TO <role>` and named
+`<table>_<role>_<verb>`. Column-level grants mean `SELECT *` fails for `viewer`/`pipeline` on
+restricted tables and for `authenticated` on `babies` (no `home_*_enc`), `invites`, `photo_exif`
+(no `gps_*_enc`, no `raw_json`) and `share_links`: **always name columns in API code**.
+
+## Per-transaction identity
+
+The API verifies the GoTrue JWT with `JWT_SECRET` and runs every request-scoped unit of work on
+one pooled client, **inside one transaction**:
+
+```sql
+BEGIN;
+SET LOCAL ROLE authenticated;                       -- or viewer / service_role; worker: pipeline
+SELECT set_config('request.jwt.claims', $1, true);  -- $1 = JSON string, bind parameter
+-- ... queries ...
+COMMIT;                                             -- SET LOCAL and the setting vanish
+```
+
+Rules for the step-3 claims wrapper (and the worker's job wrapper):
+- `BEGIN … COMMIT/ROLLBACK` around every unit of work; `SET LOCAL ROLE`, never plain `SET ROLE`
+  (a session-level `SET ROLE` survives the transaction and leaks the role, and the claims, to the
+  next request that gets the same pooled connection).
+- On the pool's release path run `RESET ROLE` and `DISCARD ALL` (outside any transaction) before
+  the client goes back to the pool, so a thrown error or a forgotten `COMMIT` can never hand a
+  role or `request.jwt.claims` to another request. Treat a client that fails `DISCARD ALL` as
+  broken: destroy it, do not return it.
+- Never run a query outside the wrapper: `littlelight_api` has no privileges of its own, so such a
+  query fails with `permission denied` rather than returning data.
+
+Claims are always a bind parameter (never interpolated, never logged). Shapes
+(`@littlelight/shared` `jwt-claims.ts`): authenticated `{"sub","role":"authenticated","email",...}`,
+viewer `{"role":"viewer","share_link_id","exp"}`. SQL reads only `sub`, `role`, `email`,
+`share_link_id`.
+
+Notes for API/worker code:
+- `INSERT INTO babies ... RETURNING` works: the creator sees the row while it has no members and
+  the `babies_add_creator_admin` trigger then adds them as admin.
+- Invite redemption runs under `service_role` (users can never read `invites.token_hash`): look
+  the invite up by `token_hash`, check it is live, then `INSERT INTO baby_members`. The invitee's
+  own `INSERT INTO baby_members` is also allowed by policy while a live invite for their email and
+  role exists. Either way **joining consumes the invite**: the `baby_members_consume_invite`
+  trigger marks every live invite for that baby and that user's `auth.users` email as accepted
+  (`accepted_at`, `accepted_by`), so a removed member cannot rejoin on the invite they already
+  used and a directly-added member's pending invite dies with the add. A self-join under
+  `SET LOCAL ROLE authenticated` that consumes nothing (the invite was revoked or accepted
+  concurrently) fails with `check_violation`; `service_role` inserts are never second-guessed, so
+  the API may mark the invite itself first if it prefers.
+- Share-token exchange runs under `service_role` (`share_links.token_hash` / `passcode_hash` are
+  unreadable to every user role); the API then mints a viewer JWT and uses `SET LOCAL ROLE viewer`.
+- Account deletion: delete the GoTrue user (cascades `profiles` → `baby_members`, `chat_*`; sets
+  `uploaded_by`/`created_by`/`edited_by` to NULL so photos survive for the remaining admin). The
+  `baby_members_keep_last_admin` trigger blocks it while the user is the last admin of a live
+  baby: soft-delete the baby (`babies.deleted_at`) or promote a co-admin first.
+- Business rules enforced by triggers (all raise `check_violation`, SQLSTATE 23514): max two
+  admins, last admin stays, 20 invites/baby/day, free-tier 1,000-photo cap, AI queue and
+  `photo_ai` only for approved photos of a paid-tier baby, `shared_photos` only approved live
+  photos of the link's baby and never sensitive ones by rule (a photo that later becomes sensitive
+  loses its rule-added shares at once; hand-picked shares stay and viewers get `is_sensitive` so
+  the grid can blur them), avatar must be an own approved photo, joining consumes the invite,
+  `photo_exif.raw_json` can never carry a coordinate-looking key at any depth
+  (`jsonb_has_gps_keys`: contains `gps`/`latitude`/`longitude`, word-start `geo`, or exactly
+  `lat`/`lng`/`lon`; a trigger rather than a CHECK so the rejected row is never echoed into the
+  server log as `DETAIL`).
+
+## Encryption of coordinates
+
+`photo_exif.gps_lat_enc/gps_lng_enc` and `babies.home_lat_enc/home_lng_enc` are pgcrypto
+ciphertext written by `encrypt_coord(double precision)` and read by `decrypt_coord(bytea)`.
+Both are executable by `pipeline` and `service_role` **only**; `authenticated` cannot call either,
+cannot read `home_*_enc`/`gps_*_enc` (admins get `place_label` / `home_label`) and cannot write
+`home_*_enc`: the API stores a baby's home location under `service_role`. The key is
+`DATA_ENCRYPTION_KEY` (≥ 32 chars), supplied per transaction as a bind parameter, and **only in
+`service_role` and `pipeline` transactions** (never in a user-role transaction, where nothing can
+use it and it would only widen the blast radius of a bug):
+
+```sql
+SELECT set_config('app.data_key', $1, true);
+```
+
+Both functions raise `data key not set for this transaction` otherwise. Never enable
+`log_statement = all` or parameter logging on the production `db`. Key rotation is out of scope:
+re-encrypt with `UPDATE … SET col = encrypt_coord(decrypt_coord(col))` under the old then new key.
 
 ## Environment
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | all scripts | Superuser in step 1 (`postgres://postgres:dev@db:5432/littlelight` in dev). Step 2 introduces an app role. |
-| `AUTH_DB_PASSWORD` | bootstrap (`migrate up`) | Password for `supabase_auth_admin`; must equal the password in `GOTRUE_DB_DATABASE_URL`. With `NODE_ENV=production` it must be at least 16 characters (`openssl rand -base64 48`). |
+| `DATABASE_URL` | all scripts | Superuser URL (`db-init`, `migrate`, seed, `db:types`). The api/worker get their own role URLs from Compose. |
+| `AUTH_DB_PASSWORD` | bootstrap | `supabase_auth_admin`; must equal the password in `GOTRUE_DB_DATABASE_URL`. |
+| `API_DB_PASSWORD` | bootstrap | `littlelight_api`; must equal the api's `DATABASE_URL` password. |
+| `WORKER_DB_PASSWORD` | bootstrap | `littlelight_worker`; must equal the worker's `DATABASE_URL` password. |
+| `DATA_ENCRYPTION_KEY` | seed (and api/worker) | ≥ 32 chars; `openssl rand -hex 32` in production. |
+| `SEED_DEMO_FAMILY` | seed | `true` to seed the demo family (dev only). |
 
-Scripts never print `DATABASE_URL` or `AUTH_DB_PASSWORD`; error output goes through
-`src/redact.ts`, which masks URL passwords and the literal secret. The password reaches Postgres
-only as a bind parameter (`set_config` → `DO` block), so it never appears in a top-level statement
-or statement log, and Postgres stores only the SCRAM-SHA-256 hash.
+With `NODE_ENV=production` every password must be ≥ 16 characters. Scripts never print a URL,
+password or key; errors go through `src/redact.ts`.
 
 ## Commands
 
@@ -38,45 +145,90 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 
 | Command | Effect |
 | --- | --- |
-| `pnpm db:bootstrap` | Bootstrap only |
+| `pnpm db:bootstrap` | Roles + `auth` + `pgboss` schemas (idempotent) |
 | `pnpm db:migrate` | Bootstrap, then apply all pending migrations (`up`) |
 | `pnpm db:migrate:down [n\|all]` | Revert the last `n` migrations (default 1); `all` reverts everything |
-| `pnpm db:seed` | Seed (idempotent) |
-| `pnpm --filter @littlelight/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` (the tool turns `_` in `<name>` into `-`) |
+| `pnpm db:seed` | Demo family (needs `SEED_DEMO_FAMILY=true`, `DATA_ENCRYPTION_KEY`; refuses in production) |
+| `pnpm --filter @littlelight/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
+| `pnpm --filter @littlelight/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` |
 
-All of these are safe to run repeatedly: a second `db:migrate` is a no-op.
+Programmatic use: `import { runMigrations, bootstrap, seed, ensureAuthSchemaStub, appRoleUrl } from "@littlelight/db"`;
+row types from `@littlelight/db/types` (`PhotosRow`, `PhotosInsert`, `TABLE_NAMES`, …; `text`
+columns with `CHECK (col IN (...))` are string-literal unions).
 
-Programmatic use (integration tests): `import { runMigrations, bootstrap, seed } from "@littlelight/db"`.
-`runMigrations({ direction: "down", count: Number.POSITIVE_INFINITY, bootstrap: false })` reverts
-everything; `runMigrations({ direction: "up" })` bootstraps then applies (set `bootstrap: false`
-to skip the role step when `AUTH_DB_PASSWORD` is not available).
+### Tests and CI without GoTrue
+
+`ensureAuthSchemaStub(client)` creates a minimal `auth.users` / `auth.identities` only when they
+do not exist (bare pgvector in CI, throwaway containers); its column list is exactly what the
+seed inserts. `appRoleUrl(databaseUrl, role, password)` rewrites the superuser URL to connect as
+`littlelight_api` / `littlelight_worker` for RLS tests.
+
+## Demo seed (`src/seed.ts`)
+
+Fixed ids (`DEMO` export): users `…-000000000001/2/3` = `demo-mom@littlelight.local` (admin, Maria,
+Mom), `demo-dad@…` (admin, Dad), `demo-nanny@…` (contributor); baby `…-000000000100` "Maya"
+("Mimi", born 2025-06-30, `plan = plus`, encrypted home coordinates); share link `…-000000000200`
+"Grandparents" (dev token `demo-grandparents-share-token`, re-upserted so it always expires 24 h
+after the last seed run, rule `milestones`); 12 photos `…-0000000003NN`: 8 approved, 1 approved
+and sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny;
+3 shared photos; 3 measurements; `photo_search` rows for the 9 live approved photos; one audit row.
+Storage keys are placeholders; no image bytes exist.
 
 ## Writing a migration
 
-- Keep the two markers; put DDL for the forward change under `-- Up Migration` and the exact
-  inverse under `-- Down Migration`. Use `IF NOT EXISTS` / `IF EXISTS` so partial re-runs converge.
-- Every table that holds baby-scoped data (step 2 onward) must `ENABLE ROW LEVEL SECURITY` in
-  the same migration that creates it, with policies built on the `is_baby_member` /
-  `is_baby_admin` helpers, and a negative-case test (non-member cannot read) in
-  `packages/db/**/*.integration.test.ts`.
-- Migrations run in one transaction (`singleTransaction`), so a failing statement rolls the whole
-  batch back. Avoid statements that cannot run inside a transaction (`CREATE INDEX CONCURRENTLY`,
-  `ALTER TYPE ... ADD VALUE` on PG < 12 semantics); split those into their own migration if ever needed.
+- Keep the two markers (node-pg-migrate also treats any comment line matching
+  `-- up migration` / `-- down migration` as a marker, so do not write those words at the start
+  of a comment). Put DDL under `-- Up Migration` and the exact inverse under `-- Down Migration`.
+  Use `IF NOT EXISTS` / `IF EXISTS`, `CREATE OR REPLACE FUNCTION`, `DROP POLICY IF EXISTS`.
+- Every new table: `ENABLE` **and** `FORCE ROW LEVEL SECURITY` in the same migration, explicit
+  `GRANT` per role and column, policies `TO <role>` built on `is_baby_member` / `is_baby_admin`,
+  and a negative test (non-member reads 0 rows) in `packages/db/*.integration.test.ts`.
+- SECURITY DEFINER functions: `SET search_path = pg_catalog, public`, no dynamic SQL, read only
+  what they must; `REVOKE EXECUTE … FROM PUBLIC` then grant to the roles that need them.
+- Migrations run in one transaction; avoid statements that cannot (`CREATE INDEX CONCURRENTLY`).
 
 ## Local verification against a throwaway Postgres
 
 ```sh
-docker run --rm -d --name ll-db-test -p 55432:5432 -e POSTGRES_PASSWORD=dev pgvector/pgvector:0.8.7-pg17
-export DATABASE_URL=postgres://postgres:dev@localhost:55432/postgres AUTH_DB_PASSWORD=dev
-pnpm db:migrate && pnpm db:migrate   # second run: "nothing to do"
-pnpm db:seed
-pnpm db:migrate:down all && pnpm db:migrate
+docker run --rm -d --name ll-db-test -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=littlelight pgvector/pgvector:0.8.7-pg17
+export DATABASE_URL=postgres://postgres:dev@localhost:55432/littlelight AUTH_DB_PASSWORD=dev \
+  API_DB_PASSWORD=dev WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true
+pnpm db:bootstrap
+# auth.users: either run GoTrue's migrations ...
+docker run --rm --network container:ll-db-test -e GOTRUE_DB_DRIVER=postgres \
+  -e GOTRUE_DB_DATABASE_URL=postgres://supabase_auth_admin:dev@localhost:5432/littlelight \
+  -e GOTRUE_JWT_SECRET=dev-only-jwt-secret-dev-only-jwt-secret -e GOTRUE_SITE_URL=http://localhost:8080 \
+  -e API_EXTERNAL_URL=http://localhost:8080/auth supabase/auth:v2.197.0 auth migrate
+# ... or, for a stub, `ensureAuthSchemaStub(client)` from a script/test.
+pnpm db:migrate && pnpm db:migrate     # second run: "nothing to do"
+pnpm db:seed && pnpm db:seed           # identical counts
+pnpm db:migrate:down all && pnpm db:migrate && pnpm db:seed
+pnpm --filter @littlelight/db db:types && git diff --exit-code -- packages/db/src/generated
 docker stop ll-db-test
 ```
 
-## Step-1 schema
+Spot checks (password `dev` for the app roles):
+
+```sh
+PSQL="psql -h localhost -p 55432 -d littlelight -Atv ON_ERROR_STOP=0"
+# another user's baby: 0 rows
+PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos; rollback;"
+# contributor cannot delete: permission denied for table photos
+PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"
+# viewer sees only shared_photos: 3, 3, permission denied for table photo_exif
+PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
+```
+
+## Migrations
 
 | Migration | Up | Down |
 | --- | --- | --- |
-| `1791435700055_extensions.sql` | `vector`, `pgcrypto` extensions | drop both |
-| `1791435701234_worker-heartbeats.sql` | `public.worker_heartbeats` with RLS enabled (no policies: only the owner/superuser can touch it until step 2 adds the app-role policy) | drop table |
+| `1791435700055_extensions.sql` | `vector`, `pgcrypto` | drop both |
+| `1791435701234_worker-heartbeats.sql` | `worker_heartbeats` with RLS | drop table |
+| `1791520000100_app-roles-and-helpers.sql` | guards (roles, `auth.users`), schema grants, default privileges for `service_role`, claims helpers, recursive `jsonb_has_gps_keys`, `encrypt_coord`/`decrypt_coord` (pipeline/service_role only), `set_updated_at` | drop functions, restore grants |
+| `1791520000200_identity.sql` | `profiles`, `babies`, `baby_members`, `invites`; `is_baby_member`, `is_baby_admin`, `shares_baby_with`, `baby_ai_enabled`, `baby_has_members`, `invite_allows_join`; creator-admin, consume-invite, max-two-admins, keep-last-admin, invite-rate-limit triggers; RLS (users never read/write `home_*_enc`) | drop in reverse |
+| `1791520000300_photos.sql` | `milestones` (+ 12 presets), `photos`, `photo_derivatives`, `photo_exif` (+ `raw_json` GPS-key trigger), `photo_details`, `measurements`, `photo_ai_overrides`; `babies.avatar_photo_id` FK + guard; `photo_visible`, `photo_editable`; free-tier cap and status-guard triggers; RLS | drop |
+| `1791520000400_ai.sql` | `ai_batches`, `photo_ai` (+ paid-tier tripwire, sensitive sync), `photo_search` (+ HNSW/GIN/btree); RLS | drop |
+| `1791520000500_sharing.sql` | `share_links`, `share_rules`, `shared_photos` (+ gate), `viewer_sessions`; `is_share_link_active`, `share_link_baby`, `viewer_baby_id`, `viewer_can_see_photo`; `photos_sensitive_unshare_rules` trigger; every `viewer` policy | drop viewer policies, trigger, tables, functions |
+| `1791520000600_chat-audit.sql` | `chat_threads`, `chat_messages` (+ thread guard), append-only `audit_log`; RLS | drop |
+| `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `littlelight_worker` | revert |

@@ -1,8 +1,10 @@
 # Littlelight CI (docs/plans/step-1.md task 1.10; PRD "Build order" step 1: "CI builds every image").
 #
 #   check            install (frozen lockfile), lint, typecheck, unit tests, DB integration tests
-#                    against a pgvector service container, and `docker compose config` for both
-#                    Compose files.
+#                    against a pgvector service container (RLS matrix; auth.users is stubbed by
+#                    the test harness), a generated-DB-types drift check against a database
+#                    migrated in production order (bootstrap -> GoTrue migrate -> app
+#                    migrations), and `docker compose config` for both Compose files.
 #   images           builds every production image (api, worker, web, migrate) with buildx + GHA
 #                    cache. Nothing is pushed.
 #   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout and runs
@@ -78,10 +80,46 @@ jobs:
 
       - name: DB integration tests (pgvector service)
         env:
-          # Dev-only credentials of the throwaway service container above (same as .env.dev).
+          # Dev-only values of the throwaway service container above (same as docker-compose.dev.yml
+          # x-dev-shared). Tests connect as the superuser for fixtures and as littlelight_api /
+          # littlelight_worker for the RLS cases.
           DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight
           AUTH_DB_PASSWORD: dev
+          API_DB_PASSWORD: dev
+          WORKER_DB_PASSWORD: dev
+          DATA_ENCRYPTION_KEY: dev-only-data-encryption-key-32-chars-min
+          SEED_DEMO_FAMILY: "true"
         run: pnpm test:integration
+
+      # packages/db/src/generated is committed; fail if it no longer matches the migrations.
+      # Uses a separate database migrated exactly like Compose does it (roles + auth schema,
+      # then GoTrue's own migrations, then ours), so test leftovers and the auth.users stub
+      # cannot affect it.
+      - name: Generated DB types are current
+        env:
+          DB_SERVICE: ${{ job.services.db.id }}
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight_types
+          AUTH_DB_PASSWORD: dev
+          API_DB_PASSWORD: dev
+          WORKER_DB_PASSWORD: dev
+          # Same pin as both Compose files.
+          GOTRUE_IMAGE: supabase/auth:v2.197.0
+        run: |
+          set -euo pipefail
+          docker exec "$DB_SERVICE" createdb -U postgres littlelight_types
+          pnpm db:bootstrap
+          docker run --rm --network host \
+            -e GOTRUE_DB_DRIVER=postgres \
+            -e GOTRUE_DB_DATABASE_URL="postgres://supabase_auth_admin:${AUTH_DB_PASSWORD}@localhost:5432/littlelight_types" \
+            -e GOTRUE_JWT_SECRET=dev-only-jwt-secret-at-least-32-characters \
+            -e GOTRUE_SITE_URL=http://localhost:8080 \
+            -e API_EXTERNAL_URL=http://localhost:8080/auth \
+            "$GOTRUE_IMAGE" auth migrate
+          pnpm db:migrate
+          pnpm --filter @littlelight/db db:types
+          git diff --exit-code -- packages/db/src/generated
+          test -z "$(git status --porcelain -- packages/db/src/generated)" \
+            || { echo "untracked generated files:"; git status --porcelain -- packages/db/src/generated; exit 1; }
 
       - name: Validate Compose files
         run: |
@@ -160,7 +198,7 @@ jobs:
       - name: Start dev stack
         run: docker compose -f docker-compose.dev.yml up -d --build --wait --wait-timeout 600
 
-      - name: Smoke test (step-1 acceptance checks)
+      - name: Smoke test (step-1/2 acceptance checks)
         env:
           SMOKE_SKIP_UP: "1"
         run: bash e2e/smoke/dev-stack.sh

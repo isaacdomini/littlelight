@@ -1,8 +1,17 @@
-import { databaseEnvSchema, jwtEnvSchema, logEnvSchema, s3EnvSchema } from "@littlelight/shared";
+import {
+  databaseEnvSchema,
+  encryptionEnvSchema,
+  jwtEnvSchema,
+  logEnvSchema,
+  s3EnvSchema,
+} from "@littlelight/shared";
 import { z } from "zod";
 
-// API configuration (docs/plans/step-1.md 2.5, 2.8). Fails fast on missing or invalid env and
-// reports field names only: values are secrets or contain credentials (DATABASE_URL, S3 keys).
+// API configuration (docs/plans/step-1.md 2.5, 2.8; docs/plans/step-2.md 2.12). Fails fast on
+// missing or invalid env and reports field names only: values are secrets or contain credentials
+// (DATABASE_URL, S3 keys, DATA_ENCRYPTION_KEY). From step 2, DATABASE_URL is the
+// `littlelight_api` role (never the superuser); every request-scoped query will run inside
+// `withClaims` (step 3: BEGIN; SET LOCAL ROLE ...; set_config('request.jwt.claims', $1, true)).
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -13,6 +22,7 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   z.output<typeof databaseEnvSchema> &
   z.output<typeof s3EnvSchema> &
   z.output<typeof jwtEnvSchema> &
+  z.output<typeof encryptionEnvSchema> &
   z.output<typeof logEnvSchema>;
 
 export class ConfigError extends Error {
@@ -42,7 +52,14 @@ export function loadConfig(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): ApiConfig {
   const input = withoutEmpty(env);
-  const schemas = [serverEnvSchema, databaseEnvSchema, s3EnvSchema, jwtEnvSchema, logEnvSchema];
+  const schemas = [
+    serverEnvSchema,
+    databaseEnvSchema,
+    s3EnvSchema,
+    jwtEnvSchema,
+    encryptionEnvSchema,
+    logEnvSchema,
+  ];
   const fields: string[] = [];
   const merged: Record<string, unknown> = {};
   for (const schema of schemas) {

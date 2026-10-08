@@ -1,0 +1,101 @@
+import { z } from "zod";
+
+// Enum-like DB columns (docs/plans/step-2.md 2.4, 2.11). In SQL these are `text` columns with a
+// `CHECK (col IN (...))` constraint; the values here must match those constraints literally, in
+// the same order, so API validation and the database agree. Changing a value here requires a
+// migration (and vice versa).
+
+/** `baby_members.role`, `invites.role`. Max two admins per baby (`MAX_ADMINS_PER_BABY`). */
+export const babyRoleSchema = z.enum(["admin", "contributor"]);
+export type BabyRole = z.infer<typeof babyRoleSchema>;
+
+/** `babies.plan`. AI features require `plus` with a live entitlement. */
+export const planSchema = z.enum(["free", "plus"]);
+export type Plan = z.infer<typeof planSchema>;
+
+/** `profiles.units`: display preference only; storage is always metric. */
+export const unitsSchema = z.enum(["metric", "imperial"]);
+export type Units = z.infer<typeof unitsSchema>;
+
+/**
+ * `photos.status`. `queued`/`analyzing` are only reachable for approved, non-deleted photos of a
+ * baby with AI enabled (enforced by the `photos_status_guard` trigger).
+ */
+export const photoStatusSchema = z.enum([
+  "uploaded",
+  "ingested",
+  "queued",
+  "analyzing",
+  "ready",
+  "failed",
+]);
+export type PhotoStatus = z.infer<typeof photoStatusSchema>;
+
+/** `photos.approval`. Contributor uploads start `pending` (FR-2.7). */
+export const photoApprovalSchema = z.enum(["pending", "approved", "rejected"]);
+export type PhotoApproval = z.infer<typeof photoApprovalSchema>;
+
+/** `photos.mime`. */
+export const photoMimeSchema = z.enum([
+  "image/jpeg",
+  "image/png",
+  "image/heic",
+  "image/heif",
+  "image/webp",
+]);
+export type PhotoMime = z.infer<typeof photoMimeSchema>;
+
+/**
+ * `photo_derivatives.kind`. All derivatives are EXIF/GPS-stripped; `analysis` is the only copy
+ * that may ever reach a model; viewers only ever get `thumb`/`display`.
+ */
+export const derivativeKindSchema = z.enum(["thumb", "display", "analysis"]);
+export type DerivativeKind = z.infer<typeof derivativeKindSchema>;
+
+/**
+ * `measurements.kind`. Convention for `measurements.value_metric`: **grams** for `weight`,
+ * **millimetres** for `height` and `head`. `value_entered` + `unit_entered` keep what the parent
+ * typed for display.
+ */
+export const measurementKindSchema = z.enum(["weight", "height", "head"]);
+export type MeasurementKind = z.infer<typeof measurementKindSchema>;
+
+/** `measurements.unit_entered`. */
+export const measurementUnitSchema = z.enum(["g", "kg", "oz", "lb", "mm", "cm", "in"]);
+export type MeasurementUnit = z.infer<typeof measurementUnitSchema>;
+
+/** `milestones.category`. */
+export const milestoneCategorySchema = z.enum([
+  "social",
+  "motor",
+  "feeding",
+  "growth",
+  "speech",
+  "event",
+  "custom",
+]);
+export type MilestoneCategory = z.infer<typeof milestoneCategorySchema>;
+
+/** `ai_batches.status`. */
+export const aiBatchStatusSchema = z.enum([
+  "building",
+  "submitted",
+  "in_progress",
+  "completed",
+  "failed",
+  "expired",
+  "cancelled",
+]);
+export type AiBatchStatus = z.infer<typeof aiBatchStatusSchema>;
+
+/** `share_rules.mode`. No `share_rules` row means manual sharing only. */
+export const shareRuleModeSchema = z.enum(["all", "milestones", "tags"]);
+export type ShareRuleMode = z.infer<typeof shareRuleModeSchema>;
+
+/** `shared_photos.added_by`. Sensitive photos are never added by `rule` (FR-9.5). */
+export const sharedPhotoAddedBySchema = z.enum(["user", "rule"]);
+export type SharedPhotoAddedBy = z.infer<typeof sharedPhotoAddedBySchema>;
+
+/** `chat_messages.role`. */
+export const chatRoleSchema = z.enum(["user", "assistant", "tool", "system"]);
+export type ChatRole = z.infer<typeof chatRoleSchema>;

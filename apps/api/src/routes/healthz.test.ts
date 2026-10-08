@@ -17,6 +17,7 @@ const config: ApiConfig = {
   S3_FORCE_PATH_STYLE: true,
   JWT_SECRET: "dev-only-jwt-secret-at-least-32-characters",
   GOTRUE_JWT_SECRET: "dev-only-jwt-secret-at-least-32-characters",
+  DATA_ENCRYPTION_KEY: "dev-only-data-encryption-key-32-chars-min",
   LOG_LEVEL: "silent",
   NODE_ENV: "test",
 };
@@ -67,6 +68,7 @@ describe("GET /healthz", () => {
       "s3-secret-value-xyz",
       "supersecretpw",
       config.JWT_SECRET,
+      config.DATA_ENCRYPTION_KEY,
     ]) {
       expect(res.body).not.toContain(secret);
     }

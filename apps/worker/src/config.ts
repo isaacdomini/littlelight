@@ -1,8 +1,17 @@
-import { databaseEnvSchema, jwtEnvSchema, logEnvSchema, s3EnvSchema } from "@littlelight/shared";
+import {
+  databaseEnvSchema,
+  encryptionEnvSchema,
+  jwtEnvSchema,
+  logEnvSchema,
+  s3EnvSchema,
+} from "@littlelight/shared";
 import { z } from "zod";
 
-// Worker configuration (docs/plans/step-1.md 2.5, 2.9). Fails fast on missing or invalid env and
-// reports field names only: values are secrets or contain credentials.
+// Worker configuration (docs/plans/step-1.md 2.5, 2.9; docs/plans/step-2.md 2.12). Fails fast on
+// missing or invalid env and reports field names only: values are secrets or contain credentials
+// (DATABASE_URL, S3 keys, DATA_ENCRYPTION_KEY). From step 2, DATABASE_URL is the
+// `littlelight_worker` role: pg-boss and the heartbeat use it directly; job queries will run
+// inside `withPipeline` (step 4: BEGIN; SET LOCAL ROLE pipeline; ...).
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -13,9 +22,10 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof databaseEnvSchema> &
   z.output<typeof s3EnvSchema> &
   z.output<typeof jwtEnvSchema> &
+  z.output<typeof encryptionEnvSchema> &
   z.output<typeof logEnvSchema>;
 
-/** Env needed by `healthcheck.ts` only (no S3/JWT: it reads the heartbeat row). */
+/** Env needed by `healthcheck.ts` only (no S3/JWT/encryption key: it reads the heartbeat row). */
 export type HealthcheckConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof databaseEnvSchema>;
 
@@ -66,6 +76,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     databaseEnvSchema,
     s3EnvSchema,
     jwtEnvSchema,
+    encryptionEnvSchema,
     logEnvSchema,
   ]) as WorkerConfig;
 }

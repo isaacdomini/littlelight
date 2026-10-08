@@ -50,3 +50,13 @@ export const logEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
 });
 export type LogEnv = z.infer<typeof logEnvSchema>;
+
+/**
+ * Key for pgcrypto encryption of GPS and home coordinates (docs/plans/step-2.md 2.7). The app
+ * sets it per transaction with `SELECT set_config('app.data_key', $1, true)` (bind parameter,
+ * never in statement text, never logged). Production: `openssl rand -hex 32`.
+ */
+export const encryptionEnvSchema = z.object({
+  DATA_ENCRYPTION_KEY: z.string().min(32, "must be at least 32 characters"),
+});
+export type EncryptionEnv = z.infer<typeof encryptionEnvSchema>;

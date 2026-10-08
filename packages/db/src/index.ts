@@ -1,12 +1,27 @@
 export {
+  APP_ROLES,
+  type AppRole,
   AUTH_ADMIN_ROLE,
   AUTH_SCHEMA,
   type BootstrapOptions,
   bootstrap,
   bootstrapFromEnv,
   JWT_ROLES,
+  PGBOSS_SCHEMA,
 } from "./bootstrap.js";
-export { requireAuthDbPassword, requireDatabaseUrl } from "./env.js";
+export {
+  isProduction,
+  knownSecrets,
+  MIN_DATA_ENCRYPTION_KEY_LENGTH,
+  requireApiDbPassword,
+  requireAuthDbPassword,
+  requireDatabaseUrl,
+  requireDataEncryptionKey,
+  requireWorkerDbPassword,
+  type SeedMode,
+  seedEnabled,
+  seedMode,
+} from "./env.js";
 export {
   type AppliedMigration,
   MIGRATIONS_DIR,
@@ -16,4 +31,6 @@ export {
   runMigrations,
 } from "./migrate.js";
 export { describeError, redactSecrets } from "./redact.js";
-export { type SeedOptions, seed } from "./seed.js";
+export { DEMO, type SeedOptions, type SeedResult, seed, seedFromEnv } from "./seed.js";
+// Test/CI only (docs/plans/step-2.md 2.1): never used by the running stack.
+export { AUTH_USERS_STUB_SQL, appRoleUrl, ensureAuthSchemaStub } from "./test-support.js";

@@ -5,10 +5,15 @@
 #   docker compose -f docker-compose.dev.yml down -v       wipe dev-db / dev-s3 (pnpm dev:reset)
 #
 # Config: .env.dev (committed, dev-only defaults) + optional git-ignored .env.local overrides,
-# loaded by the Node services (migrate, api, worker, web). auth, storage and storage-init get
-# explicit environment blocks only (least privilege: GoTrue never sees the superuser
-# DATABASE_URL, MinIO never sees the JWT secret). Values that two sides must agree on live once,
-# in x-dev-shared below, and are injected into both sides, so they can't drift.
+# loaded by the Node services (migrate, api, worker, web). db-init, auth, storage and
+# storage-init get explicit environment blocks only (least privilege: GoTrue never sees the
+# superuser DATABASE_URL, MinIO never sees the JWT secret). Values that two sides must agree on
+# live once, in x-dev-shared below, and are injected into both sides, so they can't drift.
+# Database roles (docs/plans/step-2.md 2.2): db-init/migrate connect as the `postgres` superuser;
+# api connects as `littlelight_api`, worker as `littlelight_worker` (each gets its own
+# DATABASE_URL below); GoTrue as `supabase_auth_admin`.
+# Start order: db -> db-init (roles + auth schema) -> auth (GoTrue runs its own migrations, so
+# auth.users exists once it is healthy) -> migrate (app migrations + demo seed) -> api, worker.
 # Data: named volumes only (dev-db, dev-s3); no host folders to create.
 # Ports: the app (8080) and MinIO S3 (9000) listen on all interfaces so a phone on the LAN can
 # reach them; everything else (db, api, auth, MinIO console, Mailpit) is bound to 127.0.0.1.
@@ -28,17 +33,42 @@ x-dev-shared:
   s3-access-key: &dev-s3-access-key dev
   s3-secret-key: &dev-s3-secret-key devdevdev
   s3-bucket: &dev-s3-bucket littlelight-dev
-  # migrate sets this password on supabase_auth_admin; auth logs in with it (URL below).
+  # db-init (and migrate, which re-runs the idempotent bootstrap) sets these login passwords;
+  # each service logs in with the matching URL below.
+  superuser-db-url: &dev-superuser-db-url postgres://postgres:dev@db:5432/littlelight
   auth-db-password: &dev-auth-db-password dev
   auth-db-url: &dev-auth-db-url postgres://supabase_auth_admin:dev@db:5432/littlelight
+  api-db-password: &dev-api-db-password dev
+  api-db-url: &dev-api-db-url postgres://littlelight_api:dev@db:5432/littlelight
+  worker-db-password: &dev-worker-db-password dev
+  worker-db-url: &dev-worker-db-url postgres://littlelight_worker:dev@db:5432/littlelight
+  # pgcrypto key for GPS / home coordinates (migrate's seed, api, worker). Dev-only literal.
+  data-encryption-key: &dev-data-encryption-key dev-only-data-encryption-key-32-chars-min
 
-# api and worker: verify GoTrue JWTs and talk to MinIO with the same values auth/storage use.
+# Everything the bootstrap needs (db-init, migrate).
+x-dev-bootstrap-env: &dev-bootstrap-env
+  DATABASE_URL: *dev-superuser-db-url
+  AUTH_DB_PASSWORD: *dev-auth-db-password
+  API_DB_PASSWORD: *dev-api-db-password
+  WORKER_DB_PASSWORD: *dev-worker-db-password
+
+# db-init and migrate run the same image (packages/db/Dockerfile), built once.
+x-dev-db-tools: &dev-db-tools
+  image: littlelight-dev-db-tools
+  build:
+    context: .
+    dockerfile: packages/db/Dockerfile
+  restart: "no"
+
+# api and worker: verify GoTrue JWTs and talk to MinIO with the same values auth/storage use;
+# each adds its own DATABASE_URL (app role, never the superuser).
 x-dev-app-env: &dev-app-env
   JWT_SECRET: *dev-jwt-secret
   GOTRUE_JWT_SECRET: *dev-jwt-secret
   S3_ACCESS_KEY: *dev-s3-access-key
   S3_SECRET_KEY: *dev-s3-secret-key
   S3_BUCKET: *dev-s3-bucket
+  DATA_ENCRYPTION_KEY: *dev-data-encryption-key
 
 services:
   db:
@@ -59,21 +89,37 @@ services:
       start_period: 30s
       start_interval: 1s
 
-  # One-shot: GoTrue role/schema bootstrap + migrations + idempotent seed.
-  migrate:
-    <<: *dev
-    build:
-      context: .
-      dockerfile: packages/db/Dockerfile
-    command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
-    restart: "no"
+  # One-shot: Postgres roles (supabase_auth_admin, littlelight_api, littlelight_worker, viewer,
+  # pipeline, ...), the auth schema GoTrue needs, and the pgboss schema. Idempotent; it converges
+  # passwords and role attributes on every start. Must finish before GoTrue starts.
+  db-init:
+    <<: *dev-db-tools
+    command: ["pnpm", "db:bootstrap"]
     environment:
-      AUTH_DB_PASSWORD: *dev-auth-db-password
+      <<: *dev-bootstrap-env
+      NODE_ENV: development
+    volumes:
+      - ./packages/db/src:/repo/packages/db/src:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # One-shot: app migrations + idempotent demo-family seed. Runs after GoTrue is healthy, i.e.
+  # after GoTrue's own migrations created auth.users (the app tables reference it).
+  # Set SEED_DEMO_FAMILY=false in .env.local to skip the seed.
+  migrate:
+    <<: [*dev, *dev-db-tools]
+    command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
+    environment:
+      <<: *dev-bootstrap-env
+      DATA_ENCRYPTION_KEY: *dev-data-encryption-key
     volumes:
       - ./packages/db/src:/repo/packages/db/src:ro
       - ./packages/db/migrations:/repo/packages/db/migrations:ro
     depends_on:
       db:
+        condition: service_healthy
+      auth:
         condition: service_healthy
 
   auth:
@@ -122,7 +168,7 @@ services:
       GOTRUE_EXTERNAL_APPLE_ENABLED: "false"
       GOTRUE_EXTERNAL_GOOGLE_ENABLED: "false"
     depends_on:
-      migrate:
+      db-init:
         condition: service_completed_successfully
       mail:
         condition: service_started
@@ -198,7 +244,9 @@ services:
       target: dev
     command: ["pnpm", "--filter", "@littlelight/api", "dev"]
     init: true
-    environment: *dev-app-env
+    environment:
+      <<: *dev-app-env
+      DATABASE_URL: *dev-api-db-url
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -226,7 +274,9 @@ services:
       target: dev
     command: ["pnpm", "--filter", "@littlelight/worker", "dev"]
     init: true
-    environment: *dev-app-env
+    environment:
+      <<: *dev-app-env
+      DATABASE_URL: *dev-worker-db-url
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src

@@ -15,6 +15,18 @@
 #     --entrypoint bash pgvector/pgvector:0.8.7-pg17 /scripts/restore-test.sh
 #
 # Exit 0 = restorable. Prints table counts only, never row contents.
+#
+# Real restore into production (after a passing test), from the app directory:
+#   docker compose stop api worker auth backup
+#   docker compose exec -T db psql -U postgres -d postgres -c 'DROP DATABASE littlelight WITH (FORCE)'
+#   docker compose exec -T db psql -U postgres -d postgres -f - < "$BACKUP_PATH/<stamp>.roles.sql"
+#   docker compose exec -T db createdb -U postgres -T template0 littlelight
+#   docker compose exec -T db pg_restore -U postgres --exit-on-error -d littlelight < "$BACKUP_PATH/<stamp>.dump"
+#   docker compose run --rm db-init      # re-apply role passwords/attributes from the CURRENT .env
+#   docker compose up -d --wait          # migrate applies anything newer than the dump
+# The roles file carries the password hashes of the dump's day; db-init converges them to .env
+# (required if passwords were rotated since, or when restoring without the roles file).
+# DATA_ENCRYPTION_KEY is not in any dump: GPS/home coordinates decrypt only with the same key.
 set -euo pipefail
 
 DIR="${BACKUP_DIR:-/backups}"
@@ -60,12 +72,17 @@ if [ -f "$ROLES" ]; then
   psql -q -X -d postgres -f "$ROLES" 2>&1 | grep -v 'role "postgres" already exists' || true
   log "roles applied"
 else
-  log "WARN: no roles file; restoring with --no-owner"
+  # Grants and RLS policies name these roles; create them bare (NOLOGIN) so ACLs restore.
+  # A real restore runs db-init afterwards, which sets the proper attributes and passwords.
+  log "WARN: no roles file; creating bare roles and restoring with --no-owner"
+  for r in supabase_auth_admin littlelight_api littlelight_worker anon authenticated service_role viewer pipeline; do
+    psql -q -X -d postgres -c "CREATE ROLE \"$r\" NOLOGIN" >/dev/null 2>&1 || true
+  done
 fi
 
 createdb -T template0 littlelight
 restore_flags=(--exit-on-error -d littlelight)
-[ -f "$ROLES" ] || restore_flags+=(--no-owner --no-acl)
+[ -f "$ROLES" ] || restore_flags+=(--no-owner)
 pg_restore "${restore_flags[@]}" "$DUMP"
 log "pg_restore ok"
 
@@ -81,6 +98,14 @@ check "applied migrations"        "select count(*) from public.pgmigrations" 1
 check "auth (GoTrue) tables"      "select count(*) from information_schema.tables where table_schema = 'auth'" 1
 check "auth.users readable"       "select 1 from (select count(*) from auth.users) s" 1
 check "supabase_auth_admin role"  "select count(*) from pg_roles where rolname = 'supabase_auth_admin'" 1
+# Step 2 role model (docs/plans/step-2.md 2.2): every app role present...
+check "app roles (8)"             "select count(*) from pg_roles where rolname in ('littlelight_api','littlelight_worker','anon','authenticated','service_role','viewer','pipeline','supabase_auth_admin')" 8
+# ...and no login role other than postgres can bypass RLS.
+check "no BYPASSRLS login roles"  "select (count(*) = 0)::int from pg_roles where rolcanlogin and (rolbypassrls or rolsuper) and rolname <> 'postgres'" 1
+# Row-level security survived the restore: enabled + forced on every app table.
+check "RLS forced on all tables"  "select (count(*) = 0)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r' and c.relname <> 'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)" 1
+check "RLS policies"              "select count(*) from pg_policies where schemaname = 'public'" 1
 log "auth.users rows: $(q 'select count(*) from auth.users')"
+log "photos rows: $(q 'select count(*) from public.photos' 2>/dev/null || echo '?')"
 
 [ "$fail" = 0 ] && log "PASS $(basename "$DUMP") is restorable" || { log "FAILED"; exit 1; }

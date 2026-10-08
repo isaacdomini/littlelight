@@ -6,7 +6,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./types": "./src/generated/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -14,6 +15,7 @@
     "db:migrate": "tsx src/migrate.ts up",
     "db:migrate:down": "tsx src/migrate.ts down",
     "db:seed": "tsx src/seed.ts",
+    "db:types": "tsx src/gen-types.ts",
     "db:migrate:create": "node-pg-migrate create --migrations-dir migrations --migration-file-language sql"
   },
   "dependencies": {
