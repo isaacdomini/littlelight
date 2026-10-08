@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ingestJobSchema, JOBS } from "./jobs";
+import { ingestJobSchema, JOBS, REINDEX_REASONS, reindexJobSchema } from "./jobs";
 
 const ids = {
   photoId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -13,8 +13,9 @@ describe("JOBS", () => {
       ingestReconcile: "ingest.reconcile",
       purgeTrash: "purge.trash",
       uploadsSweep: "uploads.sweep",
+      reindex: "photo.reindex",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(4);
+    expect(new Set(Object.values(JOBS)).size).toBe(5);
   });
 });
 
@@ -38,5 +39,35 @@ describe("ingestJobSchema (strict: ids and a time zone name only)", () => {
     ["null", null],
   ])("rejects %s", (_n, data) => {
     expect(ingestJobSchema.safeParse(data).success).toBe(false);
+  });
+});
+
+describe("reindexJobSchema (strict: ids and a reason only)", () => {
+  it.each(REINDEX_REASONS)("accepts reason %s", (reason) => {
+    const p = { ...ids, reason };
+    expect(reindexJobSchema.parse(p)).toEqual(p);
+  });
+
+  it("lists the five documented reasons", () => {
+    expect([...REINDEX_REASONS]).toEqual([
+      "details",
+      "milestone",
+      "measurement",
+      "ai_override",
+      "backfill",
+    ]);
+  });
+
+  it.each([
+    ["a note", { ...ids, reason: "details", note: "first steps" }],
+    ["people", { ...ids, reason: "details", people: ["Grandma"] }],
+    ["GPS", { ...ids, reason: "details", lat: 1, lng: 2 }],
+    ["an unknown reason", { ...ids, reason: "because" }],
+    ["a missing reason", ids],
+    ["a missing baby", { photoId: ids.photoId, reason: "details" }],
+    ["a non-uuid photo", { ...ids, photoId: "p1", reason: "details" }],
+    ["null", null],
+  ])("rejects %s", (_n, data) => {
+    expect(reindexJobSchema.safeParse(data).success).toBe(false);
   });
 });

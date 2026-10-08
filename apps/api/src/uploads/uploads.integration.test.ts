@@ -48,6 +48,7 @@ describe.skipIf(!databaseUrl)("uploads (api + db, stubbed S3 and jobs)", () => {
       enqueued.push(job);
       return true;
     },
+    enqueueReindex: async () => true,
     close: async () => undefined,
   };
 

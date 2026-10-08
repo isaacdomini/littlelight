@@ -1,14 +1,21 @@
 import {
+  ageGroupSortValue,
   type BabyRole,
   type DerivativeKind,
   derivativeKey,
+  PHOTO_DETAILS_LIMITS,
   type PhotoApproval,
   type PhotoDetails,
+  type PhotoDetailsPatch,
   type PhotoExif,
+  type PhotoGroup,
   type PhotoMime,
   type PhotoStatus,
   type PhotoSummary,
+  type PhotosBatchDetailsRequest,
+  type PhotosListDir,
   type PhotosView,
+  type PhotoUrlSet,
 } from "@littlelight/shared";
 import type { Tx } from "../auth";
 import { ApiError } from "../lib/errors";
@@ -21,12 +28,34 @@ import type { UrlSigner } from "../storage/sign";
 // Every query names its columns (column grants). Signing happens after the transaction, from
 // keys rebuilt with `derivativeKey(babyId, photoId, 'thumb' | 'display')`: never a key read from
 // a row, so an `analysis` derivative or an original can never be signed through this path.
+//
+// Step 5 (docs/plans/step-5.md 2.4, 2.4a): every summary also carries `photo_details.milestone_id`
+// and the override-aware caption (`photo_ai_overrides` field `caption`, else
+// `photo_ai.description.caption`), both read under the caller's claims (`photo_visible`). They
+// are correlated subqueries evaluated only for returned rows, so the timeline's keyset scan on
+// `photos_baby_id_sort_idx` is unaffected. This is a read path only: no model, no AI write.
+
+/**
+ * `milestone_id` and `caption` of photo `p` (correlated subqueries). Usable in a SELECT list and
+ * in `UPDATE … RETURNING`. Non-string JSON in an override or AI caption reads as NULL.
+ */
+export const PHOTO_SUMMARY_EXTRA_COLUMNS = `
+  (SELECT pd.milestone_id FROM public.photo_details pd WHERE pd.photo_id = p.id) AS milestone_id,
+  COALESCE(
+    (SELECT CASE WHEN jsonb_typeof(ov.value) = 'string' THEN ov.value #>> '{}' END
+       FROM public.photo_ai_overrides ov
+      WHERE ov.photo_id = p.id AND ov.field_path = 'caption'),
+    (SELECT CASE WHEN jsonb_typeof(ai.description -> 'caption') = 'string'
+                 THEN ai.description ->> 'caption' END
+       FROM public.photo_ai ai WHERE ai.photo_id = p.id)
+  ) AS caption`;
 
 /** Columns of `photoSummarySchema` plus whether a thumb exists (alias `p`, join alias `t`). */
 export const PHOTO_SUMMARY_COLUMNS = `
   p.id, p.baby_id, p.status, p.approval, p.taken_at, p.taken_at_estimated, p.age_days,
   p.width, p.height, p.mime, p.is_sensitive, p.duplicate_of_photo_id, p.uploaded_by,
-  p.created_at, p.deleted_at, (t.photo_id IS NOT NULL) AS has_thumb`;
+  p.created_at, p.deleted_at, (t.photo_id IS NOT NULL) AS has_thumb,
+  ${PHOTO_SUMMARY_EXTRA_COLUMNS}`;
 
 /** The thumb derivative row, if the worker has written it. */
 export const PHOTO_THUMB_JOIN = `
@@ -49,6 +78,10 @@ export interface PhotoSummaryRow {
   created_at: Date;
   deleted_at: Date | null;
   has_thumb: boolean;
+  /** `photo_details.milestone_id` (absent from rows read without `PHOTO_SUMMARY_EXTRA_COLUMNS`). */
+  milestone_id?: string | null;
+  /** Override-aware caption (2.4a). */
+  caption?: string | null;
 }
 
 /** User-facing derivative kinds. `analysis` is deliberately not assignable here. */
@@ -86,6 +119,8 @@ export async function toPhotoSummary(signer: UrlSigner, r: PhotoSummaryRow): Pro
     deletedAt: r.deleted_at?.toISOString() ?? null,
     thumbUrl: thumb?.url ?? null,
     urlExpiresAt: thumb?.expiresAt.toISOString() ?? null,
+    milestoneId: r.milestone_id ?? null,
+    caption: r.caption ?? null,
   };
 }
 
@@ -95,8 +130,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Microsecond UTC timestamps as produced by `SORT_KEY_SQL` (Postgres precision, not JS ms). */
 const SORT_KEY_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
 
-/** `COALESCE(taken_at, created_at)` as UTC text with microseconds, so the cursor is exact. */
-const SORT_KEY_SQL = `to_char(COALESCE(p.taken_at, p.created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+/**
+ * The timeline sort key of photo `p`: the stored generated column `photos.sort_at` (=
+ * `COALESCE(taken_at, created_at)`, NOT NULL), indexed by `photos_baby_id_sort_idx (baby_id,
+ * sort_at DESC, id DESC) WHERE deleted_at IS NULL`. A plain column on purpose: under RLS Postgres
+ * only turns leakproof user quals into index conditions, and a COALESCE expression counts as
+ * leaky, so with the expression the keyset bound became a post-RLS filter and page N cost
+ * N x limit rows. With the column, ORDER BY and `(p.sort_at, p.id) < ($2, $3)` are both served
+ * by the index for every page.
+ */
+export const SORT_EXPR = "p.sort_at";
+
+/** `SORT_EXPR` as UTC text with microseconds, so the cursor is exact. */
+const SORT_KEY_SQL = `to_char(${SORT_EXPR} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 export interface PhotoCursor {
   sortKey: string;
@@ -206,33 +252,158 @@ export interface ListPhotosInput {
   view: PhotosView;
   cursor: PhotoCursor | null;
   limit: number;
+  /** `older` (default): items after `cursor` in timeline order; `newer`: the items just before it. */
+  dir?: PhotosListDir;
+  /** Keep only photos whose `photo_details.milestone_id` is this milestone. */
+  milestoneId?: string | null;
 }
 
-/** One page, newest first (`COALESCE(taken_at, created_at) DESC, id DESC`), plus the next cursor. */
-export async function listPhotoRows(
-  client: Tx,
-  input: ListPhotosInput,
-): Promise<{ rows: PhotoSummaryRow[]; next: PhotoCursor | null }> {
+/**
+ * The page query. The ORDER BY and the keyset predicate are textually the expression of
+ * `photos_baby_id_sort_idx` (`COALESCE(taken_at, created_at)`, then `id`), so every page is an
+ * index range scan (packages/db/README.md "Timeline and details"). `dir=newer` walks the index
+ * backwards (ascending) from the cursor; `listPhotoRows` reverses those rows. Without a cursor
+ * `dir` is ignored (the first page is always the newest). Exported for tests.
+ */
+export function listPhotosSql(input: ListPhotosInput): { text: string; values: unknown[] } {
   const filter = VIEW_FILTER[input.view];
+  const newer = input.dir === "newer" && input.cursor !== null;
   const values: unknown[] = [input.babyId];
+  let milestone = "";
+  if (input.milestoneId) {
+    values.push(input.milestoneId);
+    milestone = `AND EXISTS (SELECT 1 FROM public.photo_details f
+                              WHERE f.photo_id = p.id AND f.milestone_id = $${values.length}::uuid)`;
+  }
   let keyset = "";
   if (input.cursor) {
     values.push(input.cursor.sortKey, input.cursor.id);
-    keyset = "AND (COALESCE(p.taken_at, p.created_at), p.id) < ($2::timestamptz, $3::uuid)";
+    const ts = `$${values.length - 1}::timestamptz`;
+    const id = `$${values.length}::uuid`;
+    keyset = `AND (${SORT_EXPR}, p.id) ${newer ? ">" : "<"} (${ts}, ${id})`;
   }
   values.push(input.limit + 1);
-  const { rows } = await client.query<PhotoSummaryRow & { sort_key: string }>(
-    `SELECT ${PHOTO_SUMMARY_COLUMNS}, ${SORT_KEY_SQL} AS sort_key
+  const order = newer ? `${SORT_EXPR} ASC, p.id ASC` : `${SORT_EXPR} DESC, p.id DESC`;
+  const text = `SELECT ${PHOTO_SUMMARY_COLUMNS}, ${SORT_KEY_SQL} AS sort_key
        FROM public.photos p ${PHOTO_THUMB_JOIN}
-      WHERE p.baby_id = $1 AND ${filter} ${keyset}
-      ORDER BY COALESCE(p.taken_at, p.created_at) DESC, p.id DESC
-      LIMIT $${values.length}`,
-    values,
+      WHERE p.baby_id = $1 AND ${filter} ${milestone} ${keyset}
+      ORDER BY ${order}
+      LIMIT $${values.length}`;
+  return { text, values };
+}
+
+export interface PhotoPage {
+  /** Newest first, whatever the direction. */
+  rows: PhotoSummaryRow[];
+  /** Cursor of the newest item of the page (null when empty). */
+  first: PhotoCursor | null;
+  /** Cursor of the oldest item of the page (null when empty). */
+  last: PhotoCursor | null;
+  /** More rows exist beyond the page in the requested direction. */
+  more: boolean;
+}
+
+/**
+ * One page of `limit` rows in the requested direction, returned newest first
+ * (`COALESCE(taken_at, created_at) DESC, id DESC`), plus the edge cursors.
+ */
+export async function listPhotoRows(client: Tx, input: ListPhotosInput): Promise<PhotoPage> {
+  const { text, values } = listPhotosSql(input);
+  const { rows } = await client.query<PhotoSummaryRow & { sort_key: string }>(text, values);
+  return toPhotoPage(rows, input.limit, input.dir === "newer" && input.cursor !== null);
+}
+
+/** Trim the look-ahead row and restore newest-first order for `dir=newer`. Exported for tests. */
+export function toPhotoPage(
+  rows: readonly (PhotoSummaryRow & { sort_key: string })[],
+  limit: number,
+  ascending: boolean,
+): PhotoPage {
+  const more = rows.length > limit;
+  const page = rows.slice(0, limit);
+  if (ascending) page.reverse();
+  const cursorOf = (r: (typeof page)[number] | undefined) =>
+    r ? { sortKey: r.sort_key, id: r.id } : null;
+  const out = page.map(({ sort_key: _sortKey, ...row }) => row);
+  return { rows: out, first: cursorOf(page[0]), last: cursorOf(page[page.length - 1]), more };
+}
+
+/**
+ * `nextCursor` / `prevCursor` of a page (step-5 plan 2.4). `dir=older`: next = the last item
+ * when more exist, prev = the first item (the client fetches newer pages only after a jump).
+ * `dir=newer`: prev = the first item when more newer ones exist, next = the last item. Exported
+ * for tests.
+ */
+export function pageCursors(
+  page: Pick<PhotoPage, "first" | "last" | "more">,
+  dir: PhotosListDir,
+  hadCursor: boolean,
+): { nextCursor: string | null; prevCursor: string | null } {
+  const enc = (c: PhotoCursor | null) => (c ? encodeCursor(c) : null);
+  if (dir === "newer" && hadCursor) {
+    return { nextCursor: enc(page.last), prevCursor: page.more ? enc(page.first) : null };
+  }
+  return { nextCursor: page.more ? enc(page.last) : null, prevCursor: enc(page.first) };
+}
+
+// ---- timeline summary -----------------------------------------------------------------------------
+
+/** Larger than every v4 uuid: a group cursor `(top, MAX_UUID)` starts at the group's newest item. */
+export const MAX_UUID = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+
+export interface GroupCountRow {
+  key: string;
+  n: number;
+  /** Newest `COALESCE(taken_at, created_at)` in the group, as `SORT_KEY_SQL` text. */
+  top: string;
+}
+
+/**
+ * Per-age-group counts of the view, one query over `photos_baby_id_age_days_idx` (the
+ * `age_group` function is the SQL twin of `ageGroupKey`).
+ */
+export async function groupCounts(
+  client: Tx,
+  babyId: string,
+  view: PhotosView,
+): Promise<GroupCountRow[]> {
+  const { rows } = await client.query<GroupCountRow>(
+    `SELECT public.age_group(p.age_days) AS key, count(*)::int AS n,
+            to_char(max(${SORT_EXPR}) AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS top
+       FROM public.photos p
+      WHERE p.baby_id = $1 AND ${VIEW_FILTER[view]}
+      GROUP BY 1`,
+    [babyId],
   );
-  const page = rows.slice(0, input.limit);
-  const last = page[page.length - 1];
-  const next = rows.length > input.limit && last ? { sortKey: last.sort_key, id: last.id } : null;
-  return { rows: page, next };
+  return rows;
+}
+
+function safeSortValue(key: string): number {
+  try {
+    return ageGroupSortValue(key);
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
+}
+
+/**
+ * Groups newest first (descending `ageGroupSortValue`), each with a jump cursor
+ * `encodeCursor({sortKey: top, id: MAX_UUID})` so `GET …/photos?cursor=` starts exactly at the
+ * group's newest item. Exported for tests.
+ */
+export function toPhotoGroups(rows: readonly GroupCountRow[]): {
+  total: number;
+  groups: PhotoGroup[];
+} {
+  const groups = [...rows]
+    .sort((a, b) => safeSortValue(b.key) - safeSortValue(a.key) || a.key.localeCompare(b.key))
+    .map((r) => ({
+      key: r.key,
+      count: r.n,
+      cursor: encodeCursor({ sortKey: r.top, id: MAX_UUID }),
+    }));
+  return { total: rows.reduce((sum, r) => sum + r.n, 0), groups };
 }
 
 /** Pending, live photos visible to the caller (admins: all; contributors: their own). */
@@ -331,4 +502,195 @@ export async function photoDetails(client: Tx, photoId: string): Promise<PhotoDe
     people: r.people ?? [],
     locationLabel: r.location_label,
   };
+}
+
+/** Whether the caller may edit details / delete (the DB's `photo_editable`, the RLS rule itself). */
+export async function photoEditable(client: Tx, photoId: string): Promise<boolean> {
+  const { rows } = await client.query<{ ok: boolean }>("SELECT public.photo_editable($1) AS ok", [
+    photoId,
+  ]);
+  return rows[0]?.ok === true;
+}
+
+// ---- batch URL refresh ---------------------------------------------------------------------------
+
+export interface PhotoUrlRow {
+  id: string;
+  baby_id: string;
+  status: PhotoStatus;
+  deleted_at: Date | null;
+  has_thumb: boolean;
+  has_display: boolean;
+}
+
+/** Derivative presence of photos of one baby (RLS-filtered; unknown ids are absent). */
+export async function photoUrlRows(
+  client: Tx,
+  babyId: string,
+  ids: readonly string[],
+): Promise<PhotoUrlRow[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await client.query<PhotoUrlRow>(
+    `SELECT p.id, p.baby_id, p.status, p.deleted_at,
+            EXISTS (SELECT 1 FROM public.photo_derivatives x
+                     WHERE x.photo_id = p.id AND x.kind = 'thumb') AS has_thumb,
+            EXISTS (SELECT 1 FROM public.photo_derivatives x
+                     WHERE x.photo_id = p.id AND x.kind = 'display') AS has_display
+       FROM public.photos p
+      WHERE p.id = ANY($1::uuid[]) AND p.baby_id = $2 AND p.status <> 'duplicate'`,
+    [ids, babyId],
+  );
+  return rows;
+}
+
+/** Fresh thumb/display URLs of one photo; `urlExpiresAt` is the earlier expiry. */
+export async function signPhotoUrls(
+  signer: UrlSigner,
+  r: Pick<PhotoUrlRow, "id" | "baby_id" | "has_thumb" | "has_display">,
+): Promise<PhotoUrlSet> {
+  const [thumb, display] = await Promise.all([
+    r.has_thumb ? signDerivative(signer, r.baby_id, r.id, "thumb") : null,
+    r.has_display ? signDerivative(signer, r.baby_id, r.id, "display") : null,
+  ]);
+  const expiries = [thumb?.expiresAt, display?.expiresAt].filter((d): d is Date => !!d);
+  const earliest = expiries.length ? new Date(Math.min(...expiries.map((d) => d.getTime()))) : null;
+  return {
+    thumbUrl: thumb?.url ?? null,
+    displayUrl: display?.url ?? null,
+    urlExpiresAt: earliest?.toISOString() ?? null,
+  };
+}
+
+// ---- parent details (FR-3) ---------------------------------------------------------------------
+
+/**
+ * Milestone a photo of `babyId` may be tagged with: a preset, or a custom milestone of that baby
+ * (read under the caller's claims). There is no DB rule for the cross-baby case, so the API
+ * checks it here: 409 when the milestone is not visible (deleted, or someone else's) or belongs
+ * to another album.
+ */
+export async function assertMilestoneUsable(
+  client: Tx,
+  milestoneId: string,
+  babyId: string,
+): Promise<void> {
+  const { rows } = await client.query<{ baby_id: string | null }>(
+    "SELECT m.baby_id FROM public.milestones m WHERE m.id = $1",
+    [milestoneId],
+  );
+  const m = rows[0];
+  if (!m) throw new ApiError(409, "conflict", "That milestone doesn't exist anymore");
+  if (m.baby_id !== null && m.baby_id !== babyId) {
+    throw new ApiError(409, "conflict", "That milestone belongs to another album");
+  }
+}
+
+/**
+ * People chips as stored: trimmed (zod already trims), empty ones dropped, de-duplicated
+ * case-insensitively keeping the first spelling and order. Exported for tests.
+ */
+export function normalizePeople(people: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of people) {
+    const name = raw.trim().slice(0, PHOTO_DETAILS_LIMITS.personName);
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
+
+/** An empty note / label is stored as NULL. */
+const blankToNull = (v: string | null): string | null => (v === null || v.trim() === "" ? null : v);
+
+/** Provided details fields → `photo_details` column values (undefined keys are untouched). */
+function detailColumns(
+  patch: Pick<PhotoDetailsPatch, "milestoneId" | "note" | "locationLabel">,
+): Array<readonly [column: string, value: unknown, cast: string]> {
+  const cols: Array<readonly [string, unknown, string]> = [];
+  if (patch.milestoneId !== undefined) cols.push(["milestone_id", patch.milestoneId, "uuid"]);
+  if (patch.note !== undefined) cols.push(["note", blankToNull(patch.note), "text"]);
+  if (patch.locationLabel !== undefined) {
+    cols.push(["location_label", blankToNull(patch.locationLabel), "text"]);
+  }
+  return cols;
+}
+
+/**
+ * `PATCH /photos/:id/details`: upsert under the caller's claims, setting only the provided
+ * fields (`people` replaces the array; `null` clears a scalar). Column names come from a fixed
+ * list; every value is a bind parameter. Exported for tests.
+ */
+export function detailsUpsertSql(
+  photoId: string,
+  uid: string,
+  patch: PhotoDetailsPatch,
+): { text: string; values: unknown[] } {
+  const cols = detailColumns(patch);
+  if (patch.people !== undefined) cols.push(["people", normalizePeople(patch.people), "text[]"]);
+  const values: unknown[] = [photoId, uid];
+  const names = ["photo_id", "edited_by"];
+  const params = ["$1::uuid", "$2::uuid"];
+  for (const [column, value, cast] of cols) {
+    values.push(value);
+    names.push(column);
+    params.push(`$${values.length}::${cast}`);
+  }
+  const sets = names.slice(1).map((c) => `${c} = EXCLUDED.${c}`);
+  const text = `INSERT INTO public.photo_details AS pd (${names.join(", ")})
+       VALUES (${params.join(", ")})
+       ON CONFLICT (photo_id) DO UPDATE SET ${sets.join(", ")}
+       RETURNING pd.photo_id`;
+  return { text, values };
+}
+
+/**
+ * `POST /babies/:id/photos/details` (FR-3.1): one statement for the whole batch. Targets are the
+ * requested ids that are photos of `babyId`, visible (RLS) and editable by the caller
+ * (`photo_editable`, the policies' own rule); `addPeople` is merged into each photo's people
+ * (union, case-insensitive, first spelling and order kept) and a photo whose union would exceed
+ * the cap is left out. Returns the written `photo_id`s; every other id is "skipped". Exported for
+ * tests.
+ */
+export function batchDetailsSql(
+  babyId: string,
+  uid: string,
+  ids: readonly string[],
+  body: Pick<PhotosBatchDetailsRequest, "milestoneId" | "addPeople" | "note" | "locationLabel">,
+): { text: string; values: unknown[] } {
+  const add = normalizePeople(body.addPeople ?? []);
+  const values: unknown[] = [ids, babyId, uid, add, PHOTO_DETAILS_LIMITS.people];
+  const names = ["photo_id", "edited_by", "people"];
+  const selects = ["m.id", "$3::uuid", "m.people"];
+  const sets = ["edited_by = EXCLUDED.edited_by"];
+  if (add.length > 0) sets.push("people = EXCLUDED.people");
+  for (const [column, value, cast] of detailColumns(body)) {
+    values.push(value);
+    names.push(column);
+    selects.push(`$${values.length}::${cast}`);
+    sets.push(`${column} = EXCLUDED.${column}`);
+  }
+  const text = `WITH target AS (
+         SELECT p.id
+           FROM public.photos p
+          WHERE p.id = ANY($1::uuid[]) AND p.baby_id = $2::uuid AND p.status <> 'duplicate'
+            AND public.photo_editable(p.id)
+       ), merged AS (
+         SELECT t.id,
+                ARRAY(SELECT (array_agg(u.x ORDER BY u.o))[1]
+                        FROM unnest(COALESCE(pd.people, '{}'::text[]) || $4::text[])
+                             WITH ORDINALITY AS u(x, o)
+                       GROUP BY lower(u.x)
+                       ORDER BY min(u.o)) AS people
+           FROM target t
+           LEFT JOIN public.photo_details pd ON pd.photo_id = t.id
+       )
+       INSERT INTO public.photo_details AS d (${names.join(", ")})
+       SELECT ${selects.join(", ")} FROM merged m
+        WHERE cardinality(m.people) <= $5::int
+       ON CONFLICT (photo_id) DO UPDATE SET ${sets.join(", ")}
+       RETURNING d.photo_id`;
+  return { text, values };
 }

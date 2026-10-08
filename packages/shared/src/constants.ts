@@ -1,6 +1,6 @@
 import type { MilestoneCategory } from "./db-enums";
 
-// Shared constants (docs/plans/step-1.md 2.10, docs/plans/step-2.md 2.11). Model names are config defaults, not code paths:
+// Shared constants (docs/plans/step-1.md 2.10, docs/plans/step-2.md 2.11, docs/plans/step-5.md 2.6). Model names are config defaults, not code paths:
 // every model call goes through packages/ai adapters, which read these as fallbacks.
 
 export const APP_NAME = "Littlelight";
@@ -40,6 +40,12 @@ export const PHOTO_TRASH_DAYS = 30;
 
 /** Radius around the encrypted home location treated as "home" (place labels). */
 export const HOME_RADIUS_M = 150;
+
+/** Custom milestones per baby (`milestones_cap` trigger: "milestone limit reached"). */
+export const MAX_CUSTOM_MILESTONES_PER_BABY = 200;
+
+/** Photos per timeline page (`GET /babies/:id/photos?limit=`; also the endpoint's max). */
+export const TIMELINE_PAGE_SIZE = 200;
 
 export interface MilestonePreset {
   readonly id: string;
@@ -151,4 +157,43 @@ export const DEMO_IDS = {
     "00000000-0000-4000-8000-000000000311",
     "00000000-0000-4000-8000-000000000312",
   ],
+} as const;
+
+/** Number of photos the perf seed creates (`PERF_IDS.photo(0)` .. `PERF_IDS.photo(9999)`). */
+export const PERF_PHOTO_COUNT = 10_000;
+/** Number of measurements the perf seed creates (25 weights, 13 heights, 7 head). */
+export const PERF_MEASUREMENT_COUNT = 45;
+
+function perfIndex(i: number, count: number, what: string): number {
+  if (!Number.isInteger(i) || i < 0 || i >= count) {
+    throw new RangeError(`${what} index must be an integer in 0..${count - 1}`);
+  }
+  return i;
+}
+
+/**
+ * Fixed ids of the dev-only performance seed (`pnpm perf:seed`, docs/plans/step-5.md 2.8): a
+ * free-tier baby "Pixel" with 10,000 photos whose admins are the demo mom and dad. These rows
+ * exist only where the seed was run by hand on a dev machine (never in a container or
+ * production).
+ */
+export const PERF_IDS = {
+  /** "Pixel" (nickname "Pix"), born 2024-10-01, plan `free`, no plan owner. */
+  baby: "00000000-0000-4000-8000-000000000900",
+  /** Custom milestones "First swim", "First snow", "Met Grandpa Joe". */
+  milestones: [
+    "00000000-0000-4000-8000-000000000910",
+    "00000000-0000-4000-8000-000000000911",
+    "00000000-0000-4000-8000-000000000912",
+  ],
+  /** Photo `i` (0..9999): `00000000-0000-4000-8000-01` + `i` as 10 zero-padded digits. */
+  photo(i: number): string {
+    const n = perfIndex(i, PERF_PHOTO_COUNT, "photo");
+    return `00000000-0000-4000-8000-01${String(n).padStart(10, "0")}`;
+  },
+  /** Measurement `i` (0..44): `00000000-0000-4000-8000-0000000009` + (20 + `i`), i.e. `…920`..`…964`. */
+  measurement(i: number): string {
+    const n = perfIndex(i, PERF_MEASUREMENT_COUNT, "measurement");
+    return `00000000-0000-4000-8000-0000000009${String(20 + n)}`;
+  },
 } as const;

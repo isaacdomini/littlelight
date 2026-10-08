@@ -36,6 +36,24 @@ export function isMissingObject(err: unknown): boolean {
   return e.name === "NotFound" || e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404;
 }
 
+/**
+ * Whether `key` exists in `bucket` (HeadObject). Missing ⇒ false; any other storage error is
+ * rethrown (callers log `errorCategory` only).
+ */
+export async function objectExists(
+  s3: StorageClient,
+  bucket: string,
+  key: string,
+): Promise<boolean> {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err) {
+    if (isMissingObject(err)) return false;
+    throw err;
+  }
+}
+
 /** Errors on Complete that mean "the parts as uploaded are not acceptable": re-upload them. */
 export function isInvalidParts(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;

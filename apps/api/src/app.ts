@@ -10,6 +10,8 @@ import { createGoTrueClient, type GoTrueClient, registerAuth } from "./auth";
 import type { ApiConfig } from "./config";
 import { createSmtpMailer, type Mailer } from "./email/mailer";
 import { registerErrorHandling } from "./lib/errors";
+import { measurementsRoutes } from "./measurements/routes";
+import { milestonesRoutes } from "./milestones/routes";
 import { photosRoutes } from "./photos/routes";
 import { createPool, type DbClient, registerDb } from "./plugins/db";
 import { createJobQueue, type JobQueue, registerJobs, sendOnlyBoss } from "./plugins/jobs";
@@ -130,6 +132,9 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
   // Step 4: uploads, photos (docs/plans/step-4.md 2.4).
   uploadsRoutes(app);
   photosRoutes(app);
+  // Step 5: milestones, measurements (docs/plans/step-5.md 2.4).
+  milestonesRoutes(app);
+  measurementsRoutes(app);
 }
 
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */

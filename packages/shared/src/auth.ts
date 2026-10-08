@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { babyRoleSchema } from "./db-enums";
+import { babyRoleSchema, measurementKindSchema } from "./db-enums";
 import { uploadFileErrorSchema } from "./upload";
 
 // Auth constants and helpers shared by the API and the SPA (docs/plans/step-3.md 2.2, 2.6, 2.9).
@@ -131,8 +131,9 @@ export function userAgentLabel(ua: string | null | undefined): string {
 }
 
 /**
- * `audit_log.event` values: step 3 (auth, invites, members, babies, account) and step 4 (uploads,
- * photo moderation, purge, safety). Step 8 appends share-link events.
+ * `audit_log.event` values: step 3 (auth, invites, members, babies, account), step 4 (uploads,
+ * photo moderation, purge, safety) and step 5 (details, milestones, measurements). Step 8
+ * appends share-link events.
  */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
@@ -158,13 +159,21 @@ export const AUDIT_EVENTS = [
   "photo.original_downloaded",
   "photo.purged",
   "safety.hash_match",
+  "photo.details_updated",
+  "photos.details_batch_updated",
+  "milestone.created",
+  "milestone.updated",
+  "milestone.deleted",
+  "measurement.created",
+  "measurement.updated",
+  "measurement.deleted",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 
 /**
  * `audit_log.metadata`. Rule: only these keys, ever. Never emails, IPs, tokens, codes, GPS,
- * notes or prompts. Strict: any other key is rejected, so `audit()` cannot be handed one.
+ * notes, prompts, people, location labels, milestone names or measurement values. Strict: any other key is rejected, so `audit()` cannot be handed one.
  */
 export const auditMetadataSchema = z.strictObject({
   /** `CF-IPCountry` value (ISO 3166-1 alpha-2, or Cloudflare's `XX`/`T1`). */
@@ -187,5 +196,9 @@ export const auditMetadataSchema = z.strictObject({
   duplicates: z.number().int().nonnegative().optional(),
   failed: z.number().int().nonnegative().optional(),
   error: uploadFileErrorSchema.optional(),
+  milestone_id: z.uuid().optional(),
+  measurement_id: z.uuid().optional(),
+  /** Measurement kind (`weight`/`height`/`head`), never the value. */
+  kind: measurementKindSchema.optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

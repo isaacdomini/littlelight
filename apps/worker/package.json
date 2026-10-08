@@ -9,6 +9,7 @@
     "start": "node dist/main.js",
     "healthcheck": "tsx src/healthcheck.ts",
     "run-job": "tsx src/run-job.ts",
+    "perf-seed": "tsx src/tools/perf-seed.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'"
   },

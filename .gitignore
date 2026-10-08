@@ -13,3 +13,4 @@ coverage/
 # Playwright output
 e2e/report/
 e2e/test-results/
+e2e/test-results-perf/

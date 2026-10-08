@@ -7,7 +7,7 @@ import { createDiskMonitor } from "./disk";
 import { startHeartbeat, workerId } from "./heartbeat";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
-import { ensureQueues, ensureSchedules, startWorkers } from "./queues";
+import { ensureQueues, ensureSchedules, QUEUES, SCHEDULES, startWorkers } from "./queues";
 import { createStorage } from "./storage";
 import { WORKER_VERSION } from "./version";
 
@@ -109,7 +109,7 @@ try {
   await boss.start();
   await ensureQueues(boss, log);
   await ensureSchedules(boss);
-  log.info({ queues: 4, schedules: 3 }, "queues ready");
+  log.info({ queues: Object.keys(QUEUES).length, schedules: SCHEDULES.length }, "queues ready");
   await startWorkers(boss, {
     ingest: { pool, storage, matcher, dataKey: config.DATA_ENCRYPTION_KEY, log },
     purge: { pool, storage, log },

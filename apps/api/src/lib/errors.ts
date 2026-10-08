@@ -129,27 +129,97 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
     "duplicate_of_photo_id must be a photo of the same baby",
     () => new ApiError(409, "conflict", "That conflicts with the current state"),
   ],
+  // Step 5 (packages/db/migrations/1791800000100_timeline-and-details.sql).
+  [
+    "milestone limit reached",
+    () =>
+      new ApiError(409, "conflict", "This album already has the maximum of 200 custom milestones"),
+  ],
+  [
+    "measurement photo must belong to the same baby",
+    () => new ApiError(409, "conflict", "That photo isn't part of this album"),
+  ],
+  // Cross-baby milestone tags (`photo_details` / `upload_sessions` shape triggers). Listed
+  // before the generic `<table>.<column>` rule below, which would make them 400s.
+  [
+    "photo_details.milestone_id must belong to the same baby",
+    () => new ApiError(409, "conflict", "That milestone belongs to another album"),
+  ],
+  [
+    "upload_sessions.milestone_id must belong to the same baby",
+    () => new ApiError(409, "conflict", "That milestone belongs to another album"),
+  ],
+  [
+    "photo_details.people holds at most 20 entries",
+    () =>
+      new ApiError(400, "validation_failed", "A photo can list at most 20 people", {
+        fields: ["body.people"],
+      }),
+  ],
+  [
+    "photo_details.location_label is longer than 120 characters",
+    () =>
+      new ApiError(400, "validation_failed", "The location label is too long", {
+        fields: ["body.locationLabel"],
+      }),
+  ],
 ];
+
+/**
+ * Shape triggers on parent-text and input columns (`<table>_shape`, step 5) raise 23514 with a
+ * fixed message starting `<table>.<column>` (e.g. `photo_details.note is longer than 2000
+ * characters`) and naming no value: those are input errors, 400 `validation_failed`, never echoed.
+ */
+const SHAPE_MESSAGE = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]* /;
+/** Shape messages that do not follow the `<table>.<column>` pattern. */
+const SHAPE_MESSAGE_PREFIXES: readonly string[] = ["measurements values must be positive"];
+/** Remaining plain CHECK constraints on these tables are input-shape errors too (by `table`). */
+const INPUT_CHECK_TABLES: ReadonlySet<string> = new Set(["photo_details", "measurements"]);
+
+/** 23505 by constraint name; anything else is the generic 409. */
+const UNIQUE_VIOLATIONS: ReadonlyMap<string, () => ApiError> = new Map([
+  // Also raised by the `milestones_name_guard` trigger for a custom name equal to a preset's.
+  [
+    "milestones_baby_id_lower_name_key",
+    () => new ApiError(409, "conflict", "A milestone with that name already exists"),
+  ],
+]);
 
 /** 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). */
 export const freeTierLimit = () =>
   new ApiError(409, "free_tier_limit", "This album is on the free plan, which holds 1,000 photos");
 
+function isInputCheck(err: PgErrorLike): boolean {
+  if (SHAPE_MESSAGE.test(err.message)) return true;
+  if (SHAPE_MESSAGE_PREFIXES.some((prefix) => err.message.startsWith(prefix))) return true;
+  return err.table !== undefined && INPUT_CHECK_TABLES.has(err.table);
+}
+
 /**
- * Map a Postgres error to an `ApiError`. SQLSTATE `23514` by trigger message, `42501` → 403
- * `forbidden` (privilege or RLS `WITH CHECK` failure), `23505` → 409 `conflict`; anything else →
- * 500 `internal`. The result never carries the SQL, parameters or the original message.
+ * Map a Postgres error to an `ApiError`. SQLSTATE `23514` by trigger message (then any
+ * `<table>.<column> …` shape-trigger message → 400), `42501` → 403 `forbidden` (privilege or RLS
+ * `WITH CHECK` failure), `23505` → 409 `conflict` (by constraint name when known), `23503` → 409
+ * (a referenced row vanished concurrently); anything else → 500 `internal`. The result never
+ * carries the SQL, parameters or the original message.
  */
 export function mapPgError(err: PgErrorLike): ApiError {
   switch (err.code) {
     case "23514": {
       const hit = CHECK_VIOLATIONS.find(([prefix]) => err.message.startsWith(prefix));
-      return hit ? hit[1]() : internalError();
+      if (hit) return hit[1]();
+      if (isInputCheck(err)) {
+        return new ApiError(400, "validation_failed", "The request is invalid");
+      }
+      return internalError();
     }
     case "42501":
       return forbidden();
-    case "23505":
-      return new ApiError(409, "conflict", "That already exists");
+    case "23505": {
+      const known = err.constraint ? UNIQUE_VIOLATIONS.get(err.constraint) : undefined;
+      return known ? known() : new ApiError(409, "conflict", "That already exists");
+    }
+    case "23503":
+      return new ApiError(409, "conflict", "That conflicts with the current state");
     default:
       return internalError();
   }

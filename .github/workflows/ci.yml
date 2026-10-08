@@ -12,9 +12,12 @@
 #   images           builds every production image (api, worker, web, migrate) with buildx + GHA
 #                    cache. Nothing is pushed.
 #   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout, runs
-#                    e2e/smoke/dev-stack.sh (step-1..4 acceptance checks), then the Playwright
-#                    e2e suite (step-3 auth + step-4 upload specs) in Chromium, then the step-4
-#                    upload gate (docs/plans/step-4.md 4.1: `pnpm e2e:upload-gate`).
+#                    e2e/smoke/dev-stack.sh (step-1..5 acceptance checks), then the Playwright
+#                    e2e suite (step-3 auth, step-4 upload, step-5 timeline edits specs; the edits
+#                    spec uses the demo family that `migrate` seeds via .env.dev
+#                    SEED_DEMO_FAMILY=true) in Chromium, then the step-4 upload gate
+#                    (docs/plans/step-4.md 4.1: `pnpm e2e:upload-gate`), then the step-5 perf gate
+#                    (docs/plans/step-5.md 4.1: `pnpm perf:seed` + `PERF_CI=1 pnpm e2e:perf`).
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
 name: CI
@@ -104,7 +107,8 @@ jobs:
         run: >-
           pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
           --target es2022 --strict --types node
-          e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/playwright.config.ts
+          e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts
+          e2e/playwright.config.ts e2e/playwright.perf.config.ts
 
       - name: Unit tests
         run: pnpm test
@@ -268,9 +272,9 @@ jobs:
   dev-stack-smoke:
     name: Dev stack smoke + e2e
     runs-on: ubuntu-24.04
-    # Image builds + up (~10 min cold), smoke, Chromium download, e2e with one retry, two api
-    # restarts, upload gate (~3-4 min).
-    timeout-minutes: 55
+    # Image builds + up (~10 min cold), smoke, Chromium download, e2e with one retry, three api
+    # restarts, upload gate (~3-4 min), perf seed + perf run on two viewports (~2-4 min).
+    timeout-minutes: 65
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -363,6 +367,61 @@ jobs:
           set -euo pipefail
           mkdir -p "$(dirname "$GATE_LOG")"
           pnpm e2e:upload-gate 2>&1 | tee "$GATE_LOG"
+
+      # The perf spec signs demo-mom in once per project (OTP via Mailpit); the gate above spent
+      # more of the hourly sign-in-code budget.
+      - name: Reset API rate limits before perf (restart api)
+        run: bash .github/scripts/restart-api.sh
+
+      # PRD step-5 check, "10,000 seeded photos scroll smoothly" (docs/plans/step-5.md 4.1).
+      # The seed runs on the runner host (apps/worker/src/tools/perf-seed.ts: superuser + MinIO
+      # root key, refuses any non-localhost target) against the dev stack's published ports; the
+      # values are the dev-only literals of docker-compose.dev.yml x-dev-shared, the same the
+      # upload gate uses. Idempotent; expects photos=10000 photo_derivatives=20000.
+      - name: Perf seed (10,000 photos, dev only)
+        timeout-minutes: 10
+        env:
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight
+          S3_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: dev
+          S3_SECRET_KEY: devdevdev
+          S3_BUCKET: littlelight-dev
+          S3_REGION: us-east-1
+        run: pnpm perf:seed
+
+      # Playwright frame timing / long tasks / DOM bounds / API p95 on the phone and desktop
+      # projects (e2e/playwright.perf.config.ts). PERF_CI=1 selects the shared-runner thresholds
+      # (jank 15 %, p95 34 ms, max frame 600 ms, long tasks 40, API p95 800 ms; DOM bounds
+      # unchanged). The per-project table stays in the log and is copied to the job summary.
+      - name: Perf gate (PRD step-5 check)
+        timeout-minutes: 15
+        env:
+          PERF_CI: "1"
+          PERF_LOG: ${{ runner.temp }}/perf/perf.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PERF_LOG")"
+          rc=0
+          pnpm e2e:perf 2>&1 | tee "$PERF_LOG" || rc=$?
+          {
+            echo '### Timeline perf (PERF_CI thresholds)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$PERF_LOG" \
+              | awk '/^Timeline perf \[/{on=1} on && /^(Timeline perf \[|  [A-Za-z])/{print; next} {on=0}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Upload perf output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf
+          path: |
+            ${{ runner.temp }}/perf
+            e2e/test-results-perf
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload gate output
         if: failure()

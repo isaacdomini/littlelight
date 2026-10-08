@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { apiFetch, isApiError, onSignedOut } from "../lib/api";
+import { clearImageCache } from "../lib/imageCache";
 import { currentBabyStore } from "../lib/session";
 
 export const ME_KEY = ["me"] as const;
@@ -55,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       predicate: (q) => q.queryKey[0] !== "me" || q.queryKey.length > 1,
     });
     queryClient.setQueryData(ME_KEY, null);
+    void clearImageCache();
   }, [queryClient]);
 
   useEffect(() => onSignedOut(clearSession), [clearSession]);

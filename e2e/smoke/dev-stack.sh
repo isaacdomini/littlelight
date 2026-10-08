@@ -78,10 +78,12 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
 });' || fail "service state check"
 
 step "2. web app loads at $BASE"
-curl -fsS "$BASE/" | grep -q '<div id="root">' || fail "$BASE/ did not serve the app shell"
+SHELL_HTML="$(curl -fsS "$BASE/" || true)"
+grep -q '<div id="root">' <<<"$SHELL_HTML" || fail "$BASE/ did not serve the app shell"
 
 step "3. proxies: /api/healthz, /auth/health; GoTrue's other endpoints are not browser-reachable"
-curl -fsS "$BASE/api/healthz" | grep -q '"status":"ok"' || fail "$BASE/api/healthz not ok"
+HEALTHZ="$(curl -fsS "$BASE/api/healthz" || true)"
+grep -q '"status":"ok"' <<<"$HEALTHZ" || fail "$BASE/api/healthz not ok"
 curl -fsS -o /dev/null "$BASE/auth/health" || fail "$BASE/auth/health not 200"
 # The API is GoTrue's only client for codes, verification and sign-out (docs/plans/step-3.md 2.1):
 # the proxy exposes /auth/health, /auth/authorize and /auth/callback and 404s the rest.
@@ -90,9 +92,18 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 11 migrations applied"
+step "3a. database: all 12 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "11" ] || fail "expected 11 applied migrations, found $MIGS"
+[ "$MIGS" = "12" ] || fail "expected 12 applied migrations, found $MIGS"
+
+# Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
+PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
+if [ "$PERF_PHOTOS" != "0" ]; then
+  [ "$PERF_PHOTOS" = "10000" ] || fail "perf baby is partly seeded ($PERF_PHOTOS photos, expected 10000); rerun pnpm perf:seed"
+  echo "perf baby present: 10000 photos"
+else
+  echo "perf baby not seeded (optional)"
+fi
 
 step "4. sign-in code: POST /api/auth/otp is a generic 202; the code arrives in Mailpit"
 EMAIL="smoke-$(date +%s)-$RANDOM@example.com"
@@ -109,9 +120,11 @@ for _ in $(seq 1 30); do
 done
 [ -n "$ID" ] || fail "no email for $EMAIL appeared in Mailpit"
 MSG="$(curl -fsS "$MAIL/api/v1/message/$ID")"
-printf '%s' "$MSG" | json '(j.Text||"")+" "+(j.HTML||"")' | grep -Eq '(^|[^0-9])[0-9]{6}([^0-9]|$)' \
+MSG_TEXT="$(json '(j.Text||"")+" "+(j.HTML||"")' <<<"$MSG")"
+grep -Eq '(^|[^0-9])[0-9]{6}([^0-9]|$)' <<<"$MSG_TEXT" \
   || fail "email body has no 6-digit code"
-CODE="$(printf '%s' "$MSG" | json 'j.HTML' | grep -Eo '>[0-9]{6}<' | head -n1 | tr -d '<>')"
+MSG_HTML="$(json 'j.HTML' <<<"$MSG")"
+CODE="$(grep -Eo '>[0-9]{6}<' <<<"$MSG_HTML" | sed -n '1{s/[<>]//g;p;}' || true)"
 [ -n "$CODE" ] || fail "no >NNNNNN< code in the email HTML"
 echo "OTP email received"
 
@@ -143,9 +156,9 @@ PSQL=("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -F '|')
 CONNS="$("${PSQL[@]}" -c \
   "select distinct usename||'|'||regexp_replace(application_name, ':.*$', '') from pg_stat_activity where application_name like 'littlelight-%' order by 1")"
 echo "$CONNS"
-printf '%s\n' "$CONNS" | grep -qx 'littlelight_api|littlelight-api' \
+grep -qx 'littlelight_api|littlelight-api' <<<"$CONNS" \
   || fail "no littlelight-api session as littlelight_api in pg_stat_activity"
-printf '%s\n' "$CONNS" | grep -qx 'littlelight_worker|littlelight-worker' \
+grep -qx 'littlelight_worker|littlelight-worker' <<<"$CONNS" \
   || fail "no littlelight-worker session as littlelight_worker in pg_stat_activity"
 SUPER="$("${PSQL[@]}" -c \
   "select count(*) from pg_stat_activity where usename = 'postgres' and application_name like 'littlelight-%' and application_name not in ('littlelight-seed')")"
@@ -163,16 +176,16 @@ STRANGER='{"sub":"00000000-0000-4000-8000-0000000000ff","role":"authenticated"}'
 NANNY='{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}'
 VIEWER='{"role":"viewer","share_link_id":"00000000-0000-4000-8000-000000000200"}'
 OUT="$("${APSQL[@]}" -c "begin; set local role authenticated; $(claims "$STRANGER") select 'stranger_photos=' || count(*) from photos; rollback;" 2>&1 || true)"
-printf '%s\n' "$OUT" | grep -qx 'stranger_photos=0' || fail "a stranger can see photos: $OUT"
+grep -qx 'stranger_photos=0' <<<"$OUT" || fail "a stranger can see photos: $OUT"
 OUT="$("${APSQL[@]}" -c "begin; set local role authenticated; $(claims "$NANNY") delete from photos; rollback;" 2>&1 || true)"
-printf '%s\n' "$OUT" | grep -q 'permission denied for table photos' || fail "contributor DELETE FROM photos was not denied: $OUT"
+grep -q 'permission denied for table photos' <<<"$OUT" || fail "contributor DELETE FROM photos was not denied: $OUT"
 OUT="$("${APSQL[@]}" -c "begin; set local role viewer; $(claims "$VIEWER") select 'shared=' || count(*) from shared_photos; select 'photos=' || count(*) from photos; rollback;" 2>&1 || true)"
-printf '%s\n' "$OUT" | grep -qx 'shared=3' || fail "viewer does not see exactly 3 shared_photos: $OUT"
-printf '%s\n' "$OUT" | grep -qx 'photos=3' || fail "viewer does not see exactly 3 photos: $OUT"
+grep -qx 'shared=3' <<<"$OUT" || fail "viewer does not see exactly 3 shared_photos: $OUT"
+grep -qx 'photos=3' <<<"$OUT" || fail "viewer does not see exactly 3 photos: $OUT"
 OUT="$("${APSQL[@]}" -c "begin; set local role viewer; $(claims "$VIEWER") select count(*) from photo_exif; rollback;" 2>&1 || true)"
-printf '%s\n' "$OUT" | grep -q 'permission denied for table photo_exif' || fail "viewer can read photo_exif: $OUT"
+grep -q 'permission denied for table photo_exif' <<<"$OUT" || fail "viewer can read photo_exif: $OUT"
 OUT="$("${APSQL[@]}" -c "select count(*) from photos" 2>&1 || true)"
-printf '%s\n' "$OUT" | grep -q 'permission denied' || fail "littlelight_api outside SET ROLE can read photos: $OUT"
+grep -q 'permission denied' <<<"$OUT" || fail "littlelight_api outside SET ROLE can read photos: $OUT"
 TABLES="$("${PSQL[@]}" -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)")"
 [ "$TABLES" = "0" ] || fail "$TABLES public table(s) without ENABLE+FORCE row level security"
 echo "RLS spot checks passed"
@@ -183,9 +196,9 @@ API_KEY="$("${DC[@]}" exec -T api printenv S3_ACCESS_KEY | tr -d '\r')"
 WORKER_KEY="$("${DC[@]}" exec -T worker printenv S3_ACCESS_KEY | tr -d '\r')"
 [ "$WORKER_KEY" = "littlelight-worker" ] || fail "worker S3_ACCESS_KEY is '$WORKER_KEY', expected littlelight-worker"
 WLOG="$("${DC[@]}" logs worker 2>&1)"
-printf '%s\n' "$WLOG" | grep -q 'queues ready' || fail "worker log has no 'queues ready'"
-printf '%s\n' "$WLOG" | grep -q 'CSAM matching disabled' || fail "worker log has no 'CSAM matching disabled'"
-printf '%s\n' "$WLOG" | grep -q 'diskUsedPct' || fail "worker log has no diskUsedPct (disk gauge)"
+grep -q 'queues ready' <<<"$WLOG" || fail "worker log has no 'queues ready'"
+grep -q 'CSAM matching disabled' <<<"$WLOG" || fail "worker log has no 'CSAM matching disabled'"
+grep -q 'diskUsedPct' <<<"$WLOG" || fail "worker log has no diskUsedPct (disk gauge)"
 LEAK="$("${DC[@]}" logs api worker 2>&1 | grep -Eci 'X-Amz-Signature|GPSLatitude|"latitude"' || true)"
 [ "$LEAK" = "0" ] || fail "$LEAK api/worker log line(s) mention signed-URL signatures or GPS"
 echo "api/worker use their own MinIO service accounts; worker queues ready; logs clean"
@@ -202,7 +215,7 @@ if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   "${DC[@]}" start storage >/dev/null
   code_is_200() { [ "$(curl -s -o /dev/null -w '%{http_code}' "$API_DIRECT/healthz")" = "200" ]; }
   wait_for 60 "api /healthz to recover to 200" code_is_200
-  worker_healthy() { ! worker_unhealthy && "${DC[@]}" ps worker --format json | grep -q '"Health":"healthy"'; }
+  worker_healthy() { ! worker_unhealthy && grep -q '"Health":"healthy"' <<<"$("${DC[@]}" ps worker --format json)"; }
   wait_for 90 "worker to recover to healthy" worker_healthy
   echo "storage stop/start behaved as expected"
 fi

@@ -11,7 +11,7 @@ import { databaseUrl, env } from "./test/harness";
 // auth.users is created by GoTrue in the dev stack; on a bare pgvector (CI) the harness stubs it.
 // WARNING: reverts every migration, so only point it at a disposable database.
 
-const EXPECTED_MIGRATIONS = 11;
+const EXPECTED_MIGRATIONS = 12;
 const quiet = () => undefined;
 
 const APP_TABLES = [
@@ -357,6 +357,35 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
       "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'quarantined_at'",
     );
     expect(cols).toEqual([]);
+    const stepFive = await rows(
+      `SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE nspname = 'public' AND proname = ANY($1)`,
+      [
+        [
+          "age_group",
+          "member_baby_ids",
+          "admin_baby_ids",
+          "milestones_cap",
+          "milestones_name_guard",
+          "photo_details_shape",
+          "measurements_photo_same_baby",
+          "measurements_shape",
+          "babies_shape",
+          "upload_sessions_shape",
+          "share_links_shape",
+          "chat_threads_shape",
+          "invites_shape",
+          "photo_ai_overrides_shape",
+        ],
+      ],
+    );
+    expect(stepFive, "step 5 helpers left behind").toEqual([]);
+    const stepFiveCols = await rows(
+      `SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND ((table_name = 'photos' AND column_name = 'sort_at')
+           OR (table_name = 'milestones' AND column_name = 'updated_at'))`,
+    );
+    expect(stepFiveCols, "step 5 columns left behind").toEqual([]);
     const policies = await rows("SELECT policyname FROM pg_policies WHERE schemaname = 'public'");
     expect(policies).toEqual([]);
     const table = await scalar("SELECT to_regclass('public.worker_heartbeats') AS t");

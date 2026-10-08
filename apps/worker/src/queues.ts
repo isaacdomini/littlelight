@@ -1,10 +1,18 @@
-import { type IngestJob, ingestJobSchema, JOBS, type JobName } from "@littlelight/shared";
+import {
+  type IngestJob,
+  ingestJobSchema,
+  JOBS,
+  type JobName,
+  type ReindexJob,
+  reindexJobSchema,
+} from "@littlelight/shared";
 import type { JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
 import { errorCategory } from "./clients";
 import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
 import { reconcileIngest } from "./reconcile";
+import { handleReindexJob } from "./reindex";
 import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 
 // pg-boss queues, schedules and handlers (docs/plans/step-4.md 2.5, R1). The worker owns queue
@@ -16,7 +24,8 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // For `photo.ingest` the key is the photoId (the API and `ingest.reconcile` always set it), so a
 // re-send for a photo that is queued or being processed is a no-op and `--scale worker=3` never
 // processes a photo twice concurrently. The cron queues are sent without a key, so each runs as
-// a cluster-wide singleton.
+// a cluster-wide singleton. `photo.reindex` (step 5 2.5) is keyed by photoId too: one queued
+// re-index per photo however many edits land before it runs (step 7 re-reads at run time).
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -32,7 +41,17 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
   [JOBS.ingestReconcile]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 300 },
   [JOBS.purgeTrash]: { policy: "exclusive", retryLimit: 1, expireInSeconds: 3300 },
   [JOBS.uploadsSweep]: { policy: "exclusive", retryLimit: 1, expireInSeconds: 900 },
+  [JOBS.reindex]: {
+    policy: "exclusive",
+    retryLimit: 3,
+    retryDelay: 15,
+    retryBackoff: true,
+    expireInSeconds: 300,
+  },
 });
+
+/** Handlers per worker process for `photo.reindex` (docs/plans/step-5.md 2.5). */
+export const REINDEX_CONCURRENCY = 4;
 
 export const SCHEDULES: ReadonlyArray<readonly [JobName, string]> = Object.freeze([
   [JOBS.ingestReconcile, "*/5 * * * *"],
@@ -58,6 +77,26 @@ export async function sendIngest(
 ): Promise<string | null> {
   const data = ingestJobSchema.parse(job);
   return boss.send(JOBS.ingest, data, ingestSendOptions(data.photoId));
+}
+
+/** Same options the API sends with (apps/api/src/plugins/jobs.ts `enqueueReindex`). */
+export function reindexSendOptions(photoId: string): SendOptions {
+  return {
+    singletonKey: photoId,
+    retryLimit: 3,
+    retryDelay: 15,
+    retryBackoff: true,
+    expireInSeconds: 300,
+  };
+}
+
+/** Validate and enqueue one `photo.reindex` job. Resolves null when one is already queued. */
+export async function sendReindex(
+  boss: Pick<PgBoss, "send">,
+  job: ReindexJob,
+): Promise<string | null> {
+  const data = reindexJobSchema.parse(job);
+  return boss.send(JOBS.reindex, data, reindexSendOptions(data.photoId));
 }
 
 export interface QueueDeps {
@@ -167,4 +206,12 @@ export async function startWorkers(
   await boss.work(JOBS.uploadsSweep, { pollingIntervalSeconds: 10 }, async () => {
     await sweepUploads(deps.sweep);
   });
+  // Step 5: validates and completes (no DB/network call). Step 7 fills in the body.
+  await boss.work(
+    JOBS.reindex,
+    { localConcurrency: REINDEX_CONCURRENCY, batchSize: 1, pollingIntervalSeconds: 2 },
+    async (jobs) => {
+      for (const job of jobs) await handleReindexJob({ log: deps.log }, job);
+    },
+  );
 }

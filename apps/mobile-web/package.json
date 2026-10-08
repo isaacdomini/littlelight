@@ -21,6 +21,8 @@
     "react-dom": "19.3.0",
     "react-router": "6.30.6",
     "react-router-dom": "6.30.6",
+    "react-virtuoso": "4.18.16",
+    "swiper": "14.3.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

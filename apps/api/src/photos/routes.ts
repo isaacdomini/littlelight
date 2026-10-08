@@ -3,28 +3,50 @@ import {
   FREE_TIER_PHOTO_LIMIT,
   idParamsSchema,
   originalUrlResponseSchema,
+  type Photo,
+  type PhotoUrlSet,
+  photoDetailsPatchSchema,
   photoIdParamsSchema,
   photoSchema,
   photoSummarySchema,
+  photosBatchDetailsRequestSchema,
+  photosBatchDetailsResponseSchema,
   photosListQuerySchema,
   photosListResponseSchema,
+  photosSummaryQuerySchema,
+  photosSummaryResponseSchema,
+  photoUrlsRequestSchema,
+  photoUrlsResponseSchema,
 } from "@littlelight/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit, requireAuth, requireConsent, type Tx, withClaims } from "../auth";
 import { ApiError, forbidden, freeTierLimit, isPgError, notFound } from "../lib/errors";
+import { photoMeasurements } from "../measurements/queries";
+import { enqueueReindexAll } from "../plugins/jobs";
+import { objectExists } from "../storage/multipart";
+import type { UrlSigner } from "../storage/sign";
 import {
+  assertMilestoneUsable,
   babyAccess,
+  batchDetailsSql,
   countLivePhotos,
   countPending,
   decodeCursor,
-  encodeCursor,
+  detailsUpsertSql,
+  groupCounts,
   listPhotoRows,
+  PHOTO_SUMMARY_EXTRA_COLUMNS,
   type PhotoSummaryRow,
+  pageCursors,
   photoDetails,
+  photoEditable,
   photoExif,
+  photoUrlRows,
   photoWithRole,
   signDerivative,
+  signPhotoUrls,
+  toPhotoGroups,
   toPhotoSummary,
   visibleToCaller,
 } from "./queries";
@@ -38,6 +60,13 @@ import {
 // API adds on top of RLS: non-admins never see trashed photos (D12) and restore is admin-only.
 // Signed URLs are thumb/display only (`signDerivative`), TTL <= 1 h; originals only through
 // `GET /photos/:id/original` for admins. Nothing here logs URLs, notes or EXIF values.
+//
+// Step 5 (docs/plans/step-5.md 2.4, 2.4a, 2.5; PRD FR-3, FR-8): bidirectional keyset paging and
+// the milestone filter, the age-group summary with jump cursors, batch URL refresh, and
+// parent-details editing for one photo or a batch. Details writes run under the caller's claims
+// (`photo_details` policies = `photo_editable`: admins, or the uploader of a live pending photo);
+// people, notes and location labels are never logged or audited (audit rows carry ids/counts).
+// `photo.reindex` is sent after commit, outside `runAs`, through `app.jobs`.
 
 const photoNotFound = () => notFound("That photo doesn't exist or you don't have access to it");
 const babyNotFound = () => notFound("That album doesn't exist or you don't have access to it");
@@ -61,7 +90,61 @@ const RETURNING_SUMMARY = `
             p.width, p.height, p.mime, p.is_sensitive, p.duplicate_of_photo_id, p.uploaded_by,
             p.created_at, p.deleted_at,
             EXISTS (SELECT 1 FROM public.photo_derivatives t
-                     WHERE t.photo_id = p.id AND t.kind = 'thumb') AS has_thumb`;
+                     WHERE t.photo_id = p.id AND t.kind = 'thumb') AS has_thumb,
+            ${PHOTO_SUMMARY_EXTRA_COLUMNS}`;
+
+/** Everything `GET /photos/:id` returns, read in one claims transaction (signing happens after). */
+interface LoadedPhoto {
+  photo: NonNullable<Awaited<ReturnType<typeof photoWithRole>>>;
+  exif: Photo["exif"];
+  details: Photo["details"];
+  measurements: Photo["measurements"];
+  canEdit: boolean;
+}
+
+/** Load a photo the caller may see, or throw 404. */
+async function loadPhoto(client: Tx, uid: string, id: string): Promise<LoadedPhoto> {
+  const photo = await photoWithRole(client, uid, id);
+  if (!visibleToCaller(photo)) throw photoNotFound();
+  const exif = await photoExif(client, id);
+  const details = await photoDetails(client, id);
+  const measurements = await photoMeasurements(client, id);
+  const canEdit = await photoEditable(client, id);
+  return { photo, exif, details, measurements, canEdit };
+}
+
+/** `photoSchema` body: sign thumb + display after the transaction. */
+async function toPhotoResponse(signer: UrlSigner, loaded: LoadedPhoto): Promise<Photo> {
+  const { photo } = loaded;
+  const [summary, display] = await Promise.all([
+    toPhotoSummary(signer, photo),
+    photo.has_display ? signDerivative(signer, photo.baby_id, photo.id, "display") : null,
+  ]);
+  return {
+    ...summary,
+    // Both URLs were signed just now with the same TTL; report the earlier expiry.
+    urlExpiresAt: summary.urlExpiresAt ?? display?.expiresAt.toISOString() ?? null,
+    displayUrl: display?.url ?? null,
+    exif: loaded.exif,
+    details: loaded.details,
+    measurements: loaded.measurements,
+    canEdit: loaded.canEdit,
+  };
+}
+
+/** 403 for a visible photo whose details the caller may not edit (RLS refused the write). */
+function detailsForbidden(photo: { role: string | null; deleted_at: Date | null }): ApiError {
+  if (photo.role === "admin") {
+    return forbidden(
+      photo.deleted_at
+        ? "Restore this photo from the trash before editing its details"
+        : "This photo's details can't be edited",
+    );
+  }
+  return forbidden(
+    "You can only edit details of your own photos that are still waiting for approval",
+  );
+}
 
 export function photosRoutes(app: FastifyInstance): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -77,22 +160,82 @@ export function photosRoutes(app: FastifyInstance): void {
     preHandler: requireAuth,
     handler: async (request) => {
       const { id: babyId } = request.params;
-      const { view, limit } = request.query;
+      const { view, limit, dir, milestoneId } = request.query;
       const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null;
       const page = await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
         const access = await babyAccess(client, ctx.uid, babyId);
         if (!access) throw babyNotFound();
         if (view === "trash" && access.role !== "admin") throw adminOnly();
-        const list = await listPhotoRows(client, { babyId, view, cursor, limit });
+        const list = await listPhotoRows(client, {
+          babyId,
+          view,
+          cursor,
+          limit,
+          dir,
+          milestoneId: milestoneId ?? null,
+        });
         const pendingCount = await countPending(client, babyId);
         return { ...list, pendingCount };
       });
       return {
         photos: await Promise.all(page.rows.map((row) => toPhotoSummary(app.signer, row))),
-        nextCursor: page.next ? encodeCursor(page.next) : null,
+        ...pageCursors(page, dir, cursor !== null),
         pendingCount: page.pendingCount,
       };
+    },
+  });
+
+  r.route({
+    method: "GET",
+    url: "/babies/:id/photos/summary",
+    schema: {
+      params: idParamsSchema,
+      querystring: photosSummaryQuerySchema,
+      response: { 200: photosSummaryResponseSchema },
+    },
+    preHandler: requireAuth,
+    handler: async (request) => {
+      const { id: babyId } = request.params;
+      const { view } = request.query;
+      const rows = await withClaims(request, async (client, ctx) => {
+        await requireConsent(client, ctx);
+        const access = await babyAccess(client, ctx.uid, babyId);
+        if (!access) throw babyNotFound();
+        if (view === "trash" && access.role !== "admin") throw adminOnly();
+        return groupCounts(client, babyId, view);
+      });
+      return toPhotoGroups(rows);
+    },
+  });
+
+  r.route({
+    method: "POST",
+    url: "/babies/:id/photos/urls",
+    schema: {
+      params: idParamsSchema,
+      body: photoUrlsRequestSchema,
+      response: { 200: photoUrlsResponseSchema },
+    },
+    preHandler: requireAuth,
+    handler: async (request) => {
+      const { id: babyId } = request.params;
+      const ids = [...new Set(request.body.photoIds.map((x) => x.toLowerCase()))];
+      const rows = await withClaims(request, async (client, ctx) => {
+        await requireConsent(client, ctx);
+        const access = await babyAccess(client, ctx.uid, babyId);
+        if (!access) throw babyNotFound();
+        const found = await photoUrlRows(client, babyId, ids);
+        // Same narrowing as everywhere: non-admins never see trashed or failed photos (D12).
+        return found.filter((r) => visibleToCaller({ ...r, role: access.role }));
+      });
+      const urls: Record<string, PhotoUrlSet> = {};
+      const signed = await Promise.all(rows.map((r) => signPhotoUrls(app.signer, r)));
+      rows.forEach((r, i) => {
+        const set = signed[i];
+        if (set) urls[r.id] = set;
+      });
+      return { urls };
     },
   });
 
@@ -105,26 +248,95 @@ export function photosRoutes(app: FastifyInstance): void {
       const { id } = request.params;
       const loaded = await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
-        const photo = await photoWithRole(client, ctx.uid, id);
-        if (!visibleToCaller(photo)) {
-          throw photoNotFound();
-        }
-        const [exif, details] = [await photoExif(client, id), await photoDetails(client, id)];
-        return { photo, exif, details };
+        return loadPhoto(client, ctx.uid, id);
       });
-      const { photo } = loaded;
-      const [summary, display] = await Promise.all([
-        toPhotoSummary(app.signer, photo),
-        photo.has_display ? signDerivative(app.signer, photo.baby_id, photo.id, "display") : null,
-      ]);
-      return {
-        ...summary,
-        // Both URLs were signed just now with the same TTL; report the earlier expiry.
-        urlExpiresAt: summary.urlExpiresAt ?? display?.expiresAt.toISOString() ?? null,
-        displayUrl: display?.url ?? null,
-        exif: loaded.exif,
-        details: loaded.details,
-      };
+      return toPhotoResponse(app.signer, loaded);
+    },
+  });
+
+  r.route({
+    method: "PATCH",
+    url: "/photos/:id/details",
+    schema: {
+      params: photoIdParamsSchema,
+      body: photoDetailsPatchSchema,
+      response: { 200: photoSchema },
+    },
+    preHandler: requireAuth,
+    handler: async (request) => {
+      const { id } = request.params;
+      const patch = request.body;
+      const loaded = await withClaims(request, async (client, ctx) => {
+        await requireConsent(client, ctx);
+        const photo = await photoWithRole(client, ctx.uid, id);
+        if (!visibleToCaller(photo)) throw photoNotFound();
+        if (patch.milestoneId)
+          await assertMilestoneUsable(client, patch.milestoneId, photo.baby_id);
+        // RLS decides: the INSERT … ON CONFLICT DO UPDATE is checked against `photo_editable`
+        // (INSERT WITH CHECK and UPDATE USING); a refusal is 42501 and aborts the transaction.
+        const { text, values } = detailsUpsertSql(id, ctx.uid, patch);
+        try {
+          await client.query(text, values);
+        } catch (err) {
+          if (isPgError(err) && err.code === "42501") throw detailsForbidden(photo);
+          throw err;
+        }
+        await audit(client, "photo.details_updated", {
+          babyId: photo.baby_id,
+          actorUserId: ctx.uid,
+          metadata: { photo_id: id },
+        });
+        return loadPhoto(client, ctx.uid, id);
+      });
+      // After commit, outside runAs (step-4 rule).
+      await app.jobs.enqueueReindex({
+        photoId: loaded.photo.id,
+        babyId: loaded.photo.baby_id,
+        reason: "details",
+      });
+      return toPhotoResponse(app.signer, loaded);
+    },
+  });
+
+  r.route({
+    method: "POST",
+    url: "/babies/:id/photos/details",
+    schema: {
+      params: idParamsSchema,
+      body: photosBatchDetailsRequestSchema,
+      response: { 200: photosBatchDetailsResponseSchema },
+    },
+    preHandler: requireAuth,
+    handler: async (request) => {
+      const { id: babyId } = request.params;
+      const body = request.body;
+      const ids = [...new Set(body.photoIds.map((x) => x.toLowerCase()))];
+      const updated = await withClaims(request, async (client, ctx) => {
+        await requireConsent(client, ctx);
+        const access = await babyAccess(client, ctx.uid, babyId);
+        if (!access) throw babyNotFound();
+        if (body.milestoneId) await assertMilestoneUsable(client, body.milestoneId, babyId);
+        // One set-based upsert: only ids that are photos of this baby the caller may edit
+        // (`photo_editable`, the policies' own rule) and whose merged people stay within the cap;
+        // RLS checks every written row again. Everything else is reported as skipped.
+        const { text, values } = batchDetailsSql(babyId, ctx.uid, ids, body);
+        const { rows } = await client.query<{ photo_id: string }>(text, values);
+        const done = rows.map((r) => r.photo_id);
+        if (done.length > 0) {
+          await audit(client, "photos.details_batch_updated", {
+            babyId,
+            actorUserId: ctx.uid,
+            metadata: { count: done.length },
+          });
+        }
+        return done;
+      });
+      const done = new Set(updated);
+      await enqueueReindexAll(
+        app.jobs,
+        updated.map((photoId) => ({ photoId, babyId, reason: "details" as const })),
+      );
+      return { updated: ids.filter((x) => done.has(x)), skipped: ids.filter((x) => !done.has(x)) };
     },
   });
 
@@ -141,6 +353,11 @@ export function photosRoutes(app: FastifyInstance): void {
         if (!visibleToCaller(p)) throw photoNotFound();
         // Originals carry GPS by definition: admins only (PRD "Privacy and child safety").
         if (p.role !== "admin") throw adminOnly();
+        // A row can outlive its object (dev perf seed, a failed or purged upload): answer 404
+        // before signing a URL that would fail, and before auditing a download that can't happen.
+        if (!(await objectExists(app.s3, app.config.S3_BUCKET, p.storage_key_original))) {
+          throw notFound("The original of this photo isn't available");
+        }
         await audit(client, "photo.original_downloaded", {
           babyId: p.baby_id,
           actorUserId: ctx.uid,

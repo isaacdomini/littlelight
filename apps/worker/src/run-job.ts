@@ -1,4 +1,4 @@
-import { ingestJobSchema, JOBS, type JobName } from "@littlelight/shared";
+import { ingestJobSchema, JOBS, type JobName, reindexJobSchema } from "@littlelight/shared";
 import { PgBoss } from "pg-boss";
 import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig } from "./config";
@@ -6,8 +6,9 @@ import { ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
 import { purgeTrash } from "./purge";
-import { sendIngest } from "./queues";
+import { sendIngest, sendReindex } from "./queues";
 import { reconcileIngest } from "./reconcile";
+import { handleReindexJob } from "./reindex";
 import { createStorage } from "./storage";
 import { sweepUploads } from "./uploads-sweep";
 
@@ -17,6 +18,7 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job uploads.sweep
 //   pnpm --filter @littlelight/worker run-job ingest.reconcile
 //   pnpm --filter @littlelight/worker run-job photo.ingest '{"photoId":"…","babyId":"…"}'
+//   pnpm --filter @littlelight/worker run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"details"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
 //
 // In the production image: `node apps/worker/dist/run-job.js <job> [json]`. Uses the worker's
@@ -88,7 +90,9 @@ async function main(argv: string[]): Promise<number> {
       result =
         name === JOBS.ingest
           ? { jobId: await sendIngest(b, ingestJobSchema.parse(payload)) }
-          : { jobId: await b.send(name, {}) };
+          : name === JOBS.reindex
+            ? { jobId: await sendReindex(b, reindexJobSchema.parse(payload)) }
+            : { jobId: await b.send(name, {}) };
     } else {
       switch (name) {
         case JOBS.purgeTrash:
@@ -109,6 +113,12 @@ async function main(argv: string[]): Promise<number> {
             { pool, storage, matcher, dataKey: config.DATA_ENCRYPTION_KEY, log },
             job,
           );
+          break;
+        }
+        case JOBS.reindex: {
+          // Strict parse first so a bad payload is a usage error (exit 1), not a silent drop.
+          const job = reindexJobSchema.parse(payload);
+          result = await handleReindexJob({ log }, { id: "run-job", data: job });
           break;
         }
       }

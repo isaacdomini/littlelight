@@ -238,3 +238,56 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     placeholder keys (10,000-photo seed should create real derivatives).
   - Disk is ~9 GB free; Docker build cache was pruned with the user's OK.
 - **Commit**: step 4: upload and ingest
+
+## Step 5: Timeline and viewer
+
+- **Built**: Migration 12: stored `photos.sort_at` (COALESCE(taken_at, created_at)) with index
+  `(baby_id, sort_at DESC, id DESC) WHERE deleted_at IS NULL` (keyset bound stays in Index Cond under
+  RLS), IMMUTABLE `age_group()` mirroring shared `ageGroupKey`, photos SELECT policy rebuilt on
+  set-returning `member_baby_ids()`/`admin_baby_ids()` (membership evaluated once per statement),
+  milestones `updated_at` + 200-custom cap + preset-name guard, measurements same-baby guard, milestone
+  same-baby guard on photo_details/upload_sessions, and 14 CHECKs on parent-entered text converted to
+  `<table>_shape` triggers so violations never echo row data into the Postgres log. API: timeline list
+  (older/newer keyset, milestone filter, caption/milestone per item), age-group summary with jump
+  cursors, batch signed-URL refresh, photo detail with measurements/canEdit, details PATCH + batch
+  details, milestones CRUD, measurements CRUD with server-side metric normalization, `photo.reindex`
+  job sent after commit (worker handler is a no-op until step 7), clean 404 for missing originals.
+  Worker: reindex queue; `pnpm perf:seed` (10,000 photos over 0–24 months on a free-plan, owner-less
+  "Pixel" baby; 48 rendered base images copied per photo; refuses production/non-local; `--remove`).
+  Web: react-virtuoso GroupedVirtuoso timeline with sticky age headers, scrubber, bidirectional
+  loading, select mode + batch details, Swiper viewer (zoom/virtual/keyboard) via `?photo=`, details
+  panel and optimistic edit form, Milestones tab (cards, upcoming presets, custom CRUD), Growth view
+  (in-house SVG chart + table, no percentiles), MeasurementSheet (lb+oz), phone / tablet 2-pane /
+  desktop 3-pane layouts, Cache-API offline cache of the last 50 opened photos. Shared: age groups and
+  `formatAge` (365 days reads "12 months"), units, new DTOs. Tests: 771 unit, 668 integration
+  (db 346, api 275, worker 47), 21 Playwright e2e incl. `e2e/timeline/edits.spec.ts`, perf spec
+  `pnpm e2e:perf` (phone + desktop); CI seeds the perf baby and runs the perf spec with `PERF_CI=1`.
+- **Gate**: orchestrator ran lint, typecheck (incl. e2e), unit (771), integration (668, none skipped)
+  on fresh pgvector + MinIO, then from a clean copy: smoke passed, `pnpm e2e` 21/21 (edits persist:
+  details, custom milestone, people, location, note, 7 lb 8 oz ↔ 3.40 kg, batch details, milestone
+  rename/delete, contributor blocked), upload gate passed (thumb p95 387 ms), `pnpm perf:seed` then
+  `pnpm e2e:perf` at local thresholds passed: phone jank 0.33 %, p95 frame 16.8 ms, 60 images, API
+  p95 164 ms; desktop jank 4.61 %, p95 frame 16.8 ms, 147 images, API p95 217 ms (host load ~12–15).
+- **Decisions**:
+  - Keyset on a stored generated `sort_at` column (not an expression) because RLS blocks pushing
+    non-leakproof expressions into the index; deep pages 273 ms → 1.4 ms, summary 279 ms → 6 ms.
+  - The photos SELECT policy uses set-returning membership helpers that read `baby_members` (same
+    source as `is_baby_member`/`is_baby_admin`), so the PRD rule "permissions read baby_members, never
+    client claims" still holds.
+  - Desktop jank fix: thumbs no longer hit the Cache API on mount (only on error / opened photos);
+    rows and cells use paint containment.
+  - Perf baby stays free with no owner so it can never reach a model; demo seed keeps placeholder keys.
+  - Growth chart is in-house SVG; offline is a minimal cache (full PWA deferred to step 9).
+  - Smoke script fixed for SIGPIPE under pipefail (`grep -q` on large logs).
+- **Open issues**:
+  - For the final review: `?photo=` deep link after reload shows only that photo (needs an
+    `around=<photoId>` list option); delete/approve/reject invalidate every loaded timeline page;
+    viewer close doesn't restore grid scroll; `formatAge` reads one month ahead of the group header on
+    ~12 single days; a `value_metric` overflow (unreachable via API bounds) maps to 500; two
+    token-hash length CHECKs remain (hash, not parent text); recommend `log_error_verbosity = terse`
+    on the production db; perf API p95 is sensitive to host load.
+  - Docker holds ~1.1 GB of unused volumes from throwaway test containers; removing them needs the
+    user's OK (`docker volume prune -f`).
+  - Still open from earlier steps: production credentials (tunnel config, SMTP, B2, storage keys),
+    Apple/Google IDs, Turnstile, legal text, CSAM provider.
+- **Commit**: step 5: timeline and viewer

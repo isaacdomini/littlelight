@@ -63,7 +63,8 @@ class IngestFailure extends Error {
   }
 }
 
-const CACHE_CONTROL = "private, max-age=3600";
+/** Cache-Control of every derivative object (also used by the perf seed's base images). */
+export const CACHE_CONTROL = "private, max-age=3600";
 
 // --- SQL (exported for unit tests; every statement names its columns) -------------------------
 

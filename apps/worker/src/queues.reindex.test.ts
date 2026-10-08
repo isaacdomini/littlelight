@@ -1,0 +1,102 @@
+import { JOBS, reindexJobSchema } from "@littlelight/shared";
+import { describe, expect, it, vi } from "vitest";
+import {
+  QUEUES,
+  REINDEX_CONCURRENCY,
+  reindexSendOptions,
+  SCHEDULES,
+  sendReindex,
+  startWorkers,
+} from "./queues";
+import { memoryStorage, recordingLog, scriptedPool } from "./testing/stubs";
+
+const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const BABY = "11111111-1111-4111-8111-111111111111";
+const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
+
+describe("five queues (step 5)", () => {
+  it("QUEUES has exactly the five jobs, all exclusive", () => {
+    expect(Object.keys(QUEUES).sort()).toEqual(
+      ["photo.ingest", "ingest.reconcile", "purge.trash", "uploads.sweep", "photo.reindex"].sort(),
+    );
+    for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
+  });
+
+  it("photo.reindex: 3 retries, 15 s delay, backoff, 5 minute expiry, no notify", () => {
+    expect(QUEUES[JOBS.reindex]).toEqual({
+      policy: "exclusive",
+      retryLimit: 3,
+      retryDelay: 15,
+      retryBackoff: true,
+      expireInSeconds: 300,
+    });
+  });
+
+  it("reindex is not scheduled (only the three crons are)", () => {
+    expect(SCHEDULES.map(([n]) => n)).not.toContain(JOBS.reindex);
+    expect(SCHEDULES).toHaveLength(3);
+  });
+
+  it("reindexSendOptions keys the job by photo id with the queue's retry settings", () => {
+    expect(reindexSendOptions(PHOTO)).toEqual({
+      singletonKey: PHOTO,
+      retryLimit: 3,
+      retryDelay: 15,
+      retryBackoff: true,
+      expireInSeconds: 300,
+    });
+  });
+
+  it("sendReindex validates (strict) before sending", async () => {
+    const send = vi.fn(async () => "id");
+    await expect(sendReindex({ send } as never, { photoId: "x" } as never)).rejects.toThrow();
+    await expect(sendReindex({ send } as never, { ...job, note: "x" } as never)).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
+    await sendReindex({ send } as never, job);
+    expect(send).toHaveBeenCalledWith(
+      JOBS.reindex,
+      reindexJobSchema.parse(job),
+      reindexSendOptions(PHOTO),
+    );
+  });
+
+  it("startWorkers registers five handlers; reindex runs at the plan's concurrency without any database call", async () => {
+    const registered: Array<{
+      name: string;
+      options: Record<string, unknown>;
+      handler: (jobs: unknown[]) => Promise<void>;
+    }> = [];
+    const boss = {
+      send: vi.fn(),
+      work: vi.fn(async (name: string, options: Record<string, unknown>, handler: never) => {
+        registered.push({ name, options, handler });
+        return "w";
+      }),
+    };
+    const pool = scriptedPool();
+    const log = recordingLog();
+    await startWorkers(boss as never, {
+      ingest: {
+        pool,
+        storage: memoryStorage(),
+        matcher: { name: "none", check: async () => ({ matched: false }) },
+        dataKey: "k",
+        log,
+      } as never,
+      purge: {} as never,
+      sweep: {} as never,
+      log,
+      ingestConcurrency: 2,
+    });
+    expect(registered.map((r) => r.name).sort()).toEqual(Object.values(JOBS).sort());
+    const reindex = registered.find((r) => r.name === JOBS.reindex);
+    expect(reindex?.options).toMatchObject({ localConcurrency: REINDEX_CONCURRENCY, batchSize: 1 });
+    expect(REINDEX_CONCURRENCY).toBe(4);
+    await reindex?.handler([
+      { id: "1", data: { photoId: PHOTO, babyId: BABY, reason: "details" } },
+      { id: "2", data: { bad: true } },
+    ]);
+    expect(pool.log).toEqual([]);
+    expect(log.lines.filter((l) => l.level === "warn")).toHaveLength(1);
+  });
+});

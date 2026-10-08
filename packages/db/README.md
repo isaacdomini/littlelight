@@ -281,6 +281,120 @@ partitions included, since the worker creates them). `littlelight_api` still has
 any `public` table without `SET LOCAL ROLE`; `boss.send` must therefore run outside the claims
 wrapper.
 
+## Timeline and details (step 5)
+
+Migration `1791800000100_timeline-and-details.sql` (docs/plans/step-5.md 2.3). No new table, no
+policy body changes, no new grant to `viewer` or `pipeline`; RLS stays ENABLE + FORCE everywhere.
+
+**Timeline sort column and index (D2, stored-column variant).** `photos.sort_at timestamptz
+GENERATED ALWAYS AS (COALESCE(taken_at, created_at)) STORED` is the sort key and cursor;
+`photos_baby_id_sort_idx (baby_id, sort_at DESC, id DESC) WHERE deleted_at IS NULL` replaces the
+step-2 `(baby_id, taken_at DESC)` index. Why a stored column rather than an expression index:
+under row-level security the planner only pushes a keyset bound into the index when every
+operator in it is leakproof; `COALESCE(...)` is not, so with an expression index the bound stayed
+in the post-RLS filter and page N read N × 200 rows (page 49 as `authenticated`: 273 ms vs 0.3 ms
+as superuser). With plain columns the row comparison is a btree `Index Cond` for every role.
+Contract with the API: `ORDER BY p.sort_at DESC, p.id DESC`, keyset `(p.sort_at, p.id) < ($2,
+$3)` for older pages and `> … ORDER BY ASC` for newer (measured on 10k rows as `authenticated`:
+deep page 1.4 ms, newer 0.4 ms). `sort_at` is readable by `authenticated`, `pipeline` (table-level
+SELECT) and `viewer` (column grant, like `taken_at`); it cannot be inserted or updated. The trash
+view (`deleted_at IS NOT NULL`) is outside the partial index on purpose (few rows).
+`photos_baby_id_age_days_idx (baby_id, age_days) WHERE deleted_at IS NULL` serves the group summary.
+
+**Membership once per statement (`photos_authenticated_select`).** The step-2/4 policy called
+`is_baby_admin(baby_id)` / `is_baby_member(baby_id)` (SECURITY DEFINER SQL functions, one
+`baby_members` lookup each) once per candidate row, which made a 10k-row summary `GROUP BY` or a
+deep page cost ~270 ms in policy calls alone. Step 5 adds `admin_baby_ids()` / `member_baby_ids()`
+(`RETURNS SETOF uuid`, STABLE, SECURITY DEFINER, same `baby_members` read and `auth_uid()` source;
+`authenticated`/`service_role` only) and rewrites only the SELECT policy as
+`baby_id IN (SELECT public.admin_baby_ids()) OR (baby_id IN (SELECT public.member_baby_ids()) AND
+((approval = 'approved' AND deleted_at IS NULL) OR uploaded_by = (SELECT public.auth_uid())))`,
+still behind `quarantined_at IS NULL`. The uncorrelated sub-queries become hashed SubPlans /
+an InitPlan evaluated once per statement (summary: 279 ms → 6 ms on 10k rows). Semantics are
+identical: admins see everything of their babies (trash and approval queue included),
+contributors see the approved live album plus their own uploads in any state, strangers see
+nothing, a quarantined row exists for nobody. INSERT/UPDATE policies, child-table policies
+(`photo_visible`) and every viewer/pipeline policy still use `is_baby_member` / `is_baby_admin`
+unchanged. The down migration restores the step-4 policy body verbatim and drops the two helpers.
+
+**`age_group(age_days integer) RETURNS text`** is the SQL twin of `@littlelight/shared`
+`ageGroupKey` and must stay identical to it (a test compares the two over `-10..2000`):
+`NULL` ⇒ `unknown`, `< 0` ⇒ `pre`, `0..83` ⇒ `w1..w12` (`floor(d/7)+1`), `84..729` ⇒ `m3..m24`
+(`floor(d/30.4375)+1`), `≥ 730` ⇒ `y2..` (`floor(d/365)`). IMMUTABLE, SECURITY INVOKER, executable
+by `authenticated`, `viewer`, `pipeline`, `service_role`. Group ordering is the client's job
+(`ageGroupSortValue`); SQL only labels.
+
+**Milestones.** Presets (`baby_id IS NULL`, the 12 fixed ids) are readable by every member and
+viewer and can never be updated or deleted by any user role (the step-2 UPDATE/DELETE policies
+require `baby_id IS NOT NULL AND is_baby_admin(baby_id)`; `authenticated` has no UPDATE grant on
+`baby_id`, so a custom milestone cannot become a preset either). Custom milestones are admin-only
+for INSERT/UPDATE/DELETE; contributors see them, nothing more. New: `updated_at` (+
+`set_updated_at` trigger; the `UPDATE` grant is now `name, category, sort_order, updated_at`),
+`milestones_cap` (BEFORE INSERT, SECURITY DEFINER, locks the baby row): at most **200** custom
+milestones per baby (`check_violation` `milestone limit reached`;
+`MAX_CUSTOM_MILESTONES_PER_BABY`), and `milestones_name_guard` (BEFORE INSERT OR UPDATE OF
+`name`): a custom milestone may not take a preset's name, case-insensitively (plan D7). The
+guard raises **`unique_violation` (23505) on `milestones_baby_id_lower_name_key`**, the same
+SQLSTATE and constraint name as a duplicate custom name, so the API's one 409 mapping covers
+both. Deleting a custom milestone nulls `photo_details.milestone_id` (existing FK); the photos
+keep their other details. Index `photo_details_milestone_id_photo_id_idx (milestone_id,
+photo_id) WHERE milestone_id IS NOT NULL` (replaces `photo_details_milestone_id_idx`) serves
+the milestone list's counts and cover photos.
+
+**Photo details.** Edits stay governed by `photo_editable` (an admin of the baby, or the uploader
+while the photo is pending; never a trashed or quarantined photo). Shape limits: `note` ≤ 2000,
+`people` ≤ 20 entries, `location_label` ≤ 120 characters, and `milestone_id` must be NULL, a
+preset or a milestone of the photo's own baby (`photo_details.milestone_id must belong to the
+same baby`), all enforced by the SECURITY DEFINER trigger `photo_details_shape` (see "Shape
+triggers" below); `upload_sessions_shape` applies the same milestone rule to batch details. The
+API trims and caps each chip (60 chars) before the row is built.
+
+**Measurements.** Writes stay admin-only; members read; `viewer` has no grant. New trigger
+`measurements_photo_same_baby` (BEFORE INSERT OR UPDATE OF `photo_id, baby_id`, SECURITY
+DEFINER): `photo_id` is NULL or a live (not trashed, not quarantined) photo of the measurement's
+own `baby_id` (`check_violation` `measurement photo must belong to the same baby`). Shape trigger
+`measurements_shape`: `note` ≤ 2000, `value_metric` and `value_entered` > 0, `value_metric` ≤
+200000 (200 kg / 200 m, a sanity bound; the real input bounds are `MEASUREMENT_LIMITS` in
+`@littlelight/shared`, validated by the API through `toMetric`). Index `measurements_photo_id_idx
+(photo_id) WHERE photo_id IS NOT NULL` for the photo detail's linked measurements.
+
+**Shape triggers instead of CHECK constraints on parent-entered text.** When a CHECK constraint
+fails, Postgres adds `DETAIL: Failing row contains (...)` — the whole row — to the error, and the
+server log records it. Postgres omits that DETAIL when row-level security is active for the
+user (`ExecBuildSlotValueDescription`), so the app roles (`authenticated`, `viewer`,
+`pipeline`; every table is FORCE RLS) were never exposed; connections that bypass RLS are: the
+superuser (seed, migrations, operator sessions) and `service_role` (BYPASSRLS). To close that
+path, every non-enum CHECK on a table holding parent-entered text is a BEFORE INSERT OR UPDATE
+trigger that raises `check_violation` (23514, the SQLSTATE a CHECK raises) with a fixed message
+naming no value. Enum CHECKs (`col IN (...)`) stay: their values are API-chosen literals that the
+generated row types depend on, and the API validates them first. Converted step-2/4 constraints
+(the down migration restores them verbatim): `photo_details_note_check`,
+`measurements_note_check`, `measurements_value_metric_check`, `measurements_value_entered_check`,
+`milestones_name_check`, `babies_name_check`, `babies_birth_weight_g_check`,
+`babies_birth_length_mm_check`, `upload_sessions_note_check`,
+`upload_sessions_location_label_check`, `share_links_name_check`, `chat_threads_title_check`,
+`invites_email_check`, `photo_ai_overrides_field_path_check`. Triggers: `photo_details_shape`,
+`measurements_shape`, `milestones_name_guard` (length + preset rule), `babies_shape`,
+`upload_sessions_shape` (also `people` ≤ 20, new), `share_links_shape`, `chat_threads_shape`,
+`invites_shape`, `photo_ai_overrides_shape`. Not converted (no parent text in the row, or
+enum/hash checks): `audit_log_event_check`, `upload_files_client_id_check`, every `*_token_hash`
+/ `sha256` octet-length check, every `IN (...)` check. The other half of the rule lives in the
+API and worker: always pass values as bind parameters (`log_min_error_statement` logs the
+statement text, and an inlined literal would appear there; parameters are not logged while
+`log_parameter_max_length_on_error = 0`, the default).
+
+**Reindex hook (what it is and is not).** The API sends a `photo.reindex` job after committing any
+details, milestone or measurement write (step 5 handler: no-op; step 7: embed). There is no
+`search_dirty` column: `photo_details.updated_at`, `measurements.updated_at` and
+`milestones.updated_at` are the durable "stale" signal that step 7's reconcile compares with
+`photo_search.updated_at` (plan D5). pg-boss itself needs no DDL here.
+
+**Error mapping for the API** (`apps/api/src/lib/errors.ts`): `milestone limit reached` ⇒ 409;
+`measurement photo must belong to the same baby` ⇒ 409; 23505 on milestones ⇒ 409 "A milestone
+with that name already exists" (covers the preset clash); any other 23514 from a shape trigger
+(`<table>.<column> …` messages) ⇒ 400 `validation_failed` (the API's zod limits normally stop
+these first).
+
 ## Environment
 
 | Variable | Used by | Notes |
@@ -334,6 +448,13 @@ and sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending f
 3 shared photos; 3 measurements; `photo_search` rows for the 9 live approved photos; one audit row.
 Storage keys are placeholders; no image bytes exist.
 
+A separate, dev-only **performance seed** (`pnpm perf:seed`, lives in
+`apps/worker/src/tools/perf-seed.ts`, docs/plans/step-5.md 2.8) adds a second baby
+(`…-000000000900` "Pixel", free plan, no plan owner) with 10,000 ingested photos, real thumb/display
+derivatives in MinIO, milestones, details and measurements, for the step-5 scroll gate. It runs on
+the host with the superuser URL and the MinIO root key, never in a container; `--remove` deletes
+it. The demo seed does not know about it.
+
 ## Writing a migration
 
 - Keep the two markers (node-pg-migrate also treats any comment line matching
@@ -345,6 +466,9 @@ Storage keys are placeholders; no image bytes exist.
   and a negative test (non-member reads 0 rows) in `packages/db/*.integration.test.ts`.
 - SECURITY DEFINER functions: `SET search_path = pg_catalog, public`, no dynamic SQL, read only
   what they must; `REVOKE EXECUTE … FROM PUBLIC` then grant to the roles that need them.
+- No CHECK constraint other than `col IN (...)` on a table that holds parent-entered text (notes,
+  people, labels, names, titles, chat, invitee emails): write a `<table>_shape` BEFORE INSERT OR
+  UPDATE trigger raising `check_violation` with a fixed message instead (see "Shape triggers").
 - Migrations run in one transaction; avoid statements that cannot (`CREATE INDEX CONCURRENTLY`).
 
 ## Local verification against a throwaway Postgres
@@ -398,3 +522,4 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `littlelight_worker` | revert |
 | `1791600000100_auth-sessions-and-plan.sql` | guard (`auth.sessions`); session functions `auth_session_info`, `list_user_sessions`, `delete_user_session`, `count_user_sessions` (SECURITY DEFINER, `authenticated` only, no grants on `auth.*`); `baby_members.removal_requested_by/_at` (service_role-written); `babies_plan_follows_owner` + `baby_members_release_plan` triggers | drop triggers, functions, columns |
 | `1791700000100_uploads-and-ingest.sql` | `photos.status` gains `duplicate`, `photos.quarantined_at` (pipeline-only UPDATE), `quarantined_at IS NULL` on the user SELECT/UPDATE policies and in `photo_editable` / `babies_avatar_guard`, `photos_pipeline_delete` = trash > 30 d and not quarantined OR `status = 'duplicate'`; `free_tier_photo_count` helper + `photos_free_tier_cap` no longer counts failed/duplicate/quarantined rows; `baby_has_quarantined_photos` helper + `babies_pipeline_delete` refuses a baby holding a quarantined photo; `upload_sessions`, `upload_files` (+ `upload_session_visible`, `upload_files_session_owner` trigger, RLS, column grants); `home_place_label` (×2, pipeline/service_role) | drop functions, trigger, tables; restore `babies_pipeline_delete` and the step-2 cap trigger body, drop the two helpers; restore the four photos policies and two functions; drop column; `DELETE … WHERE status = 'duplicate'` then restore the old CHECK |
+| `1791800000100_timeline-and-details.sql` | `photos_baby_id_sort_idx` (replaces `photos_baby_id_taken_at_idx`) + `photos_baby_id_age_days_idx`; `age_group(integer)` (IMMUTABLE; authenticated/viewer/pipeline/service_role); `milestones.updated_at` + trigger, `UPDATE (updated_at)` grant, `milestones_cap` (200 custom per baby), `milestones_name_guard` (1..80 chars, no preset names ⇒ 23505); `photo_details_milestone_id_photo_id_idx` (replaces `photo_details_milestone_id_idx`); `measurements_photo_same_baby` trigger, `measurements_photo_id_idx`; 14 CHECK constraints on parent-entered text dropped and re-stated as shape triggers (`photo_details_shape`, `measurements_shape`, `babies_shape`, `upload_sessions_shape`, `share_links_shape`, `chat_threads_shape`, `invites_shape`, `photo_ai_overrides_shape`; see "Shape triggers") | drop the new indexes/triggers/functions/column, recreate the two step-2 indexes and every dropped CHECK verbatim |

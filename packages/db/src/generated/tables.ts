@@ -244,6 +244,7 @@ export interface MilestonesRow {
   sort_order: number;
   created_by: string | null;
   created_at: Date;
+  updated_at: Date;
 }
 
 export interface MilestonesInsert {
@@ -254,6 +255,7 @@ export interface MilestonesInsert {
   sort_order?: number;
   created_by?: string | null;
   created_at?: Date;
+  updated_at?: Date;
 }
 
 export interface PhotoAiRow {
@@ -429,6 +431,7 @@ export interface PhotosRow {
   updated_at: Date;
   deleted_at: Date | null;
   quarantined_at: Date | null;
+  sort_at: Date;
 }
 
 export interface PhotosInsert {
