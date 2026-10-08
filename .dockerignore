@@ -1,0 +1,21 @@
+# Build context is the repo root (see docs/plans/step-1.md section 2.13).
+**/node_modules
+**/dist
+**/coverage
+**/.vite
+.git
+.github
+.claude
+docs
+e2e
+apps/mobile-web/ios
+apps/mobile-web/android
+# Dev-only mount target for docker/gotrue/templates (never baked into images).
+apps/mobile-web/public/email-templates
+# Env files never enter an image (secrets are injected at runtime by compose).
+.env
+.env.*
+!.env.example
+docker-compose*.yml
+**/.DS_Store
+**/*.tsbuildinfo

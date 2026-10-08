@@ -1,0 +1,35 @@
+# Cloudflare Tunnel ingress for Littlelight (PRD "Routing through Cloudflare Tunnel").
+#
+# Production runs a token-managed (remotely configured) tunnel: docker-compose.yml starts
+# `cloudflared tunnel run` with CLOUDFLARE_TUNNEL_TOKEN, and the public hostnames are set in the
+# Cloudflare dashboard (Zero Trust -> Networks -> Tunnels -> <tunnel> -> Public hostnames).
+# This file is the reference those dashboard entries must match. It is also a working config
+# for a locally-managed tunnel (mount it at /etc/cloudflared/config.yml together with the
+# credentials file and run `tunnel --config /etc/cloudflared/config.yml run`).
+#
+# Dashboard entries:
+#   1. littlelight.tesarsoft.com        -> HTTP  web:80
+#   2. files.littlelight.tesarsoft.com  -> HTTP  storage:9000
+#      Leave "HTTP Host Header" EMPTY: MinIO validates pre-signed URL signatures against the
+#      original Host (files.littlelight.tesarsoft.com). Overriding it breaks every upload/download.
+#   No route for the MinIO console (:9001). If it is ever exposed, put Cloudflare Access in front.
+#
+# Body-size cap: Cloudflare Free/Pro rejects request bodies over 100 MB. Uploads therefore use
+# S3 multipart with parts <= 50 MB (pre-signed per part) straight to files.littlelight...; nginx
+# also caps /api/ bodies at 50 MB.
+
+tunnel: littlelight
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: littlelight.tesarsoft.com
+    service: http://web:80
+    originRequest:
+      connectTimeout: 10s
+  - hostname: files.littlelight.tesarsoft.com
+    service: http://storage:9000
+    originRequest:
+      connectTimeout: 10s
+      # Large part uploads/downloads over slow links.
+      keepAliveTimeout: 90s
+  - service: http_status:404

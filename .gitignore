@@ -1,0 +1,11 @@
+# Env files: only the committed dev defaults and the production template are tracked.
+.env*
+!.env.dev
+!.env.example
+
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+.DS_Store

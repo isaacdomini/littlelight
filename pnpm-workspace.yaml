@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Host Node may be newer than the pinned 22.x (e.g. Node 25); warn on engines, don't fail.
+engineStrict: false
+
+# Only these dependencies may run install scripts (esbuild fetches its native binary).
+allowBuilds:
+  esbuild: true

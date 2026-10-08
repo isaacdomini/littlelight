@@ -1,0 +1,34 @@
+{
+  "name": "littlelight",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.10.1",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "scripts": {
+    "dev": "docker compose -f docker-compose.dev.yml up --build",
+    "dev:down": "docker compose -f docker-compose.dev.yml down",
+    "dev:reset": "docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up --build",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run --project '!db-integration' --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run --project db-integration",
+    "build": "pnpm -r build",
+    "db:migrate": "pnpm --filter @littlelight/db db:migrate",
+    "db:migrate:down": "pnpm --filter @littlelight/db db:migrate:down",
+    "db:seed": "pnpm --filter @littlelight/db db:seed",
+    "db:bootstrap": "pnpm --filter @littlelight/db db:bootstrap",
+    "smoke": "bash e2e/smoke/dev-stack.sh"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "22.20.5",
+    "tsup": "8.5.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}

@@ -1,0 +1,25 @@
+@import "@ionic/react/css/core.css";
+@import "@ionic/react/css/normalize.css";
+@import "@ionic/react/css/structure.css";
+@import "@ionic/react/css/typography.css";
+@import "@ionic/react/css/padding.css";
+@import "@ionic/react/css/flex-utils.css";
+@import "@ionic/react/css/display.css";
+/* Dark mode follows the OS setting. */
+@import "@ionic/react/css/palettes/dark.system.css";
+@import "tailwindcss";
+
+:root {
+  --ion-color-primary: #e8a33d;
+  --ion-color-primary-contrast: #1a1a1a;
+}
+
+/* 44px minimum touch targets on the tab bar (PRD accessibility). */
+ion-tab-button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+ion-tab-bar {
+  min-height: 56px;
+}

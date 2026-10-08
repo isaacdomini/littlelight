@@ -1,0 +1,284 @@
+# Littlelight production stack (on-prem server, reached only through Cloudflare Tunnel; no
+# inbound ports are published).
+#
+#   cp .env.example .env && $EDITOR .env      # fill every value; never commit .env
+#   docker compose up -d --build --wait
+#   docker compose ps
+#   docker compose down                        # keeps db-data, STORAGE_PATH and BACKUP_PATH
+#
+# Host folders (create them first; Compose refuses to start if the variables are unset):
+#   STORAGE_PATH  MinIO data (the photo library), bind-mounted at /data
+#   BACKUP_PATH   nightly pg_dump archives (docker/backup/pg-backup.sh)
+# Off-site copies of both folders: docker/backup/offsite-backup.sh from host cron.
+name: littlelight
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app: &app
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: true
+  logging: *logging
+
+# Node services: non-root image user, no capabilities, read-only root filesystem.
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: littlelight
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d littlelight"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+
+  # One-shot: creates the supabase_auth_admin role + auth schema GoTrue needs, then migrates.
+  migrate:
+    build:
+      context: .
+      dockerfile: packages/db/Dockerfile
+    env_file:
+      - path: .env
+        required: true
+    restart: "no"
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+
+  auth:
+    image: supabase/auth:v2.197.0
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # Explicit environment only (no env_file): GoTrue never sees the superuser DATABASE_URL.
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}@db:5432/littlelight
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_ISSUER: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth
+      GOTRUE_SITE_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}
+      API_EXTERNAL_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth
+      GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:-https://littlelight.tesarsoft.com/**}
+      # Everything reaches GoTrue through cloudflared -> nginx, so rate-limit on the client IP
+      # Cloudflare sets (clients cannot bypass Cloudflare: the server has no open ports).
+      GOTRUE_RATE_LIMIT_HEADER: CF-Connecting-IP
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_MAILER_OTP_EXP: "600"
+      GOTRUE_MAILER_OTP_LENGTH: "6"
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:?Set SMTP_USER in .env}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:?Set SMTP_PASS in .env}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}
+      GOTRUE_SMTP_SENDER_NAME: Littlelight
+      # Served by the web (nginx) container from docker/gotrue/templates; show the 6-digit code.
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://web/email-templates/confirmation.html
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://web/email-templates/magic-link.html
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Littlelight sign-in code
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Littlelight sign-in code
+      # GoTrue resolves these against API_EXTERNAL_URL's origin, dropping /auth; repeat it.
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/verify
+      GOTRUE_MAILER_URLPATHS_MAGIC_LINK: /auth/verify
+      # Off until step 3 supplies real client IDs (set the *_ENABLED flags to "true" in .env then).
+      GOTRUE_EXTERNAL_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
+      GOTRUE_EXTERNAL_APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_APPLE_SECRET: ${APPLE_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth/callback
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth/callback
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 2s
+
+  storage:
+    image: ${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}
+    restart: unless-stopped
+    logging: *logging
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+      MINIO_SERVER_URL: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
+    volumes:
+      - ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 2s
+
+  # One-shot: create the bucket and turn versioning on (idempotent).
+  storage-init:
+    image: ${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}
+    restart: "no"
+    logging: *logging
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+      S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://storage:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" >/dev/null &&
+        mc mb -p "local/$$S3_BUCKET" &&
+        mc version enable "local/$$S3_BUCKET"
+    depends_on:
+      storage:
+        condition: service_healthy
+
+  api:
+    <<: [*app, *hardened]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: prod
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+
+  worker:
+    <<: [*app, *hardened]
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+      target: prod
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "apps/worker/dist/healthcheck.js"]
+      interval: 10s
+      timeout: 10s
+      retries: 2
+      start_period: 60s
+      start_interval: 3s
+
+  # nginx: SPA + /api/ and /auth/ proxies (docker/nginx/default.conf). Needs no app secrets,
+  # so it gets no env_file.
+  web:
+    build:
+      context: .
+      dockerfile: apps/mobile-web/Dockerfile
+      target: prod
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      api:
+        condition: service_started
+      auth:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 2s
+
+  # Public hostnames are configured on the tunnel in the Cloudflare dashboard (token-managed
+  # tunnel); see docker/cloudflared/config.example.yml for the exact ingress they must match.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.0
+    restart: unless-stopped
+    logging: *logging
+    command: tunnel --metrics 127.0.0.1:20241 run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      web:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Nightly pg_dump (custom format) + roles to BACKUP_PATH, kept BACKUP_RETENTION_DAYS (35).
+  # Restore test: docker compose run --rm --no-deps --entrypoint bash backup /scripts/restore-test.sh
+  backup:
+    image: pgvector/pgvector:0.8.7-pg17
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATABASE: littlelight
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${BACKUP_PATH:?Set BACKUP_PATH to a backup folder}:/backups
+      - ./docker/backup:/scripts:ro
+    entrypoint: ["/bin/bash", "/scripts/pg-backup.sh"]
+    healthcheck:
+      # Unhealthy if the newest verified dump is older than 26 hours.
+      test: ["CMD-SHELL", "find /backups -maxdepth 1 -name 'littlelight-*.dump' -mmin -1560 | grep -q ."]
+      interval: 5m
+      timeout: 30s
+      retries: 1
+      start_period: 30m
+      start_interval: 10s
+
+volumes:
+  db-data:

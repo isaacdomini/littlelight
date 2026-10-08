@@ -1,0 +1,278 @@
+# Littlelight local development stack. Zero setup: a fresh clone + Docker is enough.
+#
+#   docker compose -f docker-compose.dev.yml up            (or: pnpm dev)
+#   docker compose -f docker-compose.dev.yml down          (or: pnpm dev:down)
+#   docker compose -f docker-compose.dev.yml down -v       wipe dev-db / dev-s3 (pnpm dev:reset)
+#
+# Config: .env.dev (committed, dev-only defaults) + optional git-ignored .env.local overrides,
+# loaded by the Node services (migrate, api, worker, web). auth, storage and storage-init get
+# explicit environment blocks only (least privilege: GoTrue never sees the superuser
+# DATABASE_URL, MinIO never sees the JWT secret). Values that two sides must agree on live once,
+# in x-dev-shared below, and are injected into both sides, so they can't drift.
+# Data: named volumes only (dev-db, dev-s3); no host folders to create.
+# Ports: the app (8080) and MinIO S3 (9000) listen on all interfaces so a phone on the LAN can
+# reach them; everything else (db, api, auth, MinIO console, Mailpit) is bound to 127.0.0.1.
+name: littlelight-dev
+
+x-dev: &dev
+  env_file:
+    - path: .env.dev
+      required: true
+    - path: .env.local
+      required: false
+
+# Dev-only shared literals (never real secrets). `environment:` beats env_file, so these cannot
+# be overridden from .env.local; change them here and every side follows.
+x-dev-shared:
+  jwt-secret: &dev-jwt-secret dev-only-jwt-secret-at-least-32-characters
+  s3-access-key: &dev-s3-access-key dev
+  s3-secret-key: &dev-s3-secret-key devdevdev
+  s3-bucket: &dev-s3-bucket littlelight-dev
+  # migrate sets this password on supabase_auth_admin; auth logs in with it (URL below).
+  auth-db-password: &dev-auth-db-password dev
+  auth-db-url: &dev-auth-db-url postgres://supabase_auth_admin:dev@db:5432/littlelight
+
+# api and worker: verify GoTrue JWTs and talk to MinIO with the same values auth/storage use.
+x-dev-app-env: &dev-app-env
+  JWT_SECRET: *dev-jwt-secret
+  GOTRUE_JWT_SECRET: *dev-jwt-secret
+  S3_ACCESS_KEY: *dev-s3-access-key
+  S3_SECRET_KEY: *dev-s3-secret-key
+  S3_BUCKET: *dev-s3-bucket
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17
+    environment:
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: littlelight
+    volumes:
+      - dev-db:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      # TCP (-h 127.0.0.1) so the check can't pass against initdb's socket-only temp server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d littlelight"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+
+  # One-shot: GoTrue role/schema bootstrap + migrations + idempotent seed.
+  migrate:
+    <<: *dev
+    build:
+      context: .
+      dockerfile: packages/db/Dockerfile
+    command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
+    restart: "no"
+    environment:
+      AUTH_DB_PASSWORD: *dev-auth-db-password
+    volumes:
+      - ./packages/db/src:/repo/packages/db/src:ro
+      - ./packages/db/migrations:/repo/packages/db/migrations:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  auth:
+    image: supabase/auth:v2.197.0
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: *dev-auth-db-url
+      GOTRUE_JWT_SECRET: *dev-jwt-secret
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_ISSUER: http://localhost:8080/auth
+      GOTRUE_SITE_URL: http://localhost:8080
+      API_EXTERNAL_URL: http://localhost:8080/auth
+      GOTRUE_URI_ALLOW_LIST: http://localhost:8080/**
+      GOTRUE_LOG_LEVEL: info
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      # Email OTP: 6 digits, valid 10 minutes (PRD "Accounts and authentication").
+      GOTRUE_MAILER_OTP_EXP: "600"
+      GOTRUE_MAILER_OTP_LENGTH: "6"
+      # All dev mail goes to Mailpit (UI/API at http://localhost:8025). No SMTP auth in dev.
+      GOTRUE_SMTP_HOST: mail
+      GOTRUE_SMTP_PORT: "1025"
+      GOTRUE_SMTP_ADMIN_EMAIL: noreply@littlelight.local
+      GOTRUE_SMTP_SENDER_NAME: Littlelight
+      # Dev only: no throttling. Production limits are set in step 3.
+      GOTRUE_SMTP_MAX_FREQUENCY: 1s
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: "1000"
+      # Templates show the 6-digit {{ .Token }}; served by the web (Vite) service.
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://web:8080/email-templates/confirmation.html
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://web:8080/email-templates/magic-link.html
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Littlelight sign-in code
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Littlelight sign-in code
+      # GoTrue resolves these against API_EXTERNAL_URL's origin, dropping /auth; repeat it.
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/verify
+      GOTRUE_MAILER_URLPATHS_MAGIC_LINK: /auth/verify
+      # Step 3 enables these with real client IDs.
+      GOTRUE_EXTERNAL_APPLE_ENABLED: "false"
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mail:
+        condition: service_started
+    ports:
+      - "127.0.0.1:9999:9999"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+
+  storage:
+    image: ${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: *dev-s3-access-key
+      MINIO_ROOT_PASSWORD: *dev-s3-secret-key
+    volumes:
+      - dev-s3:/data
+    ports:
+      - "9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      start_interval: 1s
+
+  # One-shot: create the dev bucket (versioning on, same as production).
+  storage-init:
+    image: ${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}
+    restart: "no"
+    environment:
+      S3_ENDPOINT: http://storage:9000
+      S3_ACCESS_KEY: *dev-s3-access-key
+      S3_SECRET_KEY: *dev-s3-secret-key
+      S3_BUCKET: *dev-s3-bucket
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local "$$S3_ENDPOINT" "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" >/dev/null &&
+        mc mb -p "local/$$S3_BUCKET" &&
+        mc version enable "local/$$S3_BUCKET"
+    depends_on:
+      storage:
+        condition: service_healthy
+
+  mail:
+    image: axllent/mailpit:v1.31.4
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_MAX_MESSAGES: "5000"
+    ports:
+      - "127.0.0.1:8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+  api:
+    <<: *dev
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: dev
+    command: ["pnpm", "--filter", "@littlelight/api", "dev"]
+    init: true
+    environment: *dev-app-env
+    volumes:
+      - ./apps/api/src:/repo/apps/api/src
+      - ./packages/shared/src:/repo/packages/shared/src
+      - ./packages/ai/src:/repo/packages/ai/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+
+  worker:
+    <<: *dev
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+      target: dev
+    command: ["pnpm", "--filter", "@littlelight/worker", "dev"]
+    init: true
+    environment: *dev-app-env
+    volumes:
+      - ./apps/worker/src:/repo/apps/worker/src
+      - ./packages/shared/src:/repo/packages/shared/src
+      - ./packages/ai/src:/repo/packages/ai/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # Own heartbeat row fresh within HEARTBEAT_STALE_MS (only advanced while storage is reachable).
+      test: ["CMD", "pnpm", "--silent", "--filter", "@littlelight/worker", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 2
+      start_period: 90s
+      start_interval: 3s
+
+  web:
+    <<: *dev
+    build:
+      context: .
+      dockerfile: apps/mobile-web/Dockerfile
+      target: dev
+    command: ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
+    init: true
+    volumes:
+      - ./apps/mobile-web/src:/repo/apps/mobile-web/src
+      - ./packages/shared/src:/repo/packages/shared/src
+      # GoTrue fetches its email templates from http://web:8080/email-templates/*.
+      - ./docker/gotrue/templates:/repo/apps/mobile-web/public/email-templates:ro
+    depends_on:
+      api:
+        condition: service_started
+      auth:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+
+volumes:
+  dev-db:
+  dev-s3:

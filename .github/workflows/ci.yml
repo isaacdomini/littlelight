@@ -1,0 +1,176 @@
+# Littlelight CI (docs/plans/step-1.md task 1.10; PRD "Build order" step 1: "CI builds every image").
+#
+#   check            install (frozen lockfile), lint, typecheck, unit tests, DB integration tests
+#                    against a pgvector service container, and `docker compose config` for both
+#                    Compose files.
+#   images           builds every production image (api, worker, web, migrate) with buildx + GHA
+#                    cache. Nothing is pushed.
+#   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout and runs
+#                    e2e/smoke/dev-stack.sh (the step-1 acceptance checks).
+#
+# No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Cancel superseded PR runs; let every push to main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI: "true"
+  FORCE_COLOR: "1"
+  DO_NOT_TRACK: "1"
+
+jobs:
+  check:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      db:
+        # Same image as both Compose files.
+        image: pgvector/pgvector:0.8.7-pg17
+        env:
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: littlelight
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d littlelight"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (version from package.json "packageManager")
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: DB integration tests (pgvector service)
+        env:
+          # Dev-only credentials of the throwaway service container above (same as .env.dev).
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight
+          AUTH_DB_PASSWORD: dev
+        run: pnpm test:integration
+
+      - name: Validate Compose files
+        run: |
+          set -euo pipefail
+          docker compose version
+          docker compose -f docker-compose.dev.yml config -q
+          # Production needs a .env and the required bind-mount paths; use the documented
+          # placeholders and throwaway directories (config -q only interpolates, it starts nothing).
+          cp .env.example .env
+          STORAGE_PATH="$RUNNER_TEMP/storage" BACKUP_PATH="$RUNNER_TEMP/backups" \
+            docker compose -f docker-compose.yml config -q
+          rm -f .env
+
+  images:
+    name: Build image (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            file: apps/api/Dockerfile
+            target: prod
+          - image: worker
+            file: apps/worker/Dockerfile
+            target: prod
+          - image: web
+            file: apps/mobile-web/Dockerfile
+            target: prod
+          # Single-purpose image: its final (unnamed) stage is the production image.
+          - image: migrate
+            file: packages/db/Dockerfile
+            target: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # Path context (repo root, filtered by .dockerignore), same as both Compose files.
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          push: false
+          tags: littlelight-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  dev-stack-smoke:
+    name: Dev stack smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node (smoke script uses node -e for JSON)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Zero-setup precondition (no env files to create)
+        run: test ! -e .env && test ! -e .env.local
+
+      # Explicit so build/start failures surface in their own step (SMOKE_SKIP_UP=1 below).
+      - name: Start dev stack
+        run: docker compose -f docker-compose.dev.yml up -d --build --wait --wait-timeout 600
+
+      - name: Smoke test (step-1 acceptance checks)
+        env:
+          SMOKE_SKIP_UP: "1"
+        run: bash e2e/smoke/dev-stack.sh
+
+      - name: Service status and logs
+        if: failure()
+        run: |
+          docker compose -f docker-compose.dev.yml ps -a
+          docker compose -f docker-compose.dev.yml logs --no-color --timestamps
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.dev.yml down -v --remove-orphans
