@@ -1,0 +1,130 @@
+import type { BabyRole } from "@littlelight/shared";
+import type { MailMessage } from "./mailer";
+
+// API email templates (docs/plans/step-3.md 2.7). Plain, branded, no images, no trackers, no
+// remote content. Every interpolated value is HTML-escaped; links are http(s) only. Pair with
+// `Mailer.send({ to, ...content })`.
+
+export type EmailContent = Required<Omit<MailMessage, "to">>;
+
+const HTML_ESCAPES: Readonly<Record<string, string>> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+export function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
+}
+
+/** Strip CR/LF and other control characters from values that land in a subject line. */
+function oneLine(s: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+  return s.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+}
+
+function safeUrl(url: string): string {
+  const u = new URL(url);
+  if (u.protocol !== "https:" && u.protocol !== "http:") {
+    throw new Error("email links must be http(s)");
+  }
+  return u.toString();
+}
+
+function formatUtc(d: Date): string {
+  return `${new Intl.DateTimeFormat("en-US", {
+    dateStyle: "long",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(d)} UTC`;
+}
+
+const ROLE_LABEL: Readonly<Record<BabyRole, string>> = {
+  admin: "a co-admin",
+  contributor: "a contributor",
+};
+
+function layout(title: string, bodyHtml: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head>
+<body style="margin:0;padding:24px;background:#faf7f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#2b2b2b;">
+<div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+<p style="margin:0 0 24px;font-size:20px;font-weight:600;">Littlelight</p>
+${bodyHtml}
+<p style="margin:32px 0 0;font-size:12px;color:#777;">You're receiving this because someone used this address on Littlelight, a private baby photo album.</p>
+</div>
+</body>
+</html>`;
+}
+
+function button(href: string, label: string): string {
+  return `<p style="margin:24px 0;"><a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 20px;background:#3b6e5a;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">${escapeHtml(label)}</a></p>
+<p style="margin:0 0 16px;font-size:13px;color:#555;">Or paste this link into your browser:<br><span style="word-break:break-all;">${escapeHtml(href)}</span></p>`;
+}
+
+export interface InviteEmailInput {
+  babyName: string;
+  inviterName: string;
+  role: BabyRole;
+  /** `${PUBLIC_URL}/invite/${token}`. Contains a bearer token: never log it. */
+  acceptUrl: string;
+  expiresAt: Date;
+}
+
+export function inviteEmail(input: InviteEmailInput): EmailContent {
+  const baby = oneLine(input.babyName);
+  const inviter = oneLine(input.inviterName);
+  const url = safeUrl(input.acceptUrl);
+  const role = ROLE_LABEL[input.role];
+  const expires = formatUtc(input.expiresAt);
+  const subject = `You're invited to ${baby}'s album on Littlelight`;
+  const html = layout(
+    subject,
+    `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(inviter)} invited you to join <strong>${escapeHtml(baby)}</strong>'s album as ${escapeHtml(role)}.</p>
+${button(url, "Accept invite")}
+<p style="margin:0;font-size:14px;color:#555;">This invite expires in 7 days (${escapeHtml(expires)}); accept it by signing in with this email address.</p>`,
+  );
+  const text = `${inviter} invited you to join ${baby}'s album on Littlelight as ${role}.
+
+Accept the invite: ${url}
+
+This invite expires in 7 days (${expires}); accept it by signing in with this email address.
+`;
+  return { template: "invite", subject, html, text };
+}
+
+export interface NewDeviceEmailInput {
+  when: Date;
+  /** `userAgentLabel()` output, e.g. "Safari on iPhone". */
+  deviceLabel: string;
+  /** `CF-IPCountry` code or `null`. */
+  country: string | null;
+  /** `${PUBLIC_URL}/settings/devices`. */
+  devicesUrl: string;
+}
+
+export function newDeviceEmail(input: NewDeviceEmailInput): EmailContent {
+  const device = oneLine(input.deviceLabel);
+  const when = formatUtc(input.when);
+  const where = input.country ? oneLine(input.country) : null;
+  const url = safeUrl(input.devicesUrl);
+  const subject = "New sign-in to your Littlelight account";
+  const details = `${device}, ${when}${where ? `, country ${where}` : ""}`;
+  const html = layout(
+    subject,
+    `<p style="margin:0 0 16px;font-size:16px;">Your account was just signed in on a new device:</p>
+<p style="margin:0 0 16px;font-size:15px;"><strong>${escapeHtml(details)}</strong></p>
+<p style="margin:0 0 8px;font-size:14px;">If this was you, there's nothing to do. If not, sign that device out and check your email account's security.</p>
+${button(url, "Review devices")}`,
+  );
+  const text = `Your Littlelight account was just signed in on a new device:
+
+${details}
+
+If this was you, there's nothing to do. If not, sign that device out: ${url}
+`;
+  return { template: "new_device", subject, html, text };
+}

@@ -1,8 +1,10 @@
 import {
+  authEnvSchema,
   databaseEnvSchema,
   encryptionEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
+  mailEnvSchema,
   s3EnvSchema,
 } from "@littlelight/shared";
 import { z } from "zod";
@@ -12,6 +14,8 @@ import { z } from "zod";
 // (DATABASE_URL, S3 keys, DATA_ENCRYPTION_KEY). From step 2, DATABASE_URL is the
 // `littlelight_api` role (never the superuser); every request-scoped query will run inside
 // `withClaims` (step 3: BEGIN; SET LOCAL ROLE ...; set_config('request.jwt.claims', $1, true)).
+// Step 3 adds auth (`PUBLIC_URL` = JWT issuer base, `AUTH_INTERNAL_URL`, provider flags,
+// Turnstile) and SMTP (`SMTP_*`, `MAIL_FROM`) settings (docs/plans/step-3.md 2.6, 2.8).
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -23,7 +27,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   z.output<typeof s3EnvSchema> &
   z.output<typeof jwtEnvSchema> &
   z.output<typeof encryptionEnvSchema> &
-  z.output<typeof logEnvSchema>;
+  z.output<typeof logEnvSchema> &
+  z.output<typeof authEnvSchema> &
+  z.output<typeof mailEnvSchema>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -59,6 +65,8 @@ export function loadConfig(
     jwtEnvSchema,
     encryptionEnvSchema,
     logEnvSchema,
+    authEnvSchema,
+    mailEnvSchema,
   ];
   const fields: string[] = [];
   const merged: Record<string, unknown> = {};

@@ -39,10 +39,30 @@ const proxy = {
     changeOrigin: true,
     rewrite: (path: string) => path.replace(/^\/api/, ""),
   },
+  // Only GoTrue's OAuth redirect endpoints + health are reachable from browsers; everything
+  // else under /auth is answered 404 (OTP/verify/refresh/logout go through the API).
   "/auth": {
     target: authTarget,
     changeOrigin: true,
     rewrite: (path: string) => path.replace(/^\/auth/, ""),
+    // Returning `false` makes Vite answer 404.
+    bypass: (req: { url?: string; method?: string }) => {
+      const raw = req.url ?? "";
+      let path: string;
+      try {
+        // Normalize (dot segments, "//") before matching; also require the raw path to equal it.
+        path = new URL(`http://x${raw}`).pathname;
+      } catch {
+        return false;
+      }
+      if (raw.split("?")[0] !== path) return false;
+      const method = req.method ?? "GET";
+      const allowed =
+        (path === "/auth/health" && method === "GET") ||
+        (path === "/auth/authorize" && method === "GET") ||
+        (path === "/auth/callback" && (method === "GET" || method === "POST"));
+      return allowed ? undefined : false;
+    },
   },
 };
 

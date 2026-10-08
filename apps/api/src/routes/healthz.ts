@@ -4,8 +4,9 @@ import {
   type HealthzResponse,
   healthzResponseSchema,
 } from "@littlelight/shared";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { z } from "zod";
 
 /** Per-check budget; the compose healthcheck must not hang on an unreachable dependency. */
 export const HEALTH_CHECK_TIMEOUT_MS = 2_000;
@@ -69,11 +70,39 @@ export interface HealthzRouteOptions {
   service: string;
   version: string;
   timeoutMs?: number;
+  /**
+   * `full` (development/test): every caller gets the full body. `loopback` (production): only a
+   * caller on a loopback socket (the container healthcheck, `fetch('http://127.0.0.1:3000/healthz')`)
+   * gets version, uptime and check details; everyone else (via nginx/cloudflared) gets
+   * `{ status }` only (closes step-1 open issue S4: no version or error codes in public).
+   */
+  detail?: "full" | "loopback";
 }
 
-/** `GET /healthz`: 200 when db and storage are reachable, 503 (`degraded`) otherwise. */
+/** What a non-loopback caller sees in production. */
+export const healthzPublicResponseSchema = healthzResponseSchema.pick({ status: true });
+export type HealthzPublicResponse = z.infer<typeof healthzPublicResponseSchema>;
+
+const healthzAnyResponseSchema = z.union([healthzResponseSchema, healthzPublicResponseSchema]);
+
+/**
+ * True when the TCP peer is this host. Uses the raw socket address, never `request.ip`:
+ * with `trustProxy: true` that comes from `X-Forwarded-For`, which any client can set.
+ */
+export function isLoopbackSocket(request: Pick<FastifyRequest, "raw">): boolean {
+  const addr = request.raw.socket?.remoteAddress;
+  if (!addr) return false;
+  const v4 = addr.startsWith("::ffff:") ? addr.slice("::ffff:".length) : addr;
+  return v4 === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4);
+}
+
+/**
+ * `GET /healthz`: 200 when db and storage are reachable, 503 (`degraded`) otherwise. Body detail
+ * per `HealthzRouteOptions.detail`; the status code is the same for every caller.
+ */
 export function healthzRoutes(app: FastifyInstance, opts: HealthzRouteOptions): void {
   const timeoutMs = opts.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
+  const detail = opts.detail ?? "loopback";
 
   app.withTypeProvider<ZodTypeProvider>().route({
     method: "GET",
@@ -81,7 +110,7 @@ export function healthzRoutes(app: FastifyInstance, opts: HealthzRouteOptions): 
     // Polled by the compose healthcheck every few seconds; only log problems.
     logLevel: "warn",
     schema: {
-      response: { 200: healthzResponseSchema, 503: healthzResponseSchema },
+      response: { 200: healthzAnyResponseSchema, 503: healthzAnyResponseSchema },
     },
     handler: async (request, reply) => {
       const [db, storage] = await Promise.all([
@@ -103,6 +132,11 @@ export function healthzRoutes(app: FastifyInstance, opts: HealthzRouteOptions): 
 
       const strip = ({ cause: _cause, ...check }: HealthzCheck & { cause?: unknown }) => check;
       const ok = db.ok && storage.ok;
+      const status = ok ? 200 : 503;
+      if (detail === "loopback" && !isLoopbackSocket(request)) {
+        const body: HealthzPublicResponse = { status: ok ? "ok" : "degraded" };
+        return reply.code(status).send(body);
+      }
       const body: HealthzResponse = {
         status: ok ? "ok" : "degraded",
         service: opts.service,
@@ -110,7 +144,7 @@ export function healthzRoutes(app: FastifyInstance, opts: HealthzRouteOptions): 
         uptimeSec: Math.round(process.uptime()),
         checks: { db: strip(db), storage: strip(storage) },
       };
-      return reply.code(ok ? 200 : 503).send(body);
+      return reply.code(status).send(body);
     },
   });
 }

@@ -16,12 +16,15 @@ const optionalEmail = z.preprocess((v) => (v === "" ? undefined : v), z.email().
 
 /**
  * A signed-in user, as minted by self-hosted GoTrue. Unknown GoTrue claims (`app_metadata`,
- * `session_id`, `amr`, ...) are kept (loose object) so the SQL side sees GoTrue's own claim set.
+ * `amr`, ...) are kept (loose object) so the SQL side sees GoTrue's own claim set.
+ * `session_id` is required (GoTrue always sets it on user tokens): every request checks it
+ * against `auth.sessions` via `auth_session_info()`, so revoked sessions fail immediately.
  */
 export const authenticatedClaimsSchema = z.looseObject({
   sub: z.uuid(),
   role: z.literal("authenticated"),
   email: optionalEmail,
+  session_id: z.uuid(),
   aud: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
   exp: z.number().int().positive(),
   iat: z.number().int().nonnegative().optional(),

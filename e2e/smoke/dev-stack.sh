@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Dev-stack smoke test (docs/plans/step-1.md section 4; step-2 additions: db-init, non-superuser
-# app connections, seeded-family RLS spot checks). Run from anywhere; operates on the repo root.
+# app connections, seeded-family RLS spot checks; step-3 additions: OTP through the API, cookie
+# session, GoTrue not reachable from the browser). Run from anywhere; operates on the repo root.
 #
 #   bash e2e/smoke/dev-stack.sh              bring the stack up (if needed) and check it
 #   SMOKE_TEARDOWN=1 bash e2e/smoke/dev-stack.sh   also `down -v` on exit (pass or fail)
@@ -13,6 +14,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 DC=(docker compose -f docker-compose.dev.yml)
+TMP="$(mktemp -d)"
 BASE="${SMOKE_BASE_URL:-http://localhost:8080}"
 MAIL="${SMOKE_MAILPIT_URL:-http://localhost:8025}"
 API_DIRECT="${SMOKE_API_URL:-http://localhost:3000}"
@@ -22,6 +24,7 @@ fail() { printf 'SMOKE FAIL: %s\n' "$*" >&2; exit 1; }
 
 on_exit() {
   local code=$?
+  rm -rf "$TMP"
   if [ "$code" -ne 0 ]; then
     echo "--- smoke failed (exit $code); recent compose logs ---" >&2
     "${DC[@]}" logs --tail=40 2>&1 >&2 || true
@@ -77,14 +80,27 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
 step "2. web app loads at $BASE"
 curl -fsS "$BASE/" | grep -q '<div id="root">' || fail "$BASE/ did not serve the app shell"
 
-step "3. proxies: /api/healthz and /auth/health"
+step "3. proxies: /api/healthz, /auth/health; GoTrue's other endpoints are not browser-reachable"
 curl -fsS "$BASE/api/healthz" | grep -q '"status":"ok"' || fail "$BASE/api/healthz not ok"
 curl -fsS -o /dev/null "$BASE/auth/health" || fail "$BASE/auth/health not 200"
+# The API is GoTrue's only client for codes, verification and sign-out (docs/plans/step-3.md 2.1):
+# the proxy exposes /auth/health, /auth/authorize and /auth/callback and 404s the rest.
+for path in otp verify token logout signup user admin/users; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/auth/$path" -H 'content-type: application/json' -d '{}')"
+  [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
+done
 
-step "4. OTP email arrives in Mailpit with a 6-digit code"
+step "3a. database: all 10 migrations applied"
+MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
+[ "$MIGS" = "10" ] || fail "expected 10 applied migrations, found $MIGS"
+
+step "4. sign-in code: POST /api/auth/otp is a generic 202; the code arrives in Mailpit"
 EMAIL="smoke-$(date +%s)-$RANDOM@example.com"
-curl -fsS -X POST "$BASE/auth/otp" -H 'content-type: application/json' \
-  -d "{\"email\":\"$EMAIL\",\"create_user\":true}" >/dev/null || fail "POST /auth/otp failed"
+OTP_CODE="$(curl -s -o "$TMP/otp.json" -w '%{http_code}' -X POST "$BASE/api/auth/otp" \
+  -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+  -d "{\"email\":\"$EMAIL\"}")"
+[ "$OTP_CODE" = "202" ] || fail "POST /api/auth/otp answered $OTP_CODE, expected 202"
+grep -q '"ok":true' "$TMP/otp.json" || fail "POST /api/auth/otp body is not {\"ok\":true}: $(cat "$TMP/otp.json")"
 ID=""
 for _ in $(seq 1 30); do
   ID="$(curl -fsS "$MAIL/api/v1/search?query=to:$EMAIL" | json 'j.messages?.[0]?.ID')" || true
@@ -95,7 +111,26 @@ done
 MSG="$(curl -fsS "$MAIL/api/v1/message/$ID")"
 printf '%s' "$MSG" | json '(j.Text||"")+" "+(j.HTML||"")' | grep -Eq '(^|[^0-9])[0-9]{6}([^0-9]|$)' \
   || fail "email body has no 6-digit code"
+CODE="$(printf '%s' "$MSG" | json 'j.HTML' | grep -Eo '>[0-9]{6}<' | head -n1 | tr -d '<>')"
+[ -n "$CODE" ] || fail "no >NNNNNN< code in the email HTML"
 echo "OTP email received"
+
+step "4a. POST /api/auth/verify sets httpOnly session cookies; GET /api/me is 200; no cookie is 401"
+JAR="$TMP/cookies.txt"
+HDRS="$TMP/verify-headers.txt"
+VCODE="$(curl -s -o "$TMP/verify.json" -D "$HDRS" -c "$JAR" -w '%{http_code}' -X POST "$BASE/api/auth/verify" \
+  -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+  -d "{\"email\":\"$EMAIL\",\"code\":\"$CODE\"}")"
+[ "$VCODE" = "200" ] || fail "POST /api/auth/verify answered $VCODE: $(cat "$TMP/verify.json")"
+grep -qi '^set-cookie: ll_access=.*HttpOnly' "$HDRS" || fail "verify did not set an httpOnly ll_access cookie"
+grep -qi '^set-cookie: ll_refresh=.*HttpOnly' "$HDRS" || fail "verify did not set an httpOnly ll_refresh cookie"
+grep -qi 'path=/api/auth' "$HDRS" || fail "ll_refresh cookie is not scoped to /api/auth"
+grep -q 'accessToken\|refreshToken' "$TMP/verify.json" && fail "verify returned tokens in a web response body"
+ME="$(curl -fsS -b "$JAR" "$BASE/api/me")" || fail "GET /api/me with the session cookie failed"
+[ "$(printf '%s' "$ME" | json 'j.user.email')" = "$EMAIL" ] || fail "GET /api/me did not return the signed-in user: $ME"
+NOAUTH="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/me")"
+[ "$NOAUTH" = "401" ] || fail "GET /api/me without a cookie answered $NOAUTH, expected 401"
+echo "signed in as $EMAIL"
 
 step "5. worker heartbeat is fresh with storage_ok"
 HB="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c \

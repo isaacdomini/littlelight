@@ -9,3 +9,7 @@ coverage/
 .vite/
 *.tsbuildinfo
 .DS_Store
+
+# Playwright output
+e2e/report/
+e2e/test-results/

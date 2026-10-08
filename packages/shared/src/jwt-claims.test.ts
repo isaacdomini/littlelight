@@ -10,14 +10,23 @@ const UID = "00000000-0000-4000-8000-000000000001";
 const LINK = "00000000-0000-4000-8000-000000000200";
 const exp = 4_102_444_800;
 
-const authed = { sub: UID, role: "authenticated", email: "a@b.co", aud: "authenticated", exp };
+const SID = "00000000-0000-4000-8000-0000000000aa";
+const authed = {
+  sub: UID,
+  role: "authenticated",
+  email: "a@b.co",
+  aud: "authenticated",
+  exp,
+  session_id: SID,
+};
 const viewer = { role: "viewer", share_link_id: LINK, exp };
 
 describe("authenticatedClaimsSchema", () => {
   it("accepts GoTrue claims and keeps unknown GoTrue keys", () => {
-    const parsed = authenticatedClaimsSchema.parse({ ...authed, session_id: "s", amr: [] });
+    const parsed = authenticatedClaimsSchema.parse({ ...authed, amr: [] });
     expect(parsed.sub).toBe(UID);
-    expect(parsed).toHaveProperty("session_id", "s");
+    expect(parsed).toHaveProperty("session_id", SID);
+    expect(parsed).toHaveProperty("amr");
   });
 
   it("treats an empty-string email as absent", () => {
@@ -31,6 +40,12 @@ describe("authenticatedClaimsSchema", () => {
     expect(authenticatedClaimsSchema.safeParse(noSub).success).toBe(false);
     const { exp: _e, ...noExp } = authed;
     expect(authenticatedClaimsSchema.safeParse(noExp).success).toBe(false);
+  });
+
+  it("requires session_id to be a uuid", () => {
+    const { session_id: _s, ...none } = authed;
+    expect(authenticatedClaimsSchema.safeParse(none).success).toBe(false);
+    expect(authenticatedClaimsSchema.safeParse({ ...authed, session_id: "s" }).success).toBe(false);
   });
 
   it("rejects service_role and anon tokens", () => {

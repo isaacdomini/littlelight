@@ -14,8 +14,14 @@
 # Configuration: .env (from .env.example) is used ONLY for ${VAR} interpolation in this file. No
 # service gets the whole file (no env_file): each one receives exactly the variables listed in
 # its `environment:` block, so e.g. api/worker never see POSTGRES_PASSWORD, the other services'
-# role passwords, SMTP or tunnel credentials. A new app variable must be added to .env.example
-# AND to the x-app-env anchor (or the service's own block) below.
+# role passwords or tunnel credentials. SMTP goes to auth (sign-in codes) and api (invites,
+# new-device alerts) only; the worker gets none, and auth gets no API secrets. A new app
+# variable must be added to .env.example AND to the x-app-env anchor (or the service's own
+# block) below.
+#
+# Auth topology (docs/plans/step-3.md 2.1): browsers reach GoTrue only at /auth/health,
+# /auth/authorize and /auth/callback (nginx 404s the rest); the api calls GoTrue at
+# http://auth:9999 for codes, verify, refresh, sign-out and account deletion.
 #
 # Database roles (docs/plans/step-2.md 2.2) and start order:
 #   db -> db-init   (superuser: creates/converges roles supabase_auth_admin, littlelight_api,
@@ -158,32 +164,61 @@ services:
       GOTRUE_SITE_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}
       API_EXTERNAL_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth
       GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:-https://littlelight.tesarsoft.com/**}
-      # Everything reaches GoTrue through cloudflared -> nginx, so rate-limit on the client IP
-      # Cloudflare sets (clients cannot bypass Cloudflare: the server has no open ports).
+      # Rate-limit on the client IP Cloudflare sets (clients cannot bypass Cloudflare: the server
+      # has no open ports). OAuth redirects arrive via cloudflared -> nginx with the header; the
+      # api, which calls GoTrue directly for everything else, forwards the client's
+      # CF-Connecting-IP, so GoTrue's own per-IP limits (defaults: 30 codes / 30 verifies per
+      # 5 min) see the real client. The PRD's stricter per-email/per-IP limits and Turnstile are
+      # enforced by the api.
       GOTRUE_RATE_LIMIT_HEADER: CF-Connecting-IP
+      # Passwordless only: email codes (+ Apple/Google when enabled). No phone, no anonymous users.
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
       GOTRUE_DISABLE_SIGNUP: "false"
       GOTRUE_MAILER_AUTOCONFIRM: "false"
+      # Email OTP: 6 digits, valid 10 minutes; the magic-link token_hash shares this expiry.
       GOTRUE_MAILER_OTP_EXP: "600"
       GOTRUE_MAILER_OTP_LENGTH: "6"
+      # Sessions (PRD "Sessions and tokens", docs/plans/step-3.md 2.2): access JWT 1 h (above);
+      # refresh tokens rotate on every use and reusing an old one (outside a 10 s grace window for
+      # concurrent tabs) revokes the session family; sessions end after 90 days without a refresh
+      # (native bound; the web cookie's 30-day Max-Age is the shorter web bound); many devices.
+      GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"
+      GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: "10"
+      # Refresh algorithm v2 (supabase/auth v2.197.0 internal/tokens/service.go): new sessions get
+      # HMAC-signed counter tokens, and reusing one more than one step behind the current counter
+      # outside the reuse interval DELETEs the auth.sessions row (so the API's liveness check 401s
+      # the session's access tokens at once). v1 only marked refresh_tokens revoked and left the
+      # session alive. The immediately previous token stays redeemable (GoTrue's "fail-to-save"
+      # tolerance; it re-issues the current token without advancing the counter). Upgrade 100 %
+      # moves any v1 session to v2 on its next refresh.
+      GOTRUE_SECURITY_REFRESH_TOKEN_ALGORITHM_VERSION: "2"
+      GOTRUE_SECURITY_REFRESH_TOKEN_UPGRADE_PERCENTAGE: "100"
+      GOTRUE_SESSIONS_INACTIVITY_TIMEOUT: 2160h
+      GOTRUE_SESSIONS_SINGLE_PER_USER: "false"
       GOTRUE_SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
       GOTRUE_SMTP_USER: ${SMTP_USER:?Set SMTP_USER in .env}
       GOTRUE_SMTP_PASS: ${SMTP_PASS:?Set SMTP_PASS in .env}
-      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}
+      # Same From address as the api's mail (MAIL_FROM, defaulting to SMTP_ADMIN_EMAIL).
+      GOTRUE_SMTP_ADMIN_EMAIL: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}}
       GOTRUE_SMTP_SENDER_NAME: Littlelight
-      # Served by the web (nginx) container from docker/gotrue/templates; show the 6-digit code.
+      # At most one sign-in email per address per 60 s (matches the app's resend cooldown) and a
+      # global backstop of 200 emails per hour; per-email/per-IP limits live in the api.
+      GOTRUE_SMTP_MAX_FREQUENCY: 60s
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: "200"
+      # Served by the web (nginx) container from docker/gotrue/templates: the 6-digit code plus a
+      # web-only fallback link to /signin/callback#token_hash=... No URLPATHS settings: the
+      # templates don't use {{ .ConfirmationURL }} (GoTrue's /verify is not browser-facing).
       GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://web/email-templates/confirmation.html
       GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://web/email-templates/magic-link.html
       GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Littlelight sign-in code
       GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Littlelight sign-in code
-      # GoTrue resolves these against API_EXTERNAL_URL's origin, dropping /auth; repeat it.
-      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/verify
-      GOTRUE_MAILER_URLPATHS_INVITE: /auth/verify
-      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/verify
-      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/verify
-      GOTRUE_MAILER_URLPATHS_MAGIC_LINK: /auth/verify
-      # Off until step 3 supplies real client IDs (set the *_ENABLED flags to "true" in .env then).
+      # Social sign-in: off until the credentials in .env.example exist; then set the *_ENABLED
+      # flag to "true" in .env (the same flag turns the button on in the api, see below).
+      # Verified-email auto-linking is GoTrue's default; unverified provider emails never link.
+      # Register ${PUBLIC_URL}/auth/callback as the redirect / return URL at both providers.
       GOTRUE_EXTERNAL_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
       GOTRUE_EXTERNAL_APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_APPLE_SECRET: ${APPLE_CLIENT_SECRET:-}
@@ -249,9 +284,22 @@ services:
       DATABASE_URL: postgres://littlelight_api:${API_DB_PASSWORD:?Set API_DB_PASSWORD in .env}@db:5432/littlelight
       API_HOST: 0.0.0.0
       API_PORT: "3000"
-      # App emails (invites); one of the two, later steps.
-      POSTMARK_TOKEN: ${POSTMARK_TOKEN:-}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # Auth (docs/plans/step-3.md 2.8). One .env flag per provider feeds GoTrue and the api.
+      AUTH_INTERNAL_URL: http://auth:9999
+      AUTH_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
+      AUTH_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
+      # Cloudflare Turnstile on the sign-in form after 3 code requests per IP per hour; inert
+      # while the secret is empty.
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      # App emails (invites, new-device alerts) over the same SMTP account as GoTrue. The worker
+      # gets none of these.
+      SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:?Set SMTP_USER in .env}
+      SMTP_PASS: ${SMTP_PASS:?Set SMTP_PASS in .env}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      MAIL_FROM: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}}
       # Entitlement webhooks, later steps.
       REVENUECAT_API_KEY: ${REVENUECAT_API_KEY:-}
       REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET:-}

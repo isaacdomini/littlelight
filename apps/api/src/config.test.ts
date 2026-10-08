@@ -13,6 +13,9 @@ const env = {
   JWT_SECRET: SECRET,
   GOTRUE_JWT_SECRET: SECRET,
   DATA_ENCRYPTION_KEY: KEY,
+  PUBLIC_URL: "http://localhost:8080/",
+  SMTP_HOST: "mail",
+  MAIL_FROM: "noreply@littlelight.test",
 };
 
 describe("loadConfig", () => {
@@ -20,6 +23,39 @@ describe("loadConfig", () => {
     const cfg = loadConfig(env);
     expect(cfg.API_PORT).toBe(3000);
     expect(cfg.S3_REGION).toBe("us-east-1");
+  });
+
+  it("applies auth and mail defaults and strips the trailing slash of PUBLIC_URL", () => {
+    const cfg = loadConfig(env);
+    expect(cfg.PUBLIC_URL).toBe("http://localhost:8080");
+    expect(cfg.AUTH_INTERNAL_URL).toBe("http://auth:9999");
+    expect(cfg.AUTH_APPLE_ENABLED).toBe(false);
+    expect(cfg.AUTH_GOOGLE_ENABLED).toBe(false);
+    expect(cfg.SMTP_PORT).toBe(587);
+    expect(cfg.SMTP_SECURE).toBe(false);
+    expect(cfg.TURNSTILE_SECRET_KEY).toBeUndefined();
+  });
+
+  it("parses provider flags and treats empty optional auth vars as unset", () => {
+    const cfg = loadConfig({
+      ...env,
+      AUTH_APPLE_ENABLED: "true",
+      AUTH_GOOGLE_ENABLED: "",
+      TURNSTILE_SECRET_KEY: "",
+      SMTP_PORT: "1025",
+      SMTP_SECURE: "false",
+    });
+    expect(cfg.AUTH_APPLE_ENABLED).toBe(true);
+    expect(cfg.AUTH_GOOGLE_ENABLED).toBe(false);
+    expect(cfg.TURNSTILE_SECRET_KEY).toBeUndefined();
+    expect(cfg.SMTP_PORT).toBe(1025);
+  });
+
+  it("requires PUBLIC_URL, SMTP_HOST and MAIL_FROM", () => {
+    for (const key of ["PUBLIC_URL", "SMTP_HOST", "MAIL_FROM"] as const) {
+      const { [key]: _omit, ...rest } = env;
+      expect(() => loadConfig(rest), key).toThrow(key);
+    }
   });
 
   it("treats empty strings as unset", () => {

@@ -120,3 +120,65 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Still open from step 1: bucket-scoped MinIO key (step 4), public `/api/healthz` detail (step 3),
     MinIO version purge on delete, production credentials (tunnel, SMTP, B2).
 - **Commit**: step 2: database schema, roles, RLS, seed
+
+## Step 3: Auth and onboarding
+
+- **Built**: API fronts GoTrue (browser reaches only `/auth/{health,authorize,callback}`; nginx and
+  Vite both 404 the rest). Email 6-digit OTP primary + magic-link fallback (`/signin/callback#token_hash`),
+  Apple/Google (PKCE + native id-token) implemented behind flags defaulting off. jose HS256 JWT
+  verification; web sessions in httpOnly cookies (`ll_access` Path /api Lax 1 h, `ll_refresh` Path
+  /api/auth Strict 30-day sliding) with `X-Littlelight-Client` CSRF header; native bearer tokens.
+  `runAs` per-transaction identity (SET LOCAL ROLE + claims GUC, RESET ROLE/DISCARD ALL on release,
+  dead clients destroyed); `withClaims` checks the GoTrue session is live on every request, so
+  per-device sign-out / account deletion take effect immediately; `withServiceRole(reason)` used in 3
+  bounded places. Endpoints: OTP/verify/refresh/sign-out/pkce/id-token/config, sessions list + per-device
+  sign-out, me/consent (18+, versions, IP country)/profile, babies CRUD (soft delete, fresh sign-in),
+  invites (256-bit hashed token, 7-day expiry, masked mismatch message, admins_full, 20/day), members
+  (role change, FR-1.5 removal request → removed admin confirms), account deletion (preview, sole-admin
+  block, fresh sign-in, GoTrue hard delete). In-house throttles (5 OTP/h/email, 30/h/IP, 5 verify
+  attempts), Turnstile after 3 attempts (inert without keys), audit events, new-device alert email,
+  invite emails via nodemailer (Mailpit in dev). Migration 10: SECURITY DEFINER functions over
+  `auth.sessions`, removal-request columns, plan reverts to free when the paying admin leaves, is
+  deleted or is demoted. GoTrue: refresh rotation with the v2 algorithm (reuse deletes the session),
+  90-day inactivity. Frontend: sign-up steps 1–8, invite accept, callback, baby switcher, Family tab,
+  settings (devices, delete account), fresh-sign-in gate, i18n, platform/tokenStore seams for step 9.
+  `/api/healthz` returns only `{status}` to non-loopback callers in production (step-1 S4 closed).
+  Tests: 229 unit, 381 integration (db 229 + api 152), 12 Playwright e2e; CI runs api integration with a
+  skip guard, typechecks e2e, and runs smoke + e2e in the dev-stack job.
+- **Gate**: orchestrator ran lint, typecheck (incl. e2e), unit (229), integration (381) on a fresh
+  pgvector DB, then from a clean copy (no `.env`): `e2e/smoke/dev-stack.sh` passed, API restarted,
+  `CI=1 pnpm e2e` 12/12 passed. The PRD check is `e2e/auth/invite.spec.ts`: signs up, creates a baby,
+  invites a co-admin from the onboarding step, invitee accepts with the matching email (both see 2
+  admins); a different email gets "This invite was sent to o***@example.com". Real GitHub CI run still
+  needs a push (user approval).
+- **Decisions**:
+  - No supabase-js; API is GoTrue's only client. New deps: jose 6.2.12, @fastify/cookie 11.1.2,
+    nodemailer 10.0.15, @playwright/test 1.63.0 (newest past pnpm 12's 1-day release-age gate);
+    no @types/nodemailer (bundled types); in-house limiter.
+  - FR-1.5: removing the other admin creates a request the removed admin confirms; admins can't demote
+    each other (only self-demotion), so demote-then-remove can't skip confirmation. Requesting removal,
+    leaving, demotion, baby delete and account delete require a sign-in within 10 minutes.
+  - Paying admin demoted, removed or deleted → baby reverts to free (DB trigger).
+  - Invite accept inserts under `authenticated` (RLS invite branch + consume trigger); only the token
+    lookup uses service_role.
+  - One-letter email local parts mask as `*@domain`.
+  - GoTrue v2 refresh algorithm still accepts the immediately previous refresh token indefinitely
+    (returns the current one; not configurable). Accepted as GoTrue's fail-to-save tolerance; any older
+    token deletes the session.
+  - `MAIL_FROM` must be a bare address (no display name) for now.
+  - Dev: GoTrue's own per-IP limits raised to 1000 so the API's limits are what's tested; tsx watch
+    uses chokidar polling.
+- **Open issues**:
+  - Needs user (not for the gate): Apple (App ID, Services ID, .p8 key), Google (web/iOS/Android
+    client IDs + web secret), redirect URI `https://littlelight.tesarsoft.com/auth/callback`;
+    Turnstile keys; Postmark/Resend SMTP + verified sender; real Terms/Privacy text (placeholders,
+    version 2026-10-08).
+  - API throttles are in-memory (single instance); e2e uses ~19 OTPs/run against the 30/h/IP limit,
+    so CI and local reruns restart the API between smoke and e2e.
+  - For the final review: contributor revoke-invite gives 404 vs resend 403; deletion preview lists
+    albums for contributors; invite resend has no per-invite throttle; no audit event for declining a
+    removal; GoTrue `refresh_token_hmac_key` stored unencrypted unless `GOTRUE_SECURITY_DB_ENCRYPTION_*`
+    is set; `apps/api/src/testing/*` are test helpers outside `*.test.ts` (test-engineer-owned).
+  - Still open from earlier steps: bucket-scoped MinIO key (step 4), MinIO version purge on delete,
+    production credentials (tunnel, B2).
+- **Commit**: step 3: auth and onboarding

@@ -4,7 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 async function fetchApi(): Promise<"ok" | "degraded"> {
   const res = await fetch("/api/healthz");
   // 503 still carries a valid body with status "degraded".
-  return healthzResponseSchema.parse(await res.json()).status;
+  // Production returns only `{status}` to non-loopback callers; dev returns the full body.
+  const body: unknown = await res.json();
+  const full = healthzResponseSchema.safeParse(body);
+  if (full.success) return full.data.status;
+  return healthzResponseSchema.pick({ status: true }).parse(body).status;
 }
 
 async function fetchAuth(): Promise<"ok" | "degraded"> {

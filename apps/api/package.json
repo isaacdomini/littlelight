@@ -8,14 +8,18 @@
     "build": "tsup",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1147.0",
+    "@fastify/cookie": "11.1.2",
     "@littlelight/ai": "workspace:*",
+    "@littlelight/db": "workspace:*",
     "@littlelight/shared": "workspace:*",
     "fastify": "5.12.5",
     "fastify-type-provider-zod": "7.0.0",
+    "jose": "6.2.12",
+    "nodemailer": "10.0.15",
     "pg": "8.23.1",
     "zod": "4.6.5"
   },

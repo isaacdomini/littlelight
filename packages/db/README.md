@@ -41,7 +41,8 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
-Only `postgres` can read `pgmigrations` or `auth.*`. Every table in `public` has
+Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" for the one, narrow
+door into `auth.sessions`). Every table in `public` has
 `ENABLE` + `FORCE ROW LEVEL SECURITY`; policies are written `TO <role>` and named
 `<table>_<role>_<verb>`. Column-level grants mean `SELECT *` fails for `viewer`/`pipeline` on
 restricted tables and for `authenticated` on `babies` (no `home_*_enc`), `invites`, `photo_exif`
@@ -91,10 +92,30 @@ Notes for API/worker code:
   the API may mark the invite itself first if it prefers.
 - Share-token exchange runs under `service_role` (`share_links.token_hash` / `passcode_hash` are
   unreadable to every user role); the API then mints a viewer JWT and uses `SET LOCAL ROLE viewer`.
-- Account deletion: delete the GoTrue user (cascades `profiles` → `baby_members`, `chat_*`; sets
-  `uploaded_by`/`created_by`/`edited_by` to NULL so photos survive for the remaining admin). The
-  `baby_members_keep_last_admin` trigger blocks it while the user is the last admin of a live
-  baby: soft-delete the baby (`babies.deleted_at`) or promote a co-admin first.
+- Account deletion: delete the GoTrue user (cascades `profiles` → `baby_members`, `chat_*`,
+  `auth.sessions`; sets `uploaded_by`/`created_by`/`edited_by` to NULL so photos survive for the
+  remaining admin). The `baby_members_keep_last_admin` trigger blocks it while the user is the
+  last admin of a live baby: soft-delete the baby (`babies.deleted_at`) or promote a co-admin first.
+- **The plan follows the paying admin** (`babies.plan_owner_user_id`; step-3 D5). Two triggers
+  make every path agree: `baby_members_release_plan` (AFTER DELETE OR UPDATE OF `role` on
+  `baby_members`) clears `plan_owner_user_id` when the owner leaves, is removed, or steps down
+  from admin to contributor (only an admin can own a plan), and `babies_plan_follows_owner`
+  (BEFORE UPDATE OF `plan_owner_user_id`) turns a `plus` plan into `free` with
+  `entitlement_expires_at = NULL` whenever the owner goes from set to NULL, including the FK
+  `ON DELETE SET NULL` from a hard-deleted user and a billing update under `service_role`. A
+  `plus` plan that never had an owner (seed, manual grant) is left alone, as is a change of
+  owner (mom → dad). Consequence: `baby_ai_enabled()` turns false at once (AI queue, `photo_ai`,
+  search and chat stop; `photos_status_guard` and the `photo_ai` tripwire keep the photos away
+  from any model); photos already above the 1,000 free cap stay but no new ones can be added until
+  a remaining admin upgrades.
+- Co-admin removal requests (FR-1.5, step-3 D4): `baby_members.removal_requested_by` /
+  `removal_requested_at` are written under `service_role` only (`authenticated` keeps its
+  column-level `UPDATE (role)` grant, so a member can neither forge nor clear a request; every
+  member can read them). `removal_requested_at` is the source of truth (`NULL` = no open request;
+  the API ignores requests older than 7 days); `removal_requested_by` becomes NULL if the
+  requesting admin's account is deleted while the request is open. The removal itself is a
+  plain `DELETE FROM baby_members` once the target confirms, still subject to
+  `baby_members_keep_last_admin`.
 - Business rules enforced by triggers (all raise `check_violation`, SQLSTATE 23514): max two
   admins, last admin stays, 20 invites/baby/day, free-tier 1,000-photo cap, AI queue and
   `photo_ai` only for approved photos of a paid-tier baby, `shared_photos` only approved live
@@ -105,6 +126,32 @@ Notes for API/worker code:
   (`jsonb_has_gps_keys`: contains `gps`/`latitude`/`longitude`, word-start `geo`, or exactly
   `lat`/`lng`/`lon`; a trigger rather than a CHECK so the rejected row is never echoed into the
   server log as `DETAIL`).
+
+## Session functions (`auth.sessions`)
+
+GoTrue keeps one `auth.sessions` row per device sign-in and deletes it on sign-out, refresh-token
+reuse and user deletion. The API uses that row as the liveness check behind every request (a
+deleted session is a `401 session_revoked` within one request, not after the JWT's hour), for the
+devices screen and for new-device alerts (PRD "Sessions and tokens"; step-3 D2). Four
+SECURITY DEFINER functions, owned by the superuser that runs migrations, are the **only** access
+path from an app role into `auth.*`: no table or schema grant on `auth` exists for
+`authenticated`, `viewer`, `pipeline`, `service_role`, `littlelight_api` or `littlelight_worker`
+(GoTrue also enables RLS with no policies on every `auth` table, so even a stray grant would
+return nothing). Each function filters by `auth_uid()`, pins `search_path = pg_catalog, public`
+(and schema-qualifies `auth.sessions`), is `REVOKE`d from PUBLIC and executable by
+`authenticated` only; without authenticated claims they return nothing / 0 / false.
+
+| Function | Returns | Use |
+| --- | --- | --- |
+| `auth_session_info(p_session_id uuid)` | `(created_at, refreshed_at timestamptz)` for that session **only if** it belongs to `auth_uid()` and its timebox (`not_after`) has not passed; else no row | First statement of every `withClaims` transaction with the JWT's `session_id`; no row ⇒ 401 `session_revoked`. `created_at` ≤ 10 min ago = fresh sign-in; `refreshed_at` is NULL until the first refresh (`coalesce(refreshed_at, created_at)` for "last active") |
+| `list_user_sessions()` | `(id, created_at, updated_at, refreshed_at, user_agent)`, newest first, **no `ip`** | `GET /api/auth/sessions` (the API reduces `user_agent` to a label) |
+| `delete_user_session(p_session_id uuid)` | `boolean` | `DELETE /api/auth/sessions/:id`; deletes only the caller's own row (GoTrue cascades `auth.refresh_tokens`, `auth.mfa_amr_claims`); false for a missing or someone else's session, indistinguishably |
+| `count_user_sessions()` | `integer` | New-device detection at sign-in |
+
+Coupling: the `auth.sessions` columns of `supabase/auth:v2.197.0` (`refreshed_at` is `timestamp
+without time zone` in UTC and is converted to `timestamptz` inside the functions; `ip` is `inet`).
+The migration refuses to run without `auth.sessions` (`start the auth (GoTrue) service before
+running migrations`); the CI stub mirrors the real columns.
 
 ## Encryption of coordinates
 
@@ -158,9 +205,13 @@ columns with `CHECK (col IN (...))` are string-literal unions).
 
 ### Tests and CI without GoTrue
 
-`ensureAuthSchemaStub(client)` creates a minimal `auth.users` / `auth.identities` only when they
-do not exist (bare pgvector in CI, throwaway containers); its column list is exactly what the
-seed inserts. `appRoleUrl(databaseUrl, role, password)` rewrites the superuser URL to connect as
+`ensureAuthSchemaStub(client)` creates a minimal `auth.users` / `auth.identities` /
+`auth.sessions` / `auth.refresh_tokens` only when `auth.users` does not exist (bare pgvector in
+CI, throwaway containers). The `users`/`identities` column list is exactly what the seed inserts;
+`sessions` and `refresh_tokens` carry the same column names and types as `supabase/auth:v2.197.0`
+(minus the FK to `auth.oauth_clients`) so the session functions and the API integration tests
+(which insert session rows) behave the same on the stub and on the real schema.
+`appRoleUrl(databaseUrl, role, password)` rewrites the superuser URL to connect as
 `littlelight_api` / `littlelight_worker` for RLS tests.
 
 ## Demo seed (`src/seed.ts`)
@@ -232,3 +283,4 @@ PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select
 | `1791520000500_sharing.sql` | `share_links`, `share_rules`, `shared_photos` (+ gate), `viewer_sessions`; `is_share_link_active`, `share_link_baby`, `viewer_baby_id`, `viewer_can_see_photo`; `photos_sensitive_unshare_rules` trigger; every `viewer` policy | drop viewer policies, trigger, tables, functions |
 | `1791520000600_chat-audit.sql` | `chat_threads`, `chat_messages` (+ thread guard), append-only `audit_log`; RLS | drop |
 | `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `littlelight_worker` | revert |
+| `1791600000100_auth-sessions-and-plan.sql` | guard (`auth.sessions`); session functions `auth_session_info`, `list_user_sessions`, `delete_user_session`, `count_user_sessions` (SECURITY DEFINER, `authenticated` only, no grants on `auth.*`); `baby_members.removal_requested_by/_at` (service_role-written); `babies_plan_follows_owner` + `baby_members_release_plan` triggers | drop triggers, functions, columns |

@@ -8,7 +8,11 @@
   <!--
     GoTrue "magic link" template: sent by POST /otp for an existing account.
     Served to GoTrue over HTTP by the web container at /email-templates/magic-link.html.
-    The 6-digit code ({{ .Token }}) is the primary sign-in path; the link is a web-only fallback.
+    The 6-digit code ({{ .Token }}) is the primary sign-in path; the link is a web-only fallback
+    (docs/plans/step-3.md 2.3, D8): it opens the SPA at /signin/callback with a single-use
+    token_hash in the URL FRAGMENT (never sent to nginx/server logs); the SPA posts it to
+    /api/auth/verify. Do not use {{ .ConfirmationURL }}: it points at GoTrue's /verify, which
+    nginx and the Vite proxy no longer expose.
     No images, trackers or external resources.
   -->
   <body style="margin:0;padding:0;background:#f7f5f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#2b2b2b;">
@@ -22,7 +26,7 @@
                 <p style="margin:0 0 24px;font-size:16px;line-height:1.5;">Enter this code in the app to sign in:</p>
                 <p style="margin:0 0 24px;font-size:32px;font-weight:700;letter-spacing:8px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;">{{ .Token }}</p>
                 <p style="margin:0 0 24px;font-size:14px;line-height:1.5;color:#555;">The code expires in 10 minutes and can be used once.</p>
-                <p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#555;">On a computer? You can also <a href="{{ .ConfirmationURL }}" style="color:#7a4fd6;">sign in with this link</a>.</p>
+                <p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#555;">On a computer, open this link to sign in instead:<br /><a href="{{ .SiteURL }}/signin/callback#token_hash={{ .TokenHash }}&amp;type=email" style="color:#7a4fd6;word-break:break-all;">Sign in to Littlelight</a></p>
                 <p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#888;">If you didn't ask to sign in, you can ignore this email. Nobody can get into your account without this code.</p>
               </td>
             </tr>

@@ -33,6 +33,8 @@ ENV NODE_ENV=development
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/ai packages/ai
+# Type-only import of @littlelight/db/types (generated row types); tsup erases it in prod.
+COPY packages/db packages/db
 COPY apps/api apps/api
 EXPOSE 3000
 CMD ["pnpm", "--filter", "@littlelight/api", "dev"]

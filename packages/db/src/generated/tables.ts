@@ -118,6 +118,8 @@ export interface BabyMembersRow {
   role: "admin" | "contributor";
   invited_by: string | null;
   joined_at: Date;
+  removal_requested_by: string | null;
+  removal_requested_at: Date | null;
 }
 
 export interface BabyMembersInsert {
@@ -126,6 +128,8 @@ export interface BabyMembersInsert {
   role: "admin" | "contributor";
   invited_by?: string | null;
   joined_at?: Date;
+  removal_requested_by?: string | null;
+  removal_requested_at?: Date | null;
 }
 
 export interface ChatMessagesRow {

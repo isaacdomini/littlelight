@@ -60,3 +60,38 @@ export const encryptionEnvSchema = z.object({
   DATA_ENCRYPTION_KEY: z.string().min(32, "must be at least 32 characters"),
 });
 export type EncryptionEnv = z.infer<typeof encryptionEnvSchema>;
+
+/** Compose passes unset optional vars as `""` (`${VAR:-}`); treat that as absent. */
+const emptyAsUndefined = (v: unknown) => (v === "" ? undefined : v);
+
+/**
+ * API auth settings (docs/plans/step-3.md 2.6, 2.8). `PUBLIC_URL` is the browser origin
+ * (`http://localhost:8080` in dev, `https://littlelight.tesarsoft.com` in production) with any
+ * trailing slash removed; GoTrue's JWT issuer is `${PUBLIC_URL}/auth`. The provider flags are fed
+ * by the same `.env` values as GoTrue's `GOTRUE_EXTERNAL_*_ENABLED`. Turnstile is inert unless
+ * `TURNSTILE_SECRET_KEY` is set.
+ */
+export const authEnvSchema = z.object({
+  AUTH_INTERNAL_URL: z.preprocess(emptyAsUndefined, z.url().default("http://auth:9999")),
+  PUBLIC_URL: z.url({ protocol: /^https?$/ }).transform((u) => u.replace(/\/+$/, "")),
+  AUTH_APPLE_ENABLED: z.preprocess(emptyAsUndefined, z.stringbool().default(false)),
+  AUTH_GOOGLE_ENABLED: z.preprocess(emptyAsUndefined, z.stringbool().default(false)),
+  TURNSTILE_SECRET_KEY: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  TURNSTILE_SITE_KEY: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+});
+export type AuthEnv = z.infer<typeof authEnvSchema>;
+
+/**
+ * SMTP for API-sent mail (invites, new-device alerts). Mailpit in dev (`mail:1025`, no auth),
+ * Postmark/Resend SMTP in production. `SMTP_SECURE=true` means implicit TLS (port 465); with
+ * `false` the transport still upgrades via STARTTLS when offered.
+ */
+export const mailEnvSchema = z.object({
+  SMTP_HOST: z.string().min(1),
+  SMTP_PORT: z.preprocess(emptyAsUndefined, z.coerce.number().int().min(1).max(65535).default(587)),
+  SMTP_USER: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  SMTP_PASS: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  SMTP_SECURE: z.preprocess(emptyAsUndefined, z.stringbool().default(false)),
+  MAIL_FROM: z.email(),
+});
+export type MailEnv = z.infer<typeof mailEnvSchema>;

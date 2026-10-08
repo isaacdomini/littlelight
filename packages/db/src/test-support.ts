@@ -48,6 +48,48 @@ CREATE TABLE IF NOT EXISTS auth.identities (
   updated_at       timestamptz,
   CONSTRAINT identities_provider_id_provider_unique UNIQUE (provider_id, provider)
 );
+-- auth.sessions / auth.refresh_tokens as supabase/auth v2.197.0 creates them (same column names
+-- and types; verified against \`auth migrate\` of that image in docs/plans/step-3.md 3.3S), minus
+-- the FK to auth.oauth_clients. The step-3 session functions read auth.sessions and API
+-- integration tests insert rows here. Note refreshed_at is timestamp WITHOUT time zone and ip is
+-- inet, exactly like GoTrue.
+DO $stub$ BEGIN
+  CREATE TYPE auth.aal_level AS ENUM ('aal1', 'aal2', 'aal3');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $stub$;
+CREATE TABLE IF NOT EXISTS auth.sessions (
+  id                      uuid PRIMARY KEY,
+  user_id                 uuid NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
+  created_at              timestamptz,
+  updated_at              timestamptz,
+  factor_id               uuid,
+  aal                     auth.aal_level,
+  not_after               timestamptz,
+  refreshed_at            timestamp without time zone,
+  user_agent              text,
+  ip                      inet,
+  tag                     text,
+  oauth_client_id         uuid,
+  refresh_token_hmac_key  text,
+  refresh_token_counter   bigint,
+  scopes                  text,
+  CONSTRAINT sessions_scopes_length CHECK (char_length(scopes) <= 4096)
+);
+CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON auth.sessions (user_id);
+CREATE INDEX IF NOT EXISTS user_id_created_at_idx ON auth.sessions (user_id, created_at);
+CREATE TABLE IF NOT EXISTS auth.refresh_tokens (
+  instance_id  uuid,
+  id           bigserial PRIMARY KEY,
+  token        varchar(255),
+  user_id      varchar(255),
+  revoked      boolean,
+  created_at   timestamptz,
+  updated_at   timestamptz,
+  parent       varchar(255),
+  session_id   uuid REFERENCES auth.sessions (id) ON DELETE CASCADE,
+  CONSTRAINT refresh_tokens_token_unique UNIQUE (token)
+);
+CREATE INDEX IF NOT EXISTS refresh_tokens_session_id_revoked_idx ON auth.refresh_tokens (session_id, revoked);
 `;
 
 /**
