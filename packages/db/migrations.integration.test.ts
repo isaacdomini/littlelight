@@ -11,7 +11,7 @@ import { databaseUrl, env } from "./test/harness";
 // auth.users is created by GoTrue in the dev stack; on a bare pgvector (CI) the harness stubs it.
 // WARNING: reverts every migration, so only point it at a disposable database.
 
-const EXPECTED_MIGRATIONS = 10;
+const EXPECTED_MIGRATIONS = 11;
 const quiet = () => undefined;
 
 const APP_TABLES = [
@@ -35,6 +35,8 @@ const APP_TABLES = [
   "share_links",
   "share_rules",
   "shared_photos",
+  "upload_files",
+  "upload_sessions",
   "viewer_sessions",
   "worker_heartbeats",
 ];
@@ -345,6 +347,16 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
       "SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE nspname = 'public' ORDER BY 1",
     );
     expect(fns, "functions left behind").toEqual([]);
+    const stepFour = await rows(
+      `SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE nspname = 'public' AND proname IN ('home_place_label', 'free_tier_photo_count',
+          'baby_has_quarantined_photos', 'upload_session_visible', 'upload_files_session_owner')`,
+    );
+    expect(stepFour, "step 4 helpers left behind").toEqual([]);
+    const cols = await rows(
+      "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'quarantined_at'",
+    );
+    expect(cols).toEqual([]);
     const policies = await rows("SELECT policyname FROM pg_policies WHERE schemaname = 'public'");
     expect(policies).toEqual([]);
     const table = await scalar("SELECT to_regclass('public.worker_heartbeats') AS t");

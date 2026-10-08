@@ -19,7 +19,8 @@ export type Units = z.infer<typeof unitsSchema>;
 
 /**
  * `photos.status`. `queued`/`analyzing` are only reachable for approved, non-deleted photos of a
- * baby with AI enabled (enforced by the `photos_status_guard` trigger).
+ * baby with AI enabled (enforced by the `photos_status_guard` trigger). `duplicate` (step 4) is a
+ * transient marker set by ingest right before an exact duplicate's row is hard-deleted.
  */
 export const photoStatusSchema = z.enum([
   "uploaded",
@@ -28,6 +29,7 @@ export const photoStatusSchema = z.enum([
   "analyzing",
   "ready",
   "failed",
+  "duplicate",
 ]);
 export type PhotoStatus = z.infer<typeof photoStatusSchema>;
 

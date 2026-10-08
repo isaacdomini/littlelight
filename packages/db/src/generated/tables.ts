@@ -417,7 +417,7 @@ export interface PhotosRow {
   height: number | null;
   bytes: string | null;
   mime: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
-  status: "uploaded" | "ingested" | "queued" | "analyzing" | "ready" | "failed";
+  status: "uploaded" | "ingested" | "queued" | "analyzing" | "ready" | "failed" | "duplicate";
   approval: "pending" | "approved" | "rejected";
   approved_by: string | null;
   approved_at: Date | null;
@@ -428,6 +428,7 @@ export interface PhotosRow {
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+  quarantined_at: Date | null;
 }
 
 export interface PhotosInsert {
@@ -442,7 +443,7 @@ export interface PhotosInsert {
   height?: number | null;
   bytes?: string | null;
   mime?: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
-  status?: "uploaded" | "ingested" | "queued" | "analyzing" | "ready" | "failed";
+  status?: "uploaded" | "ingested" | "queued" | "analyzing" | "ready" | "failed" | "duplicate";
   approval?: "pending" | "approved" | "rejected";
   approved_by?: string | null;
   approved_at?: Date | null;
@@ -453,6 +454,7 @@ export interface PhotosInsert {
   created_at?: Date;
   updated_at?: Date;
   deleted_at?: Date | null;
+  quarantined_at?: Date | null;
 }
 
 export interface ProfilesRow {
@@ -549,6 +551,94 @@ export interface SharedPhotosInsert {
   added_at?: Date;
 }
 
+export interface UploadFilesRow {
+  id: string;
+  session_id: string;
+  baby_id: string;
+  client_id: string | null;
+  declared_bytes: string;
+  client_sha256: Buffer | null;
+  client_mime: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  taken_at_hint: Date | null;
+  tz_offset_hint_minutes: number | null;
+  storage_key: string;
+  multipart_upload_id: string | null;
+  part_size: number;
+  state: "registered" | "completed" | "ingested" | "duplicate" | "failed" | "aborted";
+  error:
+    | "unsupported_media_type"
+    | "file_too_large"
+    | "decode_failed"
+    | "free_tier_limit"
+    | "rejected"
+    | "expired"
+    | "storage_error"
+    | "upload_incomplete"
+    | null;
+  photo_id: string | null;
+  duplicate_of_photo_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface UploadFilesInsert {
+  id?: string;
+  session_id: string;
+  baby_id: string;
+  client_id?: string | null;
+  declared_bytes: string;
+  client_sha256?: Buffer | null;
+  client_mime?: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  taken_at_hint?: Date | null;
+  tz_offset_hint_minutes?: number | null;
+  storage_key: string;
+  multipart_upload_id?: string | null;
+  part_size: number;
+  state?: "registered" | "completed" | "ingested" | "duplicate" | "failed" | "aborted";
+  error?:
+    | "unsupported_media_type"
+    | "file_too_large"
+    | "decode_failed"
+    | "free_tier_limit"
+    | "rejected"
+    | "expired"
+    | "storage_error"
+    | "upload_incomplete"
+    | null;
+  photo_id?: string | null;
+  duplicate_of_photo_id?: string | null;
+  created_at?: Date;
+  updated_at?: Date;
+}
+
+export interface UploadSessionsRow {
+  id: string;
+  baby_id: string;
+  created_by: string;
+  milestone_id: string | null;
+  people: string[];
+  note: string | null;
+  location_label: string | null;
+  finished_at: Date | null;
+  expires_at: Date;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface UploadSessionsInsert {
+  id?: string;
+  baby_id: string;
+  created_by: string;
+  milestone_id?: string | null;
+  people?: string[];
+  note?: string | null;
+  location_label?: string | null;
+  finished_at?: Date | null;
+  expires_at?: Date;
+  created_at?: Date;
+  updated_at?: Date;
+}
+
 export interface ViewerSessionsRow {
   id: string;
   share_link_id: string;
@@ -614,6 +704,8 @@ export interface Tables {
   share_links: { row: ShareLinksRow; insert: ShareLinksInsert };
   share_rules: { row: ShareRulesRow; insert: ShareRulesInsert };
   shared_photos: { row: SharedPhotosRow; insert: SharedPhotosInsert };
+  upload_files: { row: UploadFilesRow; insert: UploadFilesInsert };
+  upload_sessions: { row: UploadSessionsRow; insert: UploadSessionsInsert };
   viewer_sessions: { row: ViewerSessionsRow; insert: ViewerSessionsInsert };
   worker_heartbeats: { row: WorkerHeartbeatsRow; insert: WorkerHeartbeatsInsert };
 }
@@ -641,6 +733,8 @@ export const TABLE_NAMES = [
   "share_links",
   "share_rules",
   "shared_photos",
+  "upload_files",
+  "upload_sessions",
   "viewer_sessions",
   "worker_heartbeats",
 ] as const satisfies readonly TableName[];

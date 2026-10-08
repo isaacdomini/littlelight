@@ -15,9 +15,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 DC=(docker compose -f docker-compose.dev.yml)
 TMP="$(mktemp -d)"
-BASE="${SMOKE_BASE_URL:-http://localhost:8080}"
-MAIL="${SMOKE_MAILPIT_URL:-http://localhost:8025}"
-API_DIRECT="${SMOKE_API_URL:-http://localhost:3000}"
+BASE="${SMOKE_BASE_URL:-http://localhost:${WEB_PORT:-8080}}"
+MAIL="${SMOKE_MAILPIT_URL:-http://localhost:${MAILPIT_PORT:-8025}}"
+API_DIRECT="${SMOKE_API_URL:-http://localhost:${API_PORT:-3000}}"
 
 step() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'SMOKE FAIL: %s\n' "$*" >&2; exit 1; }
@@ -90,9 +90,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 10 migrations applied"
+step "3a. database: all 11 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "10" ] || fail "expected 10 applied migrations, found $MIGS"
+[ "$MIGS" = "11" ] || fail "expected 11 applied migrations, found $MIGS"
 
 step "4. sign-in code: POST /api/auth/otp is a generic 202; the code arrives in Mailpit"
 EMAIL="smoke-$(date +%s)-$RANDOM@example.com"
@@ -176,6 +176,19 @@ printf '%s\n' "$OUT" | grep -q 'permission denied' || fail "littlelight_api outs
 TABLES="$("${PSQL[@]}" -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)")"
 [ "$TABLES" = "0" ] || fail "$TABLES public table(s) without ENABLE+FORCE row level security"
 echo "RLS spot checks passed"
+
+step "5d. step 4: least-privilege MinIO service accounts, worker queues and disk gauge"
+API_KEY="$("${DC[@]}" exec -T api printenv S3_ACCESS_KEY | tr -d '\r')"
+[ "$API_KEY" = "littlelight-api" ] || fail "api S3_ACCESS_KEY is '$API_KEY', expected littlelight-api (not the root user)"
+WORKER_KEY="$("${DC[@]}" exec -T worker printenv S3_ACCESS_KEY | tr -d '\r')"
+[ "$WORKER_KEY" = "littlelight-worker" ] || fail "worker S3_ACCESS_KEY is '$WORKER_KEY', expected littlelight-worker"
+WLOG="$("${DC[@]}" logs worker 2>&1)"
+printf '%s\n' "$WLOG" | grep -q 'queues ready' || fail "worker log has no 'queues ready'"
+printf '%s\n' "$WLOG" | grep -q 'CSAM matching disabled' || fail "worker log has no 'CSAM matching disabled'"
+printf '%s\n' "$WLOG" | grep -q 'diskUsedPct' || fail "worker log has no diskUsedPct (disk gauge)"
+LEAK="$("${DC[@]}" logs api worker 2>&1 | grep -Eci 'X-Amz-Signature|GPSLatitude|"latitude"' || true)"
+[ "$LEAK" = "0" ] || fail "$LEAK api/worker log line(s) mention signed-URL signatures or GPS"
+echo "api/worker use their own MinIO service accounts; worker queues ready; logs clean"
 
 if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   step "5c. stopping storage degrades the api (503) and the worker (unhealthy)"

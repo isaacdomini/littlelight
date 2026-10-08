@@ -10,11 +10,15 @@ import { createGoTrueClient, type GoTrueClient, registerAuth } from "./auth";
 import type { ApiConfig } from "./config";
 import { createSmtpMailer, type Mailer } from "./email/mailer";
 import { registerErrorHandling } from "./lib/errors";
+import { photosRoutes } from "./photos/routes";
 import { createPool, type DbClient, registerDb } from "./plugins/db";
+import { createJobQueue, type JobQueue, registerJobs, sendOnlyBoss } from "./plugins/jobs";
 import { createS3Client, registerStorage, type StorageClient } from "./plugins/storage";
 import { babiesRoutes } from "./routes/babies";
 import { healthzRoutes } from "./routes/healthz";
 import { meRoutes } from "./routes/me";
+import { createUrlSigner, type UrlSigner } from "./storage/sign";
+import { uploadsRoutes } from "./uploads/routes";
 
 export const SERVICE_NAME = "api";
 export const SERVICE_VERSION: string = pkg.version;
@@ -33,6 +37,10 @@ export interface BuildAppOptions {
   db?: DbClient;
   /** Override the S3 client (tests pass a stub). */
   s3?: StorageClient;
+  /** Override the URL signer (default: a signer on `S3_PUBLIC_ENDPOINT`; it never sends requests). */
+  signer?: UrlSigner;
+  /** Override the job queue (tests pass a stub; the default starts pg-boss lazily on first send). */
+  jobs?: JobQueue;
   /** Override the mailer (tests pass `captureMailer()`). */
   mailer?: Mailer;
   /** Override the GoTrue client (tests pass a stub). */
@@ -85,6 +93,8 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         "req.body.nonce",
         "req.body.codeVerifier",
         "req.body.captchaToken",
+        // Upload registrations: 100 entries of hashes and hints are noise, not request context.
+        "req.body.files",
       ],
       censor: "[redacted]",
     },
@@ -117,6 +127,9 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
   });
   meRoutes(app);
   babiesRoutes(app);
+  // Step 4: uploads, photos (docs/plans/step-4.md 2.4).
+  uploadsRoutes(app);
+  photosRoutes(app);
 }
 
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */
@@ -139,6 +152,11 @@ export async function buildApp(opts: BuildAppOptions) {
   app.decorate("config", config);
   registerDb(app, opts.db ?? createPool(config, app.log));
   registerStorage(app, opts.s3 ?? createS3Client(config));
+  app.decorate("signer", opts.signer ?? createUrlSigner(config));
+  registerJobs(
+    app,
+    opts.jobs ?? createJobQueue({ log: app.log, createBoss: () => sendOnlyBoss(config) }),
+  );
   app.decorate("mailer", opts.mailer ?? createSmtpMailer(config, app.log));
 
   registerAuth(app, {

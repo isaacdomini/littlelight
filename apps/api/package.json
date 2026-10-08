@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1147.0",
+    "@aws-sdk/s3-request-presigner": "3.1147.0",
     "@fastify/cookie": "11.1.2",
     "@littlelight/ai": "workspace:*",
     "@littlelight/db": "workspace:*",
@@ -21,6 +22,7 @@
     "jose": "6.2.12",
     "nodemailer": "10.0.15",
     "pg": "8.23.1",
+    "pg-boss": "12.37.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

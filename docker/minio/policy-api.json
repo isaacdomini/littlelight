@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LittlelightApiBucket",
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads"],
+      "Resource": ["arn:aws:s3:::${S3_BUCKET}"]
+    },
+    {
+      "Sid": "LittlelightApiObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": ["arn:aws:s3:::${S3_BUCKET}/*"]
+    },
+    {
+      "Sid": "LittlelightApiNoDelete",
+      "Effect": "Deny",
+      "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion"],
+      "Resource": ["arn:aws:s3:::${S3_BUCKET}/*"]
+    },
+    {
+      "Sid": "LittlelightApiNoOldVersions",
+      "Effect": "Deny",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": ["arn:aws:s3:::${S3_BUCKET}/*"],
+      "Condition": {
+        "Null": {
+          "s3:versionid": "false"
+        }
+      }
+    }
+  ]
+}

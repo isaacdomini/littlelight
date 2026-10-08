@@ -2,11 +2,18 @@ import { S3Client } from "@aws-sdk/client-s3";
 import pg from "pg";
 import type { WorkerConfig } from "./config";
 
-/** pg pool for worker-owned queries (pg-boss manages its own pool). */
-export function createPool(config: Pick<WorkerConfig, "DATABASE_URL">, applicationName: string) {
+/**
+ * pg pool for worker-owned queries (pg-boss manages its own pool). Do not use named prepared
+ * statements on it: `runAsPipeline` runs `DISCARD ALL` on every release.
+ */
+export function createPool(
+  config: Pick<WorkerConfig, "DATABASE_URL">,
+  applicationName: string,
+  max = 4,
+) {
   return new pg.Pool({
     connectionString: config.DATABASE_URL,
-    max: 4,
+    max,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 30_000,
     application_name: applicationName,

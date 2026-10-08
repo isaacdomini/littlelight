@@ -61,6 +61,35 @@ describe("mapPgError", () => {
   });
 });
 
+describe("mapPgError: step 4 trigger messages", () => {
+  const cases: [string, number, string][] = [
+    ["free tier photo limit reached (1000 photos per baby)", 409, "free_tier_limit"],
+    ["upload session is full", 409, "upload_session_full"],
+    ["upload session is closed", 410, "upload_session_expired"],
+    ["upload session belongs to another user", 403, "forbidden"],
+    ["upload file must belong to the baby of its session", 409, "conflict"],
+    ["duplicate_of_photo_id must be a photo of the same baby", 409, "conflict"],
+  ];
+  it.each(cases)("%s -> %i %s", (message, status, code) => {
+    expect(mapPgError(pgErr("23514", message))).toMatchObject({ status, code });
+  });
+
+  it("only maps check_violation: the same text under another SQLSTATE is a 500", () => {
+    expect(mapPgError(pgErr("23505", "upload session is full"))).toMatchObject({
+      status: 409,
+      code: "conflict",
+    });
+    expect(mapPgError(pgErr("XX000", "upload session is full"))).toMatchObject({ status: 500 });
+  });
+
+  it("the mapped bodies never echo database text", () => {
+    for (const [message] of cases) {
+      const body = JSON.stringify(mapPgError(pgErr("23514", `${message} secret-detail`)).toBody());
+      expect(body).not.toContain("secret-detail");
+    }
+  });
+});
+
 describe("toApiError / isPgError", () => {
   it("recognises pg errors by SQLSTATE shape and rejects lookalikes", () => {
     expect(isPgError(pgErr("23505", "x"))).toBe(true);

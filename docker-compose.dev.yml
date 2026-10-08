@@ -15,8 +15,26 @@
 # Start order: db -> db-init (roles + auth schema) -> auth (GoTrue runs its own migrations, so
 # auth.users exists once it is healthy) -> migrate (app migrations + demo seed) -> api, worker.
 # Data: named volumes only (dev-db, dev-s3); no host folders to create.
+# MinIO (docs/plans/step-4.md 2.11): the root key (dev / devdevdev) goes to storage and
+# storage-init only. storage-init (docker/minio/init.sh) creates the bucket, the 7-day
+# noncurrent-version lifecycle rule and two bucket-scoped users: api signs and calls S3 as
+# littlelight-api (get/put/abort/list parts, no delete), worker as littlelight-worker (+ delete,
+# incl. object versions). The worker also mounts dev-s3 read-only at /storage for the disk alert.
+# Host-side tests may still use the root key against localhost:9000.
 # Ports: the app (8080) and MinIO S3 (9000) listen on all interfaces so a phone on the LAN can
 # reach them; everything else (db, api, auth, MinIO console, Mailpit) is bound to 127.0.0.1.
+# Every published HOST port comes from a variable whose default is the port above, so nothing
+# needs setting when they are free:
+#   WEB_PORT 8080, STORAGE_PORT 9000, STORAGE_CONSOLE_PORT 9001, DB_PORT 5432, AUTH_PORT 9999,
+#   API_PORT 3000, MAILPIT_PORT 8025
+# Container-internal ports never change. Values that embed a public port follow the same
+# variables: PUBLIC_URL / GoTrue site URL, issuer and redirect URIs (http://localhost:$WEB_PORT)
+# and S3_PUBLIC_ENDPOINT (http://localhost:$STORAGE_PORT, the host in presigned URLs).
+# These are Compose INTERPOLATION variables: set them in the shell or in a git-ignored `.env`
+# next to this file (Compose reads it automatically), e.g. `WEB_PORT=18080 STORAGE_PORT=19000
+# docker compose -f docker-compose.dev.yml up`. `.env.local` (an env_file) cannot change them.
+# On a dev machine `.env` holds only such dev overrides; never copy .env.example (production)
+# there: its S3_PUBLIC_ENDPOINT etc. would be picked up by this file.
 # Auth (docs/plans/step-3.md 2.1, 2.8): the browser reaches GoTrue only at /auth/health,
 # /auth/authorize and /auth/callback (the Vite proxy 404s every other /auth/* path); sign-in
 # codes, verify, refresh and sign-out go through the API at /api/auth/*, which calls GoTrue at
@@ -26,7 +44,7 @@
 # follow the same flag:
 #   GOTRUE_EXTERNAL_GOOGLE_ENABLED=true GOOGLE_CLIENT_ID=<web client id> \
 #   GOOGLE_CLIENT_SECRET=<secret> docker compose -f docker-compose.dev.yml up
-# (register http://localhost:8080/auth/callback as the client's redirect URI).
+# (register http://localhost:${WEB_PORT:-8080}/auth/callback as the client's redirect URI).
 name: littlelight-dev
 
 x-dev: &dev
@@ -40,9 +58,16 @@ x-dev: &dev
 # be overridden from .env.local; change them here and every side follows.
 x-dev-shared:
   jwt-secret: &dev-jwt-secret dev-only-jwt-secret-at-least-32-characters
-  s3-access-key: &dev-s3-access-key dev
-  s3-secret-key: &dev-s3-secret-key devdevdev
+  # MinIO root: storage and storage-init only (also what host-side tests/`mc` use).
+  s3-root-user: &dev-s3-root-user dev
+  s3-root-password: &dev-s3-root-password devdevdev
   s3-bucket: &dev-s3-bucket littlelight-dev
+  # Bucket-scoped MinIO users created by storage-init (docker/minio/policy-*.json); api and
+  # worker each get only their own pair, as S3_ACCESS_KEY / S3_SECRET_KEY.
+  s3-api-access-key: &dev-s3-api-access-key littlelight-api
+  s3-api-secret-key: &dev-s3-api-secret-key dev-api-s3-secret-16
+  s3-worker-access-key: &dev-s3-worker-access-key littlelight-worker
+  s3-worker-secret-key: &dev-s3-worker-secret-key dev-worker-s3-secret-16
   # db-init (and migrate, which re-runs the idempotent bootstrap) sets these login passwords;
   # each service logs in with the matching URL below.
   superuser-db-url: &dev-superuser-db-url postgres://postgres:dev@db:5432/littlelight
@@ -56,8 +81,11 @@ x-dev-shared:
   data-encryption-key: &dev-data-encryption-key dev-only-data-encryption-key-32-chars-min
   # Public origin. GoTrue signs JWTs with iss = <public-url>/auth and the API verifies exactly
   # that issuer, so these two must change together (they are not overridable from .env.local).
-  public-url: &dev-public-url http://localhost:8080
-  auth-issuer: &dev-auth-issuer http://localhost:8080/auth
+  public-url: &dev-public-url http://localhost:${WEB_PORT:-8080}
+  auth-issuer: &dev-auth-issuer http://localhost:${WEB_PORT:-8080}/auth
+  # Host in presigned URLs (api signer; worker config). For a phone on the LAN put
+  # S3_PUBLIC_ENDPOINT=http://<laptop-lan-ip>:9000 in the shell or the git-ignored `.env`.
+  s3-public-endpoint: &dev-s3-public-endpoint ${S3_PUBLIC_ENDPOINT:-http://localhost:${STORAGE_PORT:-9000}}
   # Mailpit (SMTP :1025, no auth). GoTrue (codes) and the API (invites, new-device alerts)
   # send from the same address.
   smtp-host: &dev-smtp-host mail
@@ -83,14 +111,13 @@ x-dev-db-tools: &dev-db-tools
     dockerfile: packages/db/Dockerfile
   restart: "no"
 
-# api and worker: verify GoTrue JWTs and talk to MinIO with the same values auth/storage use;
-# each adds its own DATABASE_URL (app role, never the superuser).
+# api and worker: verify GoTrue JWTs with the value auth uses and share the bucket name; each
+# adds its own DATABASE_URL (app role, never the superuser) and its own MinIO key pair (never root).
 x-dev-app-env: &dev-app-env
   JWT_SECRET: *dev-jwt-secret
   GOTRUE_JWT_SECRET: *dev-jwt-secret
-  S3_ACCESS_KEY: *dev-s3-access-key
-  S3_SECRET_KEY: *dev-s3-secret-key
   S3_BUCKET: *dev-s3-bucket
+  S3_PUBLIC_ENDPOINT: *dev-s3-public-endpoint
   DATA_ENCRYPTION_KEY: *dev-data-encryption-key
 
 services:
@@ -102,7 +129,7 @@ services:
     volumes:
       - dev-db:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     healthcheck:
       # TCP (-h 127.0.0.1) so the check can't pass against initdb's socket-only temp server.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d littlelight"]
@@ -161,7 +188,7 @@ services:
       GOTRUE_SITE_URL: *dev-public-url
       API_EXTERNAL_URL: *dev-auth-issuer
       # OAuth redirect_to targets (the SPA's /signin/callback).
-      GOTRUE_URI_ALLOW_LIST: http://localhost:8080/**
+      GOTRUE_URI_ALLOW_LIST: http://localhost:${WEB_PORT:-8080}/**
       GOTRUE_LOG_LEVEL: info
       # Passwordless only: email codes (+ Apple/Google when enabled). No phone, no anonymous users.
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
@@ -220,18 +247,18 @@ services:
       GOTRUE_EXTERNAL_APPLE_ENABLED: *dev-apple-enabled
       GOTRUE_EXTERNAL_APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_APPLE_SECRET: ${APPLE_CLIENT_SECRET:-}
-      GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: http://localhost:8080/auth/callback
+      GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: http://localhost:${WEB_PORT:-8080}/auth/callback
       GOTRUE_EXTERNAL_GOOGLE_ENABLED: *dev-google-enabled
       GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: http://localhost:8080/auth/callback
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: http://localhost:${WEB_PORT:-8080}/auth/callback
     depends_on:
       db-init:
         condition: service_completed_successfully
       mail:
         condition: service_started
     ports:
-      - "127.0.0.1:9999:9999"
+      - "127.0.0.1:${AUTH_PORT:-9999}:9999"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
       interval: 5s
@@ -244,13 +271,17 @@ services:
     image: ${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: *dev-s3-access-key
-      MINIO_ROOT_PASSWORD: *dev-s3-secret-key
+      MINIO_ROOT_USER: *dev-s3-root-user
+      MINIO_ROOT_PASSWORD: *dev-s3-root-password
+      # Browser part PUTs / signed GETs to $STORAGE_PORT are cross-origin. Any origin in dev, so
+      # any WEB_PORT and a phone on the LAN (http://<laptop-ip>:<WEB_PORT>) work too; production
+      # allows only PUBLIC_URL.
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     volumes:
       - dev-s3:/data
     ports:
-      - "9000:9000"
-      - "127.0.0.1:9001:9001"
+      - "${STORAGE_PORT:-9000}:9000"
+      - "127.0.0.1:${STORAGE_CONSOLE_PORT:-9001}:9001"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
       interval: 5s
@@ -259,21 +290,27 @@ services:
       start_period: 20s
       start_interval: 1s
 
-  # One-shot: create the dev bucket (versioning on, same as production).
+  # One-shot, idempotent (docker/minio/init.sh, same script as production): bucket with
+  # versioning, the noncurrent-version lifecycle rule, and the littlelight-api /
+  # littlelight-worker users with their bucket-scoped policies. The only root-key consumer
+  # besides storage. Inspect with, e.g.:
+  #   docker compose -f docker-compose.dev.yml run --rm --entrypoint sh storage-init -c \
+  #     'mc alias set local http://storage:9000 dev devdevdev >/dev/null && mc admin user info local littlelight-api'
   storage-init:
     image: ${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}
     restart: "no"
     environment:
       S3_ENDPOINT: http://storage:9000
-      S3_ACCESS_KEY: *dev-s3-access-key
-      S3_SECRET_KEY: *dev-s3-secret-key
+      S3_ROOT_USER: *dev-s3-root-user
+      S3_ROOT_PASSWORD: *dev-s3-root-password
       S3_BUCKET: *dev-s3-bucket
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        mc alias set local "$$S3_ENDPOINT" "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" >/dev/null &&
-        mc mb -p "local/$$S3_BUCKET" &&
-        mc version enable "local/$$S3_BUCKET"
+      S3_API_ACCESS_KEY: *dev-s3-api-access-key
+      S3_API_SECRET_KEY: *dev-s3-api-secret-key
+      S3_WORKER_ACCESS_KEY: *dev-s3-worker-access-key
+      S3_WORKER_SECRET_KEY: *dev-s3-worker-secret-key
+    volumes:
+      - ./docker/minio:/minio:ro
+    entrypoint: ["/bin/bash", "/minio/init.sh"]
     depends_on:
       storage:
         condition: service_healthy
@@ -285,7 +322,7 @@ services:
       MP_SMTP_AUTH_ALLOW_INSECURE: "1"
       MP_MAX_MESSAGES: "5000"
     ports:
-      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
       interval: 5s
@@ -305,6 +342,9 @@ services:
     environment:
       <<: *dev-app-env
       DATABASE_URL: *dev-api-db-url
+      # Bucket-scoped MinIO user (no delete, no versions, no admin); see storage-init.
+      S3_ACCESS_KEY: *dev-s3-api-access-key
+      S3_SECRET_KEY: *dev-s3-api-secret-key
       # tsx watch (4.23.15 bundles chokidar 3, which reads CHOKIDAR_USEPOLLING/CHOKIDAR_INTERVAL):
       # poll the bind-mounted sources, because inotify events from Docker Desktop's host file
       # sharing are not reliable (an edit was missed). node_modules and dotfiles are ignored by
@@ -332,7 +372,7 @@ services:
       storage-init:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${API_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -352,6 +392,15 @@ services:
     environment:
       <<: *dev-app-env
       DATABASE_URL: *dev-worker-db-url
+      # Bucket-scoped MinIO user (api's rights + delete incl. object versions; no admin).
+      S3_ACCESS_KEY: *dev-s3-worker-access-key
+      S3_SECRET_KEY: *dev-s3-worker-secret-key
+      # photo.ingest jobs per worker process (each may hold one decoded image); export
+      # INGEST_CONCURRENCY in the shell before `up` to change it.
+      INGEST_CONCURRENCY: ${INGEST_CONCURRENCY:-2}
+      # Disk-usage alert (heartbeat statfs; STORAGE_DISK_ALERT_PCT defaults to 80, override in
+      # .env.local): dev-s3 mounted read-only below.
+      STORAGE_DISK_PATH: /storage
       # tsx watch (4.23.15 bundles chokidar 3, which reads CHOKIDAR_USEPOLLING/CHOKIDAR_INTERVAL):
       # poll the bind-mounted sources, because inotify events from Docker Desktop's host file
       # sharing are not reliable (an edit was missed). node_modules and dotfiles are ignored by
@@ -362,6 +411,15 @@ services:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
       - ./packages/ai/src:/repo/packages/ai/src
+      # MinIO's data volume, read-only, only for statfs (disk alert); objects go through S3.
+      - type: volume
+        source: dev-s3
+        target: /storage
+        read_only: true
+        volume:
+          nocopy: true
+    # Same cap as production: two concurrent 48 MP HEIC decodes are ~800 MB RSS.
+    mem_limit: 2g
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -395,7 +453,7 @@ services:
       auth:
         condition: service_started
     ports:
-      - "8080:8080"
+      - "${WEB_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 10s

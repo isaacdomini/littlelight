@@ -7,6 +7,9 @@ import { buildApp } from "../app";
 import type { GoTrueClient } from "../auth/gotrue";
 import type { ApiConfig } from "../config";
 import { type CaptureMailer, captureMailer } from "../email/mailer";
+import type { JobQueue } from "../plugins/jobs";
+import type { StorageClient } from "../plugins/storage";
+import type { UrlSigner } from "../storage/sign";
 import { type GoTrueStub, signAccessToken, stubGoTrue, testConfig } from "./support";
 
 // Shared harness for `*.integration.test.ts` in apps/api (docs/plans/step-3.md 3.10). These run
@@ -101,6 +104,11 @@ export interface Harness {
 export interface HarnessOptions {
   config?: Partial<ApiConfig>;
   gotrue?: Partial<GoTrueClient>;
+  /** S3 stub (default: answers `{}` to everything; use `createS3Stub()` for uploads). */
+  s3?: StorageClient;
+  /** Job queue stub (default: the real lazy pg-boss, which the tests never trigger). */
+  jobs?: JobQueue;
+  signer?: UrlSigner;
 }
 
 export async function createHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -127,7 +135,9 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     config,
     mailer,
     gotrue,
-    s3: { send: (async () => ({})) as never, destroy: () => undefined },
+    s3: opts.s3 ?? { send: (async () => ({})) as never, destroy: () => undefined },
+    ...(opts.jobs ? { jobs: opts.jobs } : {}),
+    ...(opts.signer ? { signer: opts.signer } : {}),
     logger: false,
   });
 

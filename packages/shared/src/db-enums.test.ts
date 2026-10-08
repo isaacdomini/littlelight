@@ -24,7 +24,7 @@ const CASES = [
   [
     "photoStatus",
     photoStatusSchema,
-    ["uploaded", "ingested", "queued", "analyzing", "ready", "failed"],
+    ["uploaded", "ingested", "queued", "analyzing", "ready", "failed", "duplicate"],
   ],
   ["photoApproval", photoApprovalSchema, ["pending", "approved", "rejected"]],
   [

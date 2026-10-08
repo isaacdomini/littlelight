@@ -3,7 +3,8 @@ import { HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
 import { errorCategory } from "./clients";
 
 // Worker heartbeat (docs/plans/step-1.md 2.9, docs/plans/step-2.md 2.12). Every interval:
-// HeadBucket on S3_BUCKET, then upsert this worker's `worker_heartbeats` row.
+// HeadBucket on S3_BUCKET (+ statfs of the storage mount for the disk alert, step 4 2.11), then
+// upsert this worker's `worker_heartbeats` row.
 // - `last_seen_at` advances ONLY when storage is reachable, so `healthcheck.ts` (row fresh within
 //   HEARTBEAT_STALE_MS) also proves storage.
 // - `updated_at` advances on EVERY successful write, storage up or down. Pruning keys off it, so
@@ -33,6 +34,11 @@ export interface HeartbeatDeps {
   startedAt: Date;
   /** Budget for the HeadBucket call. */
   storageTimeoutMs?: number;
+  /**
+   * Storage disk usage in percent (docs/plans/step-4.md 2.11, `disk.ts`); undefined = check
+   * disabled or failed. Reported as `details.diskUsedPct`.
+   */
+  diskUsedPct?: () => Promise<number | undefined>;
 }
 
 export interface HeartbeatResult {
@@ -40,6 +46,7 @@ export interface HeartbeatResult {
   /** Sanitized category when storage failed (e.g. `ECONNREFUSED`, `NotFound`, `timeout`). */
   storageError?: string;
   storageLatencyMs: number;
+  diskUsedPct?: number;
 }
 
 /** Storage reachable: refresh `last_seen_at`. */
@@ -109,9 +116,15 @@ async function checkStorage(
 /** One heartbeat: storage check, then upsert. DB errors propagate to the caller. */
 export async function beatOnce(deps: HeartbeatDeps): Promise<HeartbeatResult> {
   const result = await checkStorage(deps.s3, deps.bucket, deps.storageTimeoutMs ?? 5_000);
-  const details = result.storageOk
-    ? { storageLatencyMs: result.storageLatencyMs }
-    : { storageLatencyMs: result.storageLatencyMs, storageError: result.storageError };
+  const diskUsedPct = deps.diskUsedPct
+    ? await deps.diskUsedPct().catch(() => undefined)
+    : undefined;
+  if (diskUsedPct !== undefined) result.diskUsedPct = diskUsedPct;
+  const details = {
+    storageLatencyMs: result.storageLatencyMs,
+    ...(result.storageOk ? {} : { storageError: result.storageError }),
+    ...(diskUsedPct !== undefined ? { diskUsedPct } : {}),
+  };
   await deps.db.query(result.storageOk ? UPSERT_OK_SQL : UPSERT_STORAGE_DOWN_SQL, [
     deps.workerId,
     deps.hostname,

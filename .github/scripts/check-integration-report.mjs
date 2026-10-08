@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// CI guard for `pnpm test:integration` (docs/plans/step-3.md 3.13).
+// CI guard for `pnpm test:integration` (docs/plans/step-3.md 3.13, step-4.md 4.10).
 //
-// Every integration test is `describe.skipIf(!databaseUrl)`, so a missing or misspelled
-// DATABASE_URL turns the whole run into a green "all skipped". This reads Vitest's JSON report
-// and fails unless, for each expected project, at least one test actually ran and no test file
-// was skipped in its entirety.
+// Every integration test is `describe.skipIf(!databaseUrl)` (apps/worker: also S3_ENDPOINT), so
+// a missing or misspelled variable turns the whole run into a green "all skipped". This reads
+// Vitest's JSON report and fails unless, for each expected project, at least one test actually
+// ran and no test file was skipped in its entirety.
 //
 //   node .github/scripts/check-integration-report.mjs <report.json> <project-dir>...
-//   e.g.  ... integration.json packages/db apps/api
+//   e.g.  ... integration.json packages/db apps/api apps/worker
 //
 // <project-dir> is a repo-relative directory; a test file belongs to it when its path contains
 // `/<project-dir>/`. Only Node built-ins are used, so it runs before or without `pnpm install`.
@@ -46,7 +46,11 @@ for (const dir of projects) {
   }
   console.log(`${dir}: ${mine.length} files, ${ran} tests executed, ${skipped} skipped`);
   if (mine.length === 0) errors.push(`${dir}: no integration test files in the report`);
-  else if (ran === 0) errors.push(`${dir}: 0 tests executed (is DATABASE_URL set?)`);
+  else if (ran === 0) {
+    errors.push(
+      `${dir}: 0 tests executed (are DATABASE_URL and, for apps/worker, S3_ENDPOINT set?)`,
+    );
+  }
 }
 
 if (report.success !== true) errors.push("report.success is not true");

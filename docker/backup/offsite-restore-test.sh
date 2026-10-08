@@ -8,7 +8,8 @@
 # Never touches the live database or STORAGE_PATH. The scratch dir is deleted on exit.
 #
 # Reads /etc/littlelight/offsite.env (see offsite-backup.sh) and the stack's .env for
-# S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET / MINIO_IMAGE / MC_IMAGE.
+# S3_ROOT_USER / S3_ROOT_PASSWORD (MinIO root: the restored data's IAM store belongs to it) /
+# S3_BUCKET / MINIO_IMAGE / MC_IMAGE.
 #   APP_DIR=/srv/littlelight/app docker/backup/offsite-restore-test.sh
 set -euo pipefail
 
@@ -26,7 +27,7 @@ set -a
 # shellcheck disable=SC1091
 . "$APP_DIR/.env"
 set +a
-: "${RESTIC_REPOSITORY:?}" "${RESTIC_PASSWORD:?}" "${S3_ACCESS_KEY:?}" "${S3_SECRET_KEY:?}" "${S3_BUCKET:?}"
+: "${RESTIC_REPOSITORY:?}" "${RESTIC_PASSWORD:?}" "${S3_ROOT_USER:?}" "${S3_ROOT_PASSWORD:?}" "${S3_BUCKET:?}"
 MINIO_IMAGE="${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
 MC_IMAGE="${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}"
 
@@ -55,7 +56,7 @@ docker run --rm \
 # --- Storage: boot MinIO on the restored copy (internal network only) -------
 docker network create --internal "$NET" >/dev/null
 docker run -d --name "$MINIO_C" --network "$NET" --network-alias minio \
-  -e MINIO_ROOT_USER="$S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+  -e MINIO_ROOT_USER="$S3_ROOT_USER" -e MINIO_ROOT_PASSWORD="$S3_ROOT_PASSWORD" \
   -v "$SCRATCH/data/storage:/data" "$MINIO_IMAGE" server /data >/dev/null
 for _ in $(seq 1 60); do
   docker exec "$MINIO_C" curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/live 2>/dev/null && break
@@ -63,9 +64,9 @@ for _ in $(seq 1 60); do
 done
 
 count_objects() { # network, endpoint
-  docker run --rm --network "$1" -e S3_ACCESS_KEY -e S3_SECRET_KEY -e S3_BUCKET -e EP="$2" \
+  docker run --rm --network "$1" -e S3_ROOT_USER -e S3_ROOT_PASSWORD -e S3_BUCKET -e EP="$2" \
     --entrypoint /bin/sh "$MC_IMAGE" -c \
-    'mc alias set x "$EP" "$S3_ACCESS_KEY" "$S3_SECRET_KEY" >/dev/null && mc ls --recursive "x/$S3_BUCKET" | wc -l'
+    'mc alias set x "$EP" "$S3_ROOT_USER" "$S3_ROOT_PASSWORD" >/dev/null && mc ls --recursive "x/$S3_BUCKET" | wc -l'
 }
 restored="$(count_objects "$NET" http://minio:9000)"
 log "restored bucket $S3_BUCKET: $restored objects"

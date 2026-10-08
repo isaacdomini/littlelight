@@ -57,7 +57,7 @@ export { codeAfter };
 /** A mobile-sized browser context, optionally already signed in as `as`. */
 export async function newContext(browser: Browser, as?: ApiClient): Promise<BrowserContext> {
   return browser.newContext({
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:8080",
+    baseURL: process.env.E2E_BASE_URL ?? `http://localhost:${process.env.WEB_PORT ?? 8080}`,
     viewport: { width: 375, height: 812 },
     ...(as ? { storageState: await as.storageState() } : {}),
   });

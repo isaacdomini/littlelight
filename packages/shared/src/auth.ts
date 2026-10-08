@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { babyRoleSchema } from "./db-enums";
+import { uploadFileErrorSchema } from "./upload";
 
 // Auth constants and helpers shared by the API and the SPA (docs/plans/step-3.md 2.2, 2.6, 2.9).
 // Browser-safe: no Node imports. Session transport: web uses httpOnly cookies set by the API,
@@ -129,7 +130,10 @@ export function userAgentLabel(ua: string | null | undefined): string {
   return "Unknown device";
 }
 
-/** `audit_log.event` values written in step 3 (step 8 appends share-link events). */
+/**
+ * `audit_log.event` values: step 3 (auth, invites, members, babies, account) and step 4 (uploads,
+ * photo moderation, purge, safety). Step 8 appends share-link events.
+ */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
   "auth.sign_out",
@@ -145,6 +149,15 @@ export const AUDIT_EVENTS = [
   "baby.deleted",
   "account.deletion_requested",
   "account.deleted",
+  "upload.session_created",
+  "upload.session_finished",
+  "photo.approved",
+  "photo.rejected",
+  "photo.trashed",
+  "photo.restored",
+  "photo.original_downloaded",
+  "photo.purged",
+  "safety.hash_match",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -167,5 +180,12 @@ export const auditMetadataSchema = z.strictObject({
   /** Sign-out scope: `local`/`global` (GoTrue logout) or `device` (per-session sign-out). */
   scope: z.enum(["local", "global", "device"]).optional(),
   target_user_id: z.uuid().optional(),
+  session_id: z.uuid().optional(),
+  photo_id: z.uuid().optional(),
+  /** `upload.session_finished`: completed + ingested files. */
+  count: z.number().int().nonnegative().optional(),
+  duplicates: z.number().int().nonnegative().optional(),
+  failed: z.number().int().nonnegative().optional(),
+  error: uploadFileErrorSchema.optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

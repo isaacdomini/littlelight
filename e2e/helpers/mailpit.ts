@@ -1,6 +1,7 @@
 // Mailpit client for the dev stack (all dev mail lands there). Codes and invite links are read
 // from the HTML body; nothing here is ever logged.
-const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://localhost:8025";
+const MAILPIT =
+  process.env.E2E_MAILPIT_URL ?? `http://localhost:${process.env.MAILPIT_PORT ?? 8025}`;
 
 interface Summary {
   ID: string;

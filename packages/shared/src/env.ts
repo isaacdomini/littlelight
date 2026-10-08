@@ -95,3 +95,25 @@ export const mailEnvSchema = z.object({
   MAIL_FROM: z.email(),
 });
 export type MailEnv = z.infer<typeof mailEnvSchema>;
+
+/**
+ * Worker ingest settings (docs/plans/step-4.md 2.6, 2.9, 2.11). `STORAGE_DISK_PATH` is a
+ * read-only mount of the storage volume for the disk-usage alert (unset ⇒ check skipped).
+ * `CSAM_MATCHER=photodna` needs `PHOTODNA_API_KEY` and `PHOTODNA_ENDPOINT`; the worker's
+ * `createCsamMatcher` fails at startup without them. Never log `PHOTODNA_API_KEY`.
+ */
+export const ingestEnvSchema = z.object({
+  INGEST_CONCURRENCY: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(8).default(2),
+  ),
+  STORAGE_DISK_PATH: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  STORAGE_DISK_ALERT_PCT: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(50).max(99).default(80),
+  ),
+  CSAM_MATCHER: z.preprocess(emptyAsUndefined, z.enum(["none", "photodna"]).default("none")),
+  PHOTODNA_API_KEY: z.preprocess(emptyAsUndefined, z.string().min(1).optional()),
+  PHOTODNA_ENDPOINT: z.preprocess(emptyAsUndefined, z.url().optional()),
+});
+export type IngestEnv = z.infer<typeof ingestEnvSchema>;

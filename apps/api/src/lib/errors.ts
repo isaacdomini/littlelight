@@ -108,7 +108,32 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
     "invite is no longer valid",
     () => new ApiError(410, "invite_expired", "This invite is no longer valid"),
   ],
+  // Step 4 (packages/db/migrations/1791700000100_uploads-and-ingest.sql, 1791520000300_photos.sql).
+  ["free tier photo limit reached", () => freeTierLimit()],
+  [
+    "upload session is full",
+    () =>
+      new ApiError(409, "upload_session_full", "This upload already has the maximum of 500 photos"),
+  ],
+  [
+    "upload session is closed",
+    () => new ApiError(410, "upload_session_expired", "This upload session has ended"),
+  ],
+  ["upload session belongs to another user", () => forbidden()],
+  // Tripwires: the API derives both values itself, so reaching these is a state conflict.
+  [
+    "upload file must belong to the baby of its session",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
+  [
+    "duplicate_of_photo_id must be a photo of the same baby",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
 ];
+
+/** 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). */
+export const freeTierLimit = () =>
+  new ApiError(409, "free_tier_limit", "This album is on the free plan, which holds 1,000 photos");
 
 /**
  * Map a Postgres error to an `ApiError`. SQLSTATE `23514` by trigger message, `42501` → 403

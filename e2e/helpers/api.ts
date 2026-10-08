@@ -1,7 +1,7 @@
 import { type APIRequestContext, request } from "@playwright/test";
 import { codeAfter, seenIds, waitForInviteToken } from "./mailpit";
 
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:8080";
+const BASE = process.env.E2E_BASE_URL ?? `http://localhost:${process.env.WEB_PORT ?? 8080}`;
 
 /** Unique, run-scoped address (`e2e-<ts>-<rand>-<tag>@example.com`). */
 export function uniqueEmail(tag: string): string {

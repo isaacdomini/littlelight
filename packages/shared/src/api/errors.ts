@@ -32,6 +32,12 @@ export const apiErrorCodeSchema = z.enum([
   "admins_full",
   "last_admin",
   "sole_admin",
+  "free_tier_limit",
+  "upload_session_full",
+  "upload_session_expired",
+  "upload_incomplete",
+  "unsupported_media_type",
+  "file_too_large",
   "internal",
 ]);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;

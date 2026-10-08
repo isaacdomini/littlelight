@@ -37,7 +37,7 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link, the allow-listed columns of `photos`, `photo_derivatives` (thumb/display), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Nothing else, no writes, and nothing once the link is expired/revoked or the baby is deleted. |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, read-only `profiles`/`babies`/`milestones`/`share_rules`). Never invites, tokens, chat, members, viewer sessions. Hard-deletes only rows trashed > 30 days. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `upload_files` state, read-only `profiles`/`babies`/`milestones`/`share_rules`, liveness columns of `upload_sessions`). Never invites, tokens, chat, members, viewer sessions, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
 | `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
@@ -125,7 +125,8 @@ Notes for API/worker code:
   `photo_exif.raw_json` can never carry a coordinate-looking key at any depth
   (`jsonb_has_gps_keys`: contains `gps`/`latitude`/`longitude`, word-start `geo`, or exactly
   `lat`/`lng`/`lon`; a trigger rather than a CHECK so the rejected row is never echoed into the
-  server log as `DETAIL`).
+  server log as `DETAIL`), upload sessions hold at most 500 files and only their creator may add
+  to them (`upload_files_session_owner`, see "Uploads and ingest").
 
 ## Session functions (`auth.sessions`)
 
@@ -171,6 +172,114 @@ SELECT set_config('app.data_key', $1, true);
 Both functions raise `data key not set for this transaction` otherwise. Never enable
 `log_statement = all` or parameter logging on the production `db`. Key rotation is out of scope:
 re-encrypt with `UPDATE … SET col = encrypt_coord(decrypt_coord(col))` under the old then new key.
+
+The "Home" place label (FR-4.3, within `HOME_RADIUS_M` = 150 m) is computed **in SQL** so plaintext
+coordinates never reach Node: `home_place_label(baby_id, lat, lng)` (haversine against the
+decrypted `babies.home_*_enc`; returns `'Home'` or NULL, NULL when the baby has no home) and the
+overload `home_place_label(baby_id, gps_lat_enc, gps_lng_enc)` for re-labelling stored rows later.
+Both are SECURITY INVOKER, need `app.data_key`, and are executable by `pipeline` and `service_role`
+only. The worker binds the photo's coordinates once and uses them in a single statement:
+
+```sql
+INSERT INTO photo_exif (photo_id, gps_lat_enc, gps_lng_enc, place_label, ...)
+VALUES ($1, encrypt_coord($2), encrypt_coord($3), home_place_label($4, $2, $3), ...)
+```
+
+No branch of either function raises with a coordinate in the message (a wrong key surfaces as
+pgcrypto's `Wrong key or corrupt data`).
+
+## Uploads and ingest (step 4)
+
+Migration `1791700000100_uploads-and-ingest.sql` (docs/plans/step-4.md 2.3). Photo bytes never
+touch Postgres: the browser uploads straight to MinIO over presigned multipart URLs, the API
+only books the upload here, and the worker (`pipeline`) ingests.
+
+**Tables.** `upload_sessions` (one picker session: `baby_id`, `created_by`, batch details
+`milestone_id`/`people`/`note`/`location_label`, `finished_at`, `expires_at` default +24 h) and
+`upload_files` (one per registered file: `declared_bytes` ≤ 100 MiB, `client_sha256`/`client_mime`/
+`taken_at_hint` as **hints only**, `storage_key` = the original's object key, `multipart_upload_id`,
+`part_size`, `state`, `error`, `photo_id`, `duplicate_of_photo_id`). **`upload_files.id` is the
+future `photos.id`**: the API mints it at registration, so the object key is known before the
+`photos` row exists; a CHECK pins `photo_id` to `id`.
+
+| `upload_files.state` | Set by | Meaning |
+| --- | --- | --- |
+| `registered` | API (insert) | multipart upload created, parts may be PUT |
+| `completed` | API | parts verified, object completed, `photos` row inserted with `id = upload_files.id`, `photo.ingest` job sent |
+| `ingested` | pipeline | derivatives, EXIF, hashes written (`photos.status = 'ingested'`) |
+| `duplicate` | API (pre-check on `client_sha256`) or pipeline (server re-hash) | exact duplicate of a live photo of the baby (`duplicate_of_photo_id`, NULL when it duplicated another file of the same session); no `photos` row survives |
+| `failed` | API or pipeline | `error` ∈ `unsupported_media_type`, `file_too_large`, `decode_failed`, `free_tier_limit`, `rejected` (CSAM match), `expired`, `storage_error`, `upload_incomplete` |
+| `aborted` | API or sweep | multipart upload aborted (`error = 'expired'` when the sweep did it) |
+
+**Access.** ENABLE + FORCE RLS on both. `authenticated`: a session is visible to its creator and
+to the baby's admins (`upload_sessions_authenticated_select`); files follow their session through
+`upload_session_visible()` (SECURITY INVOKER, like `photo_visible`); INSERT needs membership and
+`created_by = auth_uid()`; UPDATE is limited to `finished_at` on sessions and `state, error,
+photo_id, multipart_upload_id` on files; no DELETE for anyone but `service_role`. `pipeline`:
+SELECT all files, SELECT only the liveness columns of sessions (`id, baby_id, finished_at,
+expires_at, created_at, updated_at`: never the batch note/people/location), UPDATE `state, error,
+photo_id, duplicate_of_photo_id` on files; it can never INSERT or DELETE either table. `viewer`:
+nothing. The SECURITY DEFINER trigger `upload_files_session_owner` (BEFORE INSERT) enforces, for
+every role: the session exists and belongs to the same baby; in a user-context transaction the
+caller is the session's creator (`upload session belongs to another user`); the session is neither
+finished nor expired (`upload session is closed`); fewer than 500 files are registered
+(`upload session is full`; the session row is locked `FOR NO KEY UPDATE` so concurrent
+registrations cannot overshoot); and (on INSERT or UPDATE) `duplicate_of_photo_id` is a photo of
+the same baby. All raise `check_violation` (23514) with messages that name no value.
+
+**Approval queue (FR-2.7).** The `photos` row is inserted at completion **under the uploader's own
+claims**, so `photos_authenticated_insert` (step 2) is what forces a contributor's row to
+`approval = 'pending'`; the API never decides this. Pending photos are invisible to other
+contributors, to `shared_photos` (gate) and to the AI queue (`photos_status_guard`).
+
+**Exact duplicates leave no `photos` row.** The unique partial index `photos_baby_id_sha256_key`
+(`(baby_id, sha256) WHERE sha256 IS NOT NULL AND deleted_at IS NULL`) is the race arbiter: when
+the worker's `UPDATE photos SET sha256 = …` hits `23505`, it sets the transient marker
+`photos.status = 'duplicate'` (new CHECK value), links `upload_files` (`state = 'duplicate'`,
+`duplicate_of_photo_id`), deletes the object versions and hard-deletes the row:
+`photos_pipeline_delete` allows `status = 'duplicate'` regardless of trash age. A marker that
+survives a worker crash is removed by the hourly `purge.trash` job. Because of this,
+`photos.duplicate_of_photo_id` means **near-duplicate** (pHash Hamming ≤ 10 of 64; flag only).
+
+**Quarantine (CSAM hash match).** `photos.quarantined_at` is writable by `pipeline` only. A
+quarantined row does not exist for any user role: `photos_authenticated_select`,
+`photos_viewer_select` and `photos_authenticated_update` carry `quarantined_at IS NULL`, child
+tables follow through `photo_visible`, `photo_editable` and `babies_avatar_guard` refuse it. It is
+**never purged automatically** (`photos_pipeline_delete` excludes quarantined rows even after 30
+days in the trash; the original is evidence) and `service_role` still sees it for the operator
+flow. The pipeline writes an `audit_log` row `safety.hash_match` (`actor_user_id IS NULL`).
+
+**Free-tier cap: what counts.** `free_tier_photo_count(baby_id)` is the one definition of
+"counts toward the 1,000-photo cap": not trashed, not quarantined, `status NOT IN ('failed',
+'duplicate')`. A failed ingest (unsupported media, decode failure, storage error, CSAM
+quarantine) keeps its `photos` row so the uploader sees why, but never eats the allowance;
+pending (unapproved) photos do count. The `photos_free_tier_cap` trigger applies the same
+predicate unconditionally (hard stop, `check_violation` `free tier photo limit reached`); the API
+should call the helper for its friendly pre-check and headroom instead of counting
+`deleted_at IS NULL` itself. SECURITY DEFINER: exact for contributors too (RLS would hide other
+contributors' pending photos from them); returns 0 for a non-member of the baby and the full
+count in a transaction without claims (`pipeline` / `service_role`); `viewer` cannot call it.
+
+**Purge (FR-10.2).** `pipeline` may `DELETE FROM photos` only when
+`(deleted_at < now() - 30 days AND quarantined_at IS NULL) OR status = 'duplicate'`, and
+`DELETE FROM babies` only when `deleted_at < now() - 30 days AND NOT
+baby_has_quarantined_photos(id)`: a trashed baby still holding a quarantined photo is never
+purged by the pipeline (the cascade would destroy the evidence row), whatever the worker's own
+query says; `service_role` (BYPASSRLS) and the superuser are unaffected, as for every purge
+rule, so the operator flow can still remove it. `baby_has_quarantined_photos` is SECURITY
+DEFINER, executable by `pipeline` and `service_role` only. Row deletion cascades
+`photo_derivatives`, `photo_exif`, `photo_details`, `photo_ai`, `photo_search`, `shared_photos`
+and sets `upload_files.photo_id` / `duplicate_of_photo_id` to NULL; object versions are deleted
+by the worker before the row.
+
+**pg-boss and the API.** The API enqueues `photo.ingest` itself (send-only pg-boss on
+`littlelight_api`). The bootstrap grants `littlelight_api` `USAGE` on `pgboss` plus
+`SELECT, INSERT, UPDATE, DELETE` on tables, `USAGE, SELECT` on sequences and `EXECUTE` on
+functions, both on existing objects and through `ALTER DEFAULT PRIVILEGES FOR ROLE
+littlelight_worker IN SCHEMA pgboss` for everything pg-boss creates at runtime (per-queue
+partitions included, since the worker creates them). `littlelight_api` still has no privilege on
+any `public` table without `SET LOCAL ROLE`; `boss.send` must therefore run outside the claims
+wrapper.
 
 ## Environment
 
@@ -268,6 +377,10 @@ PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated;
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"
 # viewer sees only shared_photos: 3, 3, permission denied for table photo_exif
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
+# viewer gets nothing on upload tables: permission denied for table upload_sessions
+PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from upload_sessions; rollback;"
+# Home label in SQL, pipeline only: Home, then <null> 200 m away; never a plaintext coordinate in the result
+PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; select set_config('app.data_key','dev-only-data-encryption-key-32-chars-min',true); select home_place_label('00000000-0000-4000-8000-000000000100', 47.6062, -122.3321), home_place_label('00000000-0000-4000-8000-000000000100', 47.6080, -122.3321); rollback;"
 ```
 
 ## Migrations
@@ -284,3 +397,4 @@ PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select
 | `1791520000600_chat-audit.sql` | `chat_threads`, `chat_messages` (+ thread guard), append-only `audit_log`; RLS | drop |
 | `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `littlelight_worker` | revert |
 | `1791600000100_auth-sessions-and-plan.sql` | guard (`auth.sessions`); session functions `auth_session_info`, `list_user_sessions`, `delete_user_session`, `count_user_sessions` (SECURITY DEFINER, `authenticated` only, no grants on `auth.*`); `baby_members.removal_requested_by/_at` (service_role-written); `babies_plan_follows_owner` + `baby_members_release_plan` triggers | drop triggers, functions, columns |
+| `1791700000100_uploads-and-ingest.sql` | `photos.status` gains `duplicate`, `photos.quarantined_at` (pipeline-only UPDATE), `quarantined_at IS NULL` on the user SELECT/UPDATE policies and in `photo_editable` / `babies_avatar_guard`, `photos_pipeline_delete` = trash > 30 d and not quarantined OR `status = 'duplicate'`; `free_tier_photo_count` helper + `photos_free_tier_cap` no longer counts failed/duplicate/quarantined rows; `baby_has_quarantined_photos` helper + `babies_pipeline_delete` refuses a baby holding a quarantined photo; `upload_sessions`, `upload_files` (+ `upload_session_visible`, `upload_files_session_owner` trigger, RLS, column grants); `home_place_label` (×2, pipeline/service_role) | drop functions, trigger, tables; restore `babies_pipeline_delete` and the step-2 cap trigger body, drop the two helpers; restore the four photos policies and two functions; drop column; `DELETE … WHERE status = 'duplicate'` then restore the old CHECK |

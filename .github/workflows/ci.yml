@@ -1,17 +1,20 @@
 # Littlelight CI (docs/plans/step-1.md task 1.10; PRD "Build order" step 1: "CI builds every image").
 #
-#   check            install (frozen lockfile), lint, typecheck (workspace + e2e/), unit tests,
-#                    integration tests (db-integration: RLS matrix etc.; api-integration: auth,
-#                    invites, babies via Fastify inject with a stubbed GoTrue) against a pgvector
-#                    service container (auth.* is stubbed by the test harness) with a guard that
-#                    fails the job if they silently skipped, a generated-DB-types drift check
+#   check            install (frozen lockfile), lint, a no-metadata grep over the worker source,
+#                    typecheck (workspace + e2e/), unit tests, integration tests (db-integration:
+#                    RLS matrix etc.; api-integration: auth, invites, babies, uploads, photos via
+#                    Fastify inject with a stubbed GoTrue and S3; worker-integration: ingest,
+#                    purge, sweep against a standalone MinIO) on a pgvector service container
+#                    (auth.* is stubbed by the test harness) with a guard that fails the job if
+#                    any project silently skipped, a generated-DB-types drift check
 #                    against a database migrated in production order (bootstrap -> GoTrue
 #                    migrate -> app migrations), and `docker compose config` for both files.
 #   images           builds every production image (api, worker, web, migrate) with buildx + GHA
 #                    cache. Nothing is pushed.
 #   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout, runs
-#                    e2e/smoke/dev-stack.sh (step-1..3 acceptance checks), then the Playwright
-#                    e2e suite (docs/plans/step-3.md 3.13: the PRD step-3 check) in Chromium.
+#                    e2e/smoke/dev-stack.sh (step-1..4 acceptance checks), then the Playwright
+#                    e2e suite (step-3 auth + step-4 upload specs) in Chromium, then the step-4
+#                    upload gate (docs/plans/step-4.md 4.1: `pnpm e2e:upload-gate`).
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
 name: CI
@@ -75,6 +78,22 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # docs/plans/step-4.md 4.4: no sharp/exif call that could carry metadata into a derivative
+      # may appear anywhere in the worker source (tests included; the fixture writer and the
+      # lint-style no-metadata.test.ts avoid the literals). grep exits 0 on a match and 2 on an
+      # error (e.g. the folder moved), so only exit 1 passes.
+      - name: No metadata-preserving calls in the worker
+        run: |
+          set -uo pipefail
+          test -d apps/worker/src/ingest || { echo "::error::apps/worker/src/ingest is missing"; exit 1; }
+          grep -rnE 'withMetadata|keepExif|keepMetadata|keepIccProfile|withIccProfile|withExif' apps/worker/src
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::metadata-preserving call found in apps/worker/src (see above)"
+            exit 1
+          fi
+          [ "$rc" -eq 1 ] || { echo "::error::grep failed (exit $rc)"; exit 1; }
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -85,16 +104,40 @@ jobs:
         run: >-
           pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
           --target es2022 --strict --types node
-          e2e/auth/*.ts e2e/helpers/*.ts e2e/playwright.config.ts
+          e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/playwright.config.ts
 
       - name: Unit tests
         run: pnpm test
 
-      # db-integration + api-integration (vitest.config.ts). Every integration suite is
-      # `describe.skipIf(!DATABASE_URL)`, and Vitest exits 0 when everything is skipped, so the
-      # JSON report is checked afterwards: each project must have executed tests and no test
-      # file may be skipped entirely (.github/scripts/check-integration-report.mjs).
-      - name: Integration tests (pgvector service)
+      # Standalone MinIO for the worker-integration project (docs/plans/step-4.md 2.11). Not a
+      # service container: those cannot set a command, and MinIO needs `server /data`. Same
+      # image pin as both Compose files; root credentials are the dev-only pair from
+      # docker-compose.dev.yml x-dev-shared. The worker harness creates the bucket and enables
+      # versioning itself. The runner is discarded after the job, so no teardown is needed.
+      - name: Start MinIO (standalone)
+        env:
+          MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+          MINIO_ROOT_USER: dev
+          MINIO_ROOT_PASSWORD: devdevdev
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD \
+            "$MINIO_IMAGE" server /data
+          for _ in $(seq 1 60); do
+            curl -fsS -o /dev/null http://localhost:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          docker logs ci-minio
+          echo "::error::MinIO did not become live on http://localhost:9000"
+          exit 1
+
+      # db-integration + api-integration + worker-integration (vitest.config.ts). Every
+      # integration suite is `describe.skipIf(...)` on DATABASE_URL (worker: and S3_ENDPOINT), and
+      # Vitest exits 0 when everything is skipped, so the JSON report is checked afterwards: each
+      # project must have executed tests and no test file may be skipped entirely
+      # (.github/scripts/check-integration-report.mjs).
+      - name: Integration tests (pgvector service + MinIO)
         env:
           # Dev-only values of the throwaway service container above (same as docker-compose.dev.yml
           # x-dev-shared). Tests connect as the superuser for fixtures and as littlelight_api /
@@ -115,13 +158,28 @@ jobs:
           SMTP_HOST: localhost
           SMTP_PORT: "1025"
           MAIL_FROM: noreply@littlelight.local
+          # worker-integration (apps/worker/src/testing/harness.ts): the MinIO started above,
+          # root credentials (bucket create + versioning + ListObjectVersions). A dedicated test
+          # bucket, as in docs/plans/step-4.md 4.4. S3_PUBLIC_ENDPOINT only matters to a test
+          # that loads the API config from process.env.
+          S3_ENDPOINT: http://localhost:9000
+          S3_PUBLIC_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: dev
+          S3_SECRET_KEY: devdevdev
+          S3_BUCKET: littlelight-test
+          S3_REGION: us-east-1
+          S3_FORCE_PATH_STYLE: "true"
           REPORT: ${{ runner.temp }}/integration-report.json
         run: |
           set -euo pipefail
           pnpm test:integration \
             --reporter=default --reporter=github-actions \
             --reporter=json --outputFile.json="$REPORT"
-          node .github/scripts/check-integration-report.mjs "$REPORT" packages/db apps/api
+          node .github/scripts/check-integration-report.mjs "$REPORT" packages/db apps/api apps/worker
+
+      - name: MinIO logs
+        if: failure()
+        run: docker logs ci-minio 2>&1 | tail -n 200 || true
 
       # packages/db/src/generated is committed; fail if it no longer matches the migrations.
       # Uses a separate database migrated exactly like Compose does it (roles + auth schema,
@@ -210,8 +268,9 @@ jobs:
   dev-stack-smoke:
     name: Dev stack smoke + e2e
     runs-on: ubuntu-24.04
-    # Image builds + up (~10 min cold), smoke, Chromium download, e2e with one retry.
-    timeout-minutes: 45
+    # Image builds + up (~10 min cold), smoke, Chromium download, e2e with one retry, two api
+    # restarts, upload gate (~3-4 min).
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -275,27 +334,44 @@ jobs:
 
       # The API's sign-in-code limit is in memory, 30 per hour per IP (docs/plans/step-3.md 2.9),
       # and every request here comes from the same IP. The smoke spends some, one e2e run ~19
-      # (more with the CI retry), so reset the counter with a restart. `up --no-deps
-      # --no-recreate --wait` only waits for api to be healthy again (no one-shot re-runs).
+      # (more with the CI retry), so reset the counter with a restart (script header).
       - name: Reset API rate limits (restart api)
-        run: |
-          set -euo pipefail
-          docker compose -f docker-compose.dev.yml restart api
-          docker compose -f docker-compose.dev.yml up -d --no-deps --no-recreate --wait \
-            --wait-timeout 180 api
-          # And through the web proxy, as the browser will reach it.
-          for _ in $(seq 1 30); do
-            curl -fsS -o /dev/null http://localhost:8080/api/healthz && exit 0
-            sleep 2
-          done
-          echo "::error::api not reachable through http://localhost:8080/api after restart"
-          exit 1
+        run: bash .github/scripts/restart-api.sh
 
-      - name: e2e (Playwright, PRD step-3 check)
+      - name: e2e (Playwright, PRD step-3 and step-4 specs)
         env:
           # e2e/playwright.config.ts: retries 1 and HTML report on CI.
           CI: "1"
         run: pnpm e2e
+
+      # The Playwright run may have used most of the hourly sign-in-code budget.
+      - name: Reset API rate limits again (restart api)
+        run: bash .github/scripts/restart-api.sh
+
+      # PRD step-4 check (docs/plans/step-4.md 4.1, e2e/upload/gate.ts): 200-file bulk upload
+      # through the API + presigned MinIO multipart, duplicates, HEIC, thumb p95 < 5 s, no GPS in
+      # derivatives, purge. Talks to the published ports (8080, 8025, 9000 with the dev root
+      # key) and shells out to `docker compose -f docker-compose.dev.yml exec` (db, worker) and
+      # `docker run alpine:3.22` (apk add exiftool, needs network). GATE_UPLOAD_RATE and
+      # INGEST_CONCURRENCY stay at their defaults. ~1-2 min of setup plus ~70 s of paced
+      # uploads; the step timeout bounds a hang.
+      - name: Upload gate (PRD step-4 check)
+        timeout-minutes: 15
+        env:
+          GATE_LOG: ${{ runner.temp }}/upload-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$GATE_LOG")"
+          pnpm e2e:upload-gate 2>&1 | tee "$GATE_LOG"
+
+      - name: Upload gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upload-gate
+          path: ${{ runner.temp }}/upload-gate
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload Playwright report and traces
         if: failure()

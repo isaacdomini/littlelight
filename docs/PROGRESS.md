@@ -182,3 +182,59 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Still open from earlier steps: bucket-scoped MinIO key (step 4), MinIO version purge on delete,
     production credentials (tunnel, B2).
 - **Commit**: step 3: auth and onboarding
+
+## Step 4: Upload and ingest
+
+- **Built**: Resumable S3 multipart uploads straight from the client to MinIO (16 MiB parts, presigned
+  per-part URLs on `S3_PUBLIC_ENDPOINT`, server-driven complete via ListParts, 100 MiB max, 500 files per
+  session, 24 h sessions). Migration 11: `upload_sessions`, `upload_files` (`photos.id = upload_files.id`),
+  `photos.status 'duplicate'`, `photos.quarantined_at`, per-baby unique SHA-256, RLS for contributors
+  (pending) vs admins, `home_place_label` (Home within 150 m computed in SQL), free-tier count helper
+  (excludes failed/duplicate/quarantined/trashed; pending counts), baby purge guard while quarantined
+  photos exist. API: upload sessions/register/parts/complete/abort/finish, photos list (signed thumb/display
+  URLs ≤ 1 h, one object each; failed/duplicate hidden), photo detail, admin-only original download,
+  approve/reject, trash/restore; pg-boss send-only. Worker (pipeline role): sniff (file-type), SHA-256 +
+  in-house pHash (near-dup ≤ 10 of 64), EXIF whitelist via exifr, GPS encrypted + Home label, age at
+  capture (estimated flag), HEIC via heic-decode, thumb 320 / display 1600 / analysis 768 JPEG q75 with all
+  metadata stripped, CSAM matcher seam (no-op default; PhotoDNA client untested), quarantine, exact-dup
+  removal incl. object versions, purge.trash (30 days, all versions), uploads.sweep, ingest.reconcile,
+  80 % disk alert via read-only storage mount, run-job CLI. MinIO: bucket-scoped `littlelight-api` (no
+  delete) and `littlelight-worker` (deletes incl. versions) service accounts from `storage-init`, 7-day
+  noncurrent lifecycle, CORS. Web: upload screen (picker, drag-and-drop, per-photo progress, retry,
+  resume after reload, summary line, batch details), basic timeline grid, admin approval queue.
+  Tests: 561 unit, 544 integration (db 275, api 222, worker 47 against real MinIO), 15 Playwright e2e,
+  committed HEIC fixtures, `pnpm e2e:upload-gate`; CI runs worker integration with a MinIO container,
+  the no-metadata grep, and the upload gate in the dev-stack job.
+- **Gate**: orchestrator ran lint, typecheck (incl. e2e), unit (561), integration (544, none skipped) on
+  fresh pgvector + MinIO, then from a clean copy: smoke passed, `pnpm e2e` 15/15, upload gate PASSED:
+  ingested 178, failed 2, duplicates 20 skipped, near-duplicates 3, HEIC 5 → JPEG derivatives, thumbnail
+  latency p50/p95/max 247/436/615 ms, wall 69.5 s, 356/356 served derivatives without EXIF/GPS, 151 GPS
+  rows encrypted, purge 3 photos → 0 rows / 0 object versions.
+- **Decisions**:
+  - **User decisions (2026-10-08):** cloudflared runs outside Compose (removed with its token); prod
+    publishes only `web` → `${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}` (littlelight.tesarsoft.com) and
+    `storage` → `${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}` (files.littlelight.tesarsoft.com, keep
+    Host header, path `^/littlelight/.`); every dev port is env-driven too, with PUBLIC_URL, GoTrue URLs
+    and S3_PUBLIC_ENDPOINT derived from them. Host exiftool install was approved but Homebrew needs the
+    Xcode license (sudo); exiftool runs via Docker instead.
+  - Gate pacing: the gate uploads at 3 photos/s (`GATE_UPLOAD_RATE`, ~1.8× the PRD's 500-in-5-min
+    target). A 55/s burst gave p95 37 s at `INGEST_CONCURRENCY=2`; queue wait, not per-photo time.
+  - Oversize/unsupported files are rejected client-side and counted as failed; the API keeps strict limits.
+  - Failed ingests stay as `status='failed'` rows hidden from album views and excluded from the free cap.
+  - Pending contributor uploads count toward the free-tier cap; rejected ones go to trash.
+  - No reverse geocoding (only "Home"); city/park labels need a decision on which geocoder may receive GPS.
+  - Prod env renames: storage root key → `S3_ROOT_USER`/`S3_ROOT_PASSWORD`; new `S3_API_*` and
+    `S3_WORKER_*` pairs.
+- **Open issues**:
+  - Needs user: CSAM provider enrolment (PhotoDNA or NCMEC hash provider) + NCMEC report procedure;
+    production `.env` additions above; configure the external tunnel per
+    `docker/cloudflared/config.example.yml`.
+  - For the final review: the API MinIO key can list object-version metadata (MinIO grants it with
+    `s3:ListBucket`, needed for HeadBucket); `tz.ts` DST-gap comment vs behaviour east of UTC;
+    `ingest.reconcile` re-sends without `tzHint` (pipeline can't read profiles.timezone); thumb p95 on
+    small CI runners unverified until a real GitHub run.
+  - Step 5: photo list sorts by `COALESCE(taken_at, created_at)` without a matching index; grid isn't
+    virtualized (needs react-virtuoso); custom milestones need a create endpoint; seed demo photos have
+    placeholder keys (10,000-photo seed should create real derivatives).
+  - Disk is ~9 GB free; Docker build cache was pruned with the user's OK.
+- **Commit**: step 4: upload and ingest

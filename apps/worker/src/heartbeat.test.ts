@@ -95,4 +95,40 @@ describe("beatOnce", () => {
     };
     await expect(beatOnce(deps)).rejects.toThrow("db down");
   });
+
+  it("reports diskUsedPct in details when the disk monitor answers", async () => {
+    const { deps, calls } = makeDeps(async () => ({}));
+    deps.diskUsedPct = async () => 83.4;
+    const result = await beatOnce(deps);
+    expect(result.diskUsedPct).toBe(83.4);
+    expect(JSON.parse(String(calls[0]?.values?.[5])).diskUsedPct).toBe(83.4);
+  });
+
+  it("omits diskUsedPct when the check is disabled, undefined, or throws", async () => {
+    for (const diskUsedPct of [
+      undefined,
+      async () => undefined,
+      async () => {
+        throw new Error("statfs failed");
+      },
+    ]) {
+      const { deps, calls } = makeDeps(async () => ({}));
+      if (diskUsedPct) deps.diskUsedPct = diskUsedPct;
+      const result = await beatOnce(deps);
+      expect(result.diskUsedPct).toBeUndefined();
+      expect(JSON.parse(String(calls[0]?.values?.[5]))).not.toHaveProperty("diskUsedPct");
+    }
+  });
+
+  it("still reports the disk when storage is down", async () => {
+    const { deps, calls } = makeDeps(async () => {
+      throw new Error("down");
+    });
+    deps.diskUsedPct = async () => 91;
+    await beatOnce(deps);
+    expect(JSON.parse(String(calls[0]?.values?.[5]))).toMatchObject({
+      diskUsedPct: 91,
+      storageError: "error",
+    });
+  });
 });

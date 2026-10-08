@@ -13,7 +13,9 @@ declare module "fastify" {
 
 /**
  * Server-side S3 client for MinIO. Uses the internal `S3_ENDPOINT` (e.g. `http://storage:9000`);
- * `S3_PUBLIC_ENDPOINT` is only for signing client-facing URLs (step 4) and never used here.
+ * `S3_PUBLIC_ENDPOINT` is only for signing client-facing URLs (`storage/sign.ts`) and never used
+ * here. Checksums only when an operation requires them: browser-uploaded parts carry none, so a
+ * default checksum algorithm on CreateMultipartUpload/Complete would make completion fail.
  */
 export function createS3Client(
   config: Pick<
@@ -29,6 +31,8 @@ export function createS3Client(
       accessKeyId: config.S3_ACCESS_KEY,
       secretAccessKey: config.S3_SECRET_KEY,
     },
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
 }
 
