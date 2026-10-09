@@ -10,7 +10,13 @@ import {
   uploadPartsResponseSchema,
   uploadSessionSchema,
 } from "@littlelight/shared";
-import { getUploader, PartUploadError, type Uploader } from "../../platform/uploader";
+import {
+  getUploader,
+  type NativeFileRef,
+  PartUploadError,
+  type PutPartOptions,
+  type Uploader,
+} from "../../platform/uploader";
 import { ApiError, apiFetch, isApiError } from "../api";
 import { readCaptureHint } from "./exif";
 import { sha256Hex } from "./hash";
@@ -77,7 +83,12 @@ const PART_ATTEMPTS = 3;
 const REGISTER_DEBOUNCE_MS = 100;
 
 interface Runtime {
-  file: File;
+  /** The bytes. Native items hold none (null) except while hashing or a foreground multi-part PUT. */
+  file: File | null;
+  size: number;
+  mime: string;
+  /** Native only: the app-private copy of a picked/captured photo. */
+  nativeRef: NativeFileRef | undefined;
   detailsKey: string;
   details: UploadDetails | undefined;
   sha256: string | null;
@@ -136,6 +147,16 @@ export function hasResumableUpload(babyId: string): boolean {
 
 export function clearResumableUpload(babyId: string): void {
   writeResume(babyId, null);
+}
+
+// Native helpers load lazily so the web bundle never pulls Capacitor code.
+async function readNativeFile(ref: NativeFileRef): Promise<File> {
+  const { fileFromRef } = await import("../../platform/native/files");
+  return fileFromRef(ref);
+}
+
+function releaseNativeCopy(ref: NativeFileRef): void {
+  void import("../../platform/native/files").then((m) => m.deleteNativeCopy(ref)).catch(() => {});
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -207,8 +228,30 @@ export class UploadManager {
   }
 
   private patch(clientId: string, change: Partial<UploadItem>) {
+    if (change.state && this.endsNativeNeed(change)) this.releaseNative(clientId);
     this.snapshot = this.snapshot.map((i) => (i.clientId === clientId ? { ...i, ...change } : i));
     for (const l of this.listeners) l();
+  }
+
+  /** The photo's bytes are no longer needed on this device (uploaded, rejected or cancelled). */
+  private endsNativeNeed(change: Partial<UploadItem>): boolean {
+    const s = change.state;
+    return (
+      s === "completed" ||
+      s === "ingested" ||
+      s === "duplicate" ||
+      s === "aborted" ||
+      (s === "failed" && change.retryable !== true)
+    );
+  }
+
+  private releaseNative(clientId: string) {
+    const r = this.rt.get(clientId);
+    if (r?.nativeRef) {
+      releaseNativeCopy(r.nativeRef);
+      r.nativeRef = undefined;
+      r.file = null;
+    }
   }
 
   private item(clientId: string): UploadItem | undefined {
@@ -223,6 +266,41 @@ export class UploadManager {
   }
 
   // ---- adding files ----------------------------------------------------------------------
+
+  /**
+   * Native: queue picked/captured photos by reference. Bytes are read one file at a time for the
+   * SHA-256 + EXIF hint and then released; the PUT streams from disk in the background.
+   */
+  addNative(babyId: string, refs: NativeFileRef[], details?: UploadDetails): void {
+    const detailsKey = JSON.stringify(details ?? {});
+    const added: UploadItem[] = [];
+    for (const ref of refs) {
+      const clientId = `${++this.counter}-${sanitizeName(ref.name)}`;
+      const reason = validateFile({ name: ref.name, size: ref.size, type: ref.mime });
+      added.push({
+        clientId,
+        babyId,
+        name: ref.name,
+        size: ref.size,
+        state: reason ? "failed" : "queued",
+        progress: 0,
+        error: reason,
+        retryable: false,
+      });
+      if (reason) {
+        releaseNativeCopy(ref);
+      } else {
+        const r = this.newRuntime(null, detailsKey, details);
+        r.nativeRef = ref;
+        r.size = ref.size;
+        r.mime = ref.mime;
+        this.rt.set(clientId, r);
+      }
+    }
+    this.snapshot = [...this.snapshot, ...added];
+    for (const l of this.listeners) l();
+    this.kickPrep();
+  }
 
   /** Queue files for a baby. Rejected files appear as failed and are never sent to the API. */
   add(babyId: string, files: File[], details?: UploadDetails): void {
@@ -251,9 +329,16 @@ export class UploadManager {
     this.kickPrep();
   }
 
-  private newRuntime(file: File, detailsKey: string, details: UploadDetails | undefined): Runtime {
+  private newRuntime(
+    file: File | null,
+    detailsKey: string,
+    details: UploadDetails | undefined,
+  ): Runtime {
     return {
       file,
+      size: file?.size ?? 0,
+      mime: file?.type ?? "",
+      nativeRef: undefined,
       detailsKey,
       details,
       sha256: null,
@@ -370,10 +455,21 @@ export class UploadManager {
           const r = this.rt.get(next.clientId);
           if (!r) break;
           this.patch(next.clientId, { state: "hashing" });
-          const [sha, hint] = await Promise.all([sha256Hex(r.file), readCaptureHint(r.file)]);
+          let file = r.file;
+          if (!file && r.nativeRef) {
+            try {
+              file = await readNativeFile(r.nativeRef);
+            } catch {
+              this.fail(next.clientId, "unknown", false);
+              continue;
+            }
+          }
+          if (!file) break;
+          const [sha, hint] = await Promise.all([sha256Hex(file), readCaptureHint(file)]);
           r.sha256 = sha;
           r.hint = hint;
           r.prepared = true;
+          if (r.nativeRef) r.file = null; // release the bytes; the PUT streams from disk
           if (r.cancelled) continue;
           this.patch(next.clientId, { state: "registering" });
           this.scheduleRegister();
@@ -481,10 +577,10 @@ export class UploadManager {
     const batch = group.slice(0, Math.max(1, room));
     const files: UploadFileRegister[] = batch.map((g) => {
       const r = this.rt.get(g.clientId) as Runtime;
-      const mime = acceptedMime(r.file.type);
+      const mime = acceptedMime(r.mime);
       return {
         clientId: g.clientId,
-        bytes: r.file.size,
+        bytes: r.size,
         ...(r.sha256 ? { clientSha256: r.sha256 } : {}),
         ...(mime ? { mime } : {}),
         ...(r.hint.takenAt ? { takenAt: r.hint.takenAt } : {}),
@@ -574,7 +670,7 @@ export class UploadManager {
     const base = `/uploads/${r.sessionId}/files/${r.fileId}`;
     const abort = new AbortController();
     r.abort = abort;
-    const size = r.file.size;
+    const size = r.size;
     this.patch(clientId, { state: "uploading", progress: 0, error: null });
     try {
       const urls = new Map<number, string>();
@@ -597,8 +693,20 @@ export class UploadManager {
       for (let attempt = 0; ; attempt++) {
         for (const [partNumber] of [...urls].sort((a, b) => a[0] - b[0])) {
           if (done.has(partNumber)) continue;
-          const blob = r.file.slice((partNumber - 1) * r.partSize, partNumber * r.partSize);
-          await this.putPart(partNumber, blob, urls, loadParts, abort.signal, (loaded) =>
+          const start = (partNumber - 1) * r.partSize;
+          const end = partNumber * r.partSize;
+          const ref = r.nativeRef;
+          const up = this.uploader();
+          const put =
+            ref && up.putFile && urls.size === 1 && size <= r.partSize
+              ? (url: string, o: PutPartOptions) =>
+                  (up.putFile as NonNullable<Uploader["putFile"]>)(url, ref, o)
+              : async (url: string, o: PutPartOptions) => {
+                  r.file ??= ref ? await readNativeFile(ref) : null;
+                  if (!r.file) throw new ApiError(0, "unknown", "missing file");
+                  await up.putPart(url, r.file.slice(start, end), o);
+                };
+          await this.putPart(partNumber, put, urls, loadParts, abort.signal, (loaded) =>
             this.patch(clientId, { progress: Math.min(1, (doneBytes() + loaded) / size) }),
           );
           done.add(partNumber);
@@ -642,7 +750,7 @@ export class UploadManager {
 
   private async putPart(
     partNumber: number,
-    blob: Blob,
+    put: (url: string, opts: PutPartOptions) => Promise<void>,
     urls: Map<number, string>,
     refresh: () => Promise<void>,
     signal: AbortSignal,
@@ -653,7 +761,7 @@ export class UploadManager {
       const url = urls.get(partNumber);
       if (!url) throw new ApiError(0, "unknown", "missing part url");
       try {
-        await this.uploader().putPart(url, blob, { onProgress, signal });
+        await put(url, { onProgress, signal });
         return;
       } catch (e) {
         if (isAbort(e)) throw e;
@@ -744,7 +852,7 @@ export class UploadManager {
     for (const i of this.snapshot) {
       const r = this.rt.get(i.clientId);
       if (i.babyId === babyId && r?.sessionId === sid && r.fileId && r.sha256) {
-        files.push({ sha256: r.sha256, size: r.file.size, fileId: r.fileId });
+        files.push({ sha256: r.sha256, size: r.size, fileId: r.fileId });
       }
     }
     writeResume(babyId, { sessionId: sid, files });

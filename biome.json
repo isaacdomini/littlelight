@@ -15,7 +15,9 @@
       "!.claude",
       "!docs",
       "!apps/mobile-web/ios",
-      "!apps/mobile-web/android"
+      "!apps/mobile-web/android",
+      "!apps/mobile-web/fastlane",
+      "!e2e/native-results"
     ]
   },
   "formatter": {

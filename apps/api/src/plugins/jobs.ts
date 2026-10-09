@@ -2,6 +2,12 @@ import {
   type IngestJob,
   ingestJobSchema,
   JOBS,
+  PUSH_NOTIFY_JOB,
+  PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+  PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
+  type PushNotifyJob,
+  pushNotifyJobSchema,
+  pushNotifySingletonKey,
   type ReindexJob,
   reindexJobSchema,
   type ShareApplyJob,
@@ -36,6 +42,14 @@ import { errorCategory } from "../routes/healthz";
 // the strict `shareApplyJobSchema` lets nothing but the link id and the reason through (never a
 // token, passcode, link name or tag). A lost send is repaired by the worker's hourly
 // `share.reconcile` (the rule's `updated_at` is newer than its `evaluated_at`).
+//
+// Step 9 (docs/plans/step-9.md 2.8) adds `push.notify {kind, id}` (`enqueuePush`): sent after
+// commit, outside `runAs`, by the viewer exchange when it created a new viewer session
+// (`share_viewed`, task 9.10). The strict `pushNotifyJobSchema` lets only the kind and one id
+// through (never a device token, name, count or text). `singletonKey` = `${kind}:${id}` on the
+// worker's `short` queue, so a burst coalesces into one queued job; `startAfter` is the debounce
+// (`PUSH_SHARE_DEBOUNCE_SEC` / `PUSH_PHOTOS_DEBOUNCE_SEC`). A lost send loses one notification
+// (no reconcile: pushes are best effort).
 
 /** Per-photo ingest options (plan 2.5): one queued copy per photo, 3 retries with backoff. */
 export const INGEST_SEND_OPTIONS = Object.freeze({
@@ -65,6 +79,33 @@ export const SHARE_APPLY_SEND_OPTIONS = Object.freeze({
   retryDelay: 30,
   expireInSeconds: 900,
 }) satisfies SendOptions;
+
+/**
+ * `push.notify` options (2.8): 2 retries, 5-minute expiry; `startAfter` (the debounce, seconds)
+ * is added per kind by `pushSendOptions`.
+ */
+export const PUSH_SEND_OPTIONS = Object.freeze({
+  retryLimit: 2,
+  expireInSeconds: 300,
+}) satisfies SendOptions;
+
+/** Debounce per push kind, in seconds (`PUSH_PHOTOS_DEBOUNCE_SEC` / `PUSH_SHARE_DEBOUNCE_SEC`). */
+export interface PushDebounce {
+  photosAnalyzedSec: number;
+  shareViewedSec: number;
+}
+
+export const PUSH_DEBOUNCE_DEFAULTS: Readonly<PushDebounce> = Object.freeze({
+  photosAnalyzedSec: PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+  shareViewedSec: PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
+});
+
+/** The full send options of one `push.notify` job (without the singleton key). */
+export function pushSendOptions(job: PushNotifyJob, debounce: PushDebounce): SendOptions {
+  const startAfter =
+    job.kind === "photos_analyzed" ? debounce.photosAnalyzedSec : debounce.shareViewedSec;
+  return { ...PUSH_SEND_OPTIONS, ...(startAfter > 0 ? { startAfter } : {}) };
+}
 
 /** The slice of `PgBoss` the API uses; tests pass a stub. */
 export interface BossLike {
@@ -99,6 +140,18 @@ export interface JobQueue {
    * `createJobQueue` always implements it and `app.jobs` (see `registerJobs`) always has it.
    */
   enqueueShareApply?(job: ShareApplyJob): Promise<boolean>;
+  /**
+   * Validate and enqueue `push.notify` (singletonKey `${kind}:${id}`, `startAfter` = the kind's
+   * debounce). Same contract: `true` when accepted (or coalesced into a queued job), `false`
+   * after a failed retry (logged by category and job name only), never throws for transport
+   * errors; throws only for an invalid payload. Call only after the writing transaction
+   * committed, outside `runAs`. A failed send can take ~1 s (one retry): callers that must not
+   * delay their response run it without awaiting (`void app.jobs.enqueuePush(...)`).
+   *
+   * Optional in this interface only so job-queue stubs written before step 9 still type-check;
+   * `createJobQueue` always implements it and `app.jobs` always has it.
+   */
+  enqueuePush?(job: PushNotifyJob): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -117,6 +170,8 @@ export interface JobQueueOptions {
   createBoss: () => BossLike;
   /** Delay before the single retry. Default 1000 ms. */
   retryDelayMs?: number;
+  /** `push.notify` debounce per kind. Default `PUSH_DEBOUNCE_DEFAULTS`. */
+  pushDebounce?: PushDebounce;
 }
 
 /** pg-boss constructed send-only: no schema creation, migrations, maintenance or cron. */
@@ -137,6 +192,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 export function createJobQueue(opts: JobQueueOptions): AppJobQueue {
   const retryDelayMs = opts.retryDelayMs ?? 1000;
+  const pushDebounce = opts.pushDebounce ?? PUSH_DEBOUNCE_DEFAULTS;
   let boss: BossLike | null = null;
   let starting: Promise<BossLike> | null = null;
   let closed = false;
@@ -218,6 +274,16 @@ export function createJobQueue(opts: JobQueueOptions): AppJobQueue {
         "share apply enqueue failed; share.reconcile will catch up",
       );
     },
+    async enqueuePush(input) {
+      const job = pushNotifyJobSchema.parse(input);
+      return sendWithRetry(
+        PUSH_NOTIFY_JOB,
+        job,
+        pushNotifySingletonKey(job),
+        pushSendOptions(job, pushDebounce),
+        "push enqueue failed; this notification is skipped",
+      );
+    },
     async close() {
       closed = true;
       const b = boss ?? (starting ? await starting.catch(() => null) : null);
@@ -250,20 +316,31 @@ export async function enqueueReindexAll(
 }
 
 /**
- * `jobs` with every sender present. A stub without `enqueueShareApply` gets one that validates the
- * payload (a bad payload still throws, as in production), logs by job name only and resolves
- * `false` (the "not accepted" result; `share.reconcile` would catch up). Exported for tests.
+ * `jobs` with every sender present. A stub without `enqueueShareApply` / `enqueuePush` gets one
+ * that validates the payload (a bad payload still throws, as in production), logs by job name
+ * only and resolves `false` (the "not accepted" result). Exported for tests.
  */
 export function withAllSenders(jobs: JobQueue, log: Pick<FastifyBaseLogger, "warn">): AppJobQueue {
-  if (jobs.enqueueShareApply) return jobs as AppJobQueue;
+  if (jobs.enqueueShareApply && jobs.enqueuePush) return jobs as AppJobQueue;
+  const shareApply = jobs.enqueueShareApply?.bind(jobs);
+  const push = jobs.enqueuePush?.bind(jobs);
   return {
     enqueueIngest: (job) => jobs.enqueueIngest(job),
     enqueueReindex: (job) => jobs.enqueueReindex(job),
-    async enqueueShareApply(input) {
-      shareApplyJobSchema.parse(input);
-      log.warn({ job: JOBS.shareApply }, "job queue has no share.apply sender; not enqueued");
-      return false;
-    },
+    enqueueShareApply:
+      shareApply ??
+      (async (input) => {
+        shareApplyJobSchema.parse(input);
+        log.warn({ job: JOBS.shareApply }, "job queue has no share.apply sender; not enqueued");
+        return false;
+      }),
+    enqueuePush:
+      push ??
+      (async (input) => {
+        pushNotifyJobSchema.parse(input);
+        log.warn({ job: PUSH_NOTIFY_JOB }, "job queue has no push.notify sender; not enqueued");
+        return false;
+      }),
     close: () => jobs.close(),
   };
 }

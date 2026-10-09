@@ -178,7 +178,7 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
     expect(again.revoked_at).toBeNull();
   });
 
-  it("GoTrue-compatible auth rows: confirmed, empty-string tokens (not NULL), identities", async () => {
+  it("GoTrue-compatible auth rows: confirmed, string tokens (never NULL), identities", async () => {
     const u = await db.admin.query(
       `SELECT email, aud, role, email_confirmed_at IS NOT NULL AS confirmed,
               confirmation_token, recovery_token, email_change, email_change_token_new
@@ -195,11 +195,18 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
         aud: "authenticated",
         role: "authenticated",
         confirmed: true,
-        confirmation_token: "",
-        recovery_token: "",
-        email_change: "",
-        email_change_token_new: "",
       });
+      // GoTrue scans these as strings, so NULL breaks sign-in. The seed inserts "" but GoTrue
+      // itself fills recovery_token / confirmation_token on a real sign-in, so a dev DB that has
+      // been used holds non-empty values: assert "not NULL", not "empty".
+      for (const col of [
+        "confirmation_token",
+        "recovery_token",
+        "email_change",
+        "email_change_token_new",
+      ]) {
+        expect(typeof r[col], `${r.email} ${col}`).toBe("string");
+      }
     }
     const ids = await db.admin.query(
       "SELECT provider, provider_id, user_id FROM auth.identities WHERE user_id = ANY($1::uuid[]) ORDER BY user_id",
@@ -210,6 +217,54 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
       expect(r.provider).toBe("email");
       expect(r.provider_id).toBe(r.user_id);
     }
+  });
+
+  it("every demo original is a JPEG at babies/<baby>/originals/<photo>.jpg (step 9: real illustrations)", async () => {
+    const r = await db.admin.query(
+      "SELECT id, mime, storage_key_original AS key FROM public.photos WHERE baby_id = $1 ORDER BY id",
+      [DEMO.baby],
+    );
+    expect(r.rows).toHaveLength(12);
+    for (const row of r.rows) {
+      expect(row.mime, row.id).toBe("image/jpeg");
+      expect(row.key, row.id).toBe(`babies/${DEMO.baby}/originals/${row.id}.jpg`);
+    }
+  });
+
+  it("re-seeding keeps the real photo and derivative sizes the worker wrote (and restores a changed key)", async () => {
+    const photo = DEMO.photo(2);
+    await db.admin.query(
+      "UPDATE public.photos SET width = 1234, height = 987, bytes = 55555 WHERE id = $1",
+      [photo],
+    );
+    await db.admin.query(
+      "UPDATE public.photo_derivatives SET width = 321, height = 123, bytes = 4242 WHERE photo_id = $1 AND kind = 'thumb'",
+      [photo],
+    );
+    await seed({ env, databaseUrl, log });
+    const p = await one<{ width: number; height: number; bytes: number }>(
+      "SELECT width, height, bytes::int FROM public.photos WHERE id = $1",
+      [photo],
+    );
+    expect(p).toEqual({ width: 1234, height: 987, bytes: 55555 });
+    const d = await one<{ width: number; height: number; bytes: number }>(
+      "SELECT width, height, bytes::int FROM public.photo_derivatives WHERE photo_id = $1 AND kind = 'thumb'",
+      [photo],
+    );
+    expect(d).toEqual({ width: 321, height: 123, bytes: 4242 });
+
+    // A derivative whose key was changed is restored whole (its sizes described another object).
+    await db.admin.query(
+      "UPDATE public.photo_derivatives SET storage_key = 'elsewhere/thumb.jpg', width = 5 WHERE photo_id = $1 AND kind = 'thumb'",
+      [photo],
+    );
+    await seed({ env, databaseUrl, log });
+    const restored = await one<{ storage_key: string; width: number }>(
+      "SELECT storage_key, width FROM public.photo_derivatives WHERE photo_id = $1 AND kind = 'thumb'",
+      [photo],
+    );
+    expect(restored.storage_key).toBe(`babies/${DEMO.baby}/derivatives/${photo}/thumb.jpg`);
+    expect(restored.width).toBe(300);
   });
 
   it("logs counts and the dev share token only: no coordinates, keys or notes", () => {

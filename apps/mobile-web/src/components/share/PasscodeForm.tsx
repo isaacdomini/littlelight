@@ -4,6 +4,7 @@ import { t } from "../../i18n";
 import { ShareApiError } from "../../lib/shareApi";
 import { FlowPage } from "../Page";
 import { Button, Message, TextField } from "../ui";
+import { NativeDone } from "./NativeDone";
 
 /** Passcode entry for a protected link: 6 digits, submits at the last digit. */
 export function PasscodeForm({
@@ -104,6 +105,7 @@ export function PasscodeForm({
           {t("shareViewer.passcodeSubmit")}
         </Button>
       </form>
+      <NativeDone />
     </FlowPage>
   );
 }

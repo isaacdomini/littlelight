@@ -8,6 +8,11 @@ import {
   ingestJobSchema,
   JOBS,
   type JobName,
+  PUSH_MIN_GAP_MIN_DEFAULT,
+  PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+  type PushNotifyJob,
+  pushNotifyJobSchema,
+  pushNotifySingletonKey,
   type ReindexJob,
   reindexJobSchema,
   SEARCH_DEFAULTS,
@@ -26,6 +31,13 @@ import type { WorkerConfig } from "./config";
 import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
+import {
+  createPushSender,
+  handlePushNotifyJob,
+  type PushNotifyJobLike,
+  type PushNotifyResult,
+  type PushSender,
+} from "./push";
 import { reconcileIngest } from "./reconcile";
 import { handleReindexJobs, type ReconcileResult, type SearchIndexer } from "./reindex";
 import { type AutoShareResult, type AutoSharer, createAutoSharer } from "./sharing/autoshare";
@@ -59,7 +71,14 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // changed, `singletonKey = shareLinkId` (one queued/active full sync per link; a send while one is
 // active is dropped, and `share.reconcile` then re-syncs the rule because its `evaluated_at` is
 // older than its `updated_at`). `share.reconcile` is a cron singleton (`SHARE_RECONCILE_CRON`, no
-// retry: the next tick is the retry). Twelve queues in total.
+// retry: the next tick is the retry).
+//
+// Step 9 (docs/plans/step-9.md 2.8): `push.notify` is the one `short` queue: at most one QUEUED
+// job per `singletonKey` (`${kind}:${id}`, `pushNotifySingletonKey`), unlimited active, so a burst
+// of reindex batches or viewer exchanges coalesces into one notification while the debounce
+// (`startAfter`) runs, and a running job can re-send itself for the min-gap rule. Sent by the
+// reindex hook (`photos_analyzed`) and the api (`share_viewed`), `retryLimit 2`, 5-minute expiry.
+// Thirteen queues in total.
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -104,6 +123,12 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     expireInSeconds: 900,
   },
   [JOBS.shareReconcile]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 3000 },
+  [JOBS.pushNotify]: {
+    policy: "short",
+    retryLimit: 2,
+    retryDelay: 30,
+    expireInSeconds: 300,
+  },
 });
 
 /** Handlers per worker process for `photo.reindex` (docs/plans/step-7.md 2.7). */
@@ -266,6 +291,47 @@ export const SHARE_RECONCILE_SEND_OPTIONS: SendOptions = Object.freeze({
   expireInSeconds: 3000,
 });
 
+/**
+ * `push.notify` send options (docs/plans/step-9.md 2.8), the same as the api's
+ * `PUSH_SEND_OPTIONS`: 2 retries, 5-minute expiry (the queue adds `retryDelay 30`); the
+ * singleton key and the debounce (`startAfter`) are added per job by `pushNotifySendOptions`.
+ */
+export const PUSH_NOTIFY_SEND_OPTIONS: SendOptions = Object.freeze({
+  retryLimit: 2,
+  expireInSeconds: 300,
+});
+
+/** Full send options of one `push.notify` job: key `${kind}:${id}`, `startAfter` when > 0. */
+export function pushNotifySendOptions(job: PushNotifyJob, startAfterSec: number): SendOptions {
+  return {
+    ...PUSH_NOTIFY_SEND_OPTIONS,
+    singletonKey: pushNotifySingletonKey(job),
+    ...(startAfterSec > 0 ? { startAfter: startAfterSec } : {}),
+  };
+}
+
+/**
+ * Validate and enqueue one `push.notify`, delayed by `startAfterSec` (the debounce, or the
+ * remaining min gap of a re-send). Resolves null when one is already queued for the key.
+ */
+export async function sendPushNotify(
+  boss: Pick<PgBoss, "send">,
+  job: PushNotifyJob,
+  startAfterSec: number,
+): Promise<string | null> {
+  const data = pushNotifyJobSchema.parse(job);
+  return boss.send(JOBS.pushNotify, data, pushNotifySendOptions(data, startAfterSec));
+}
+
+/** Push settings of the worker (`pushEnvSchema`): the sender, the gap and the photos debounce. */
+export interface PushQueueDeps {
+  sender: PushSender;
+  /** `PUSH_MIN_GAP_MIN`. */
+  minGapMin: number;
+  /** `PUSH_PHOTOS_DEBOUNCE_SEC`: `startAfter` of the reindex hook's `photos_analyzed`. */
+  photosDebounceSec: number;
+}
+
 export interface QueueDeps {
   ingest: IngestDeps;
   purge: PurgeDeps;
@@ -283,6 +349,12 @@ export interface QueueDeps {
    * sharing) one is created on first use over `ingest.pool`, so no handler ever runs without it.
    */
   autoSharer?: AutoSharer;
+  /**
+   * Push notifications (docs/plans/step-9.md 2.8). `main.ts` always passes it; when omitted (unit
+   * tests written before step 9) the `push.notify` handler still runs with a `none` sender
+   * (every delivery `unconfigured`) and the default gap/debounce.
+   */
+  push?: PushQueueDeps;
   log: WorkerLog;
   ingestConcurrency: number;
 }
@@ -434,6 +506,47 @@ export async function handleSearchBackfillJob(
 
 type ShareHandlerDeps = { autoSharer: Pick<AutoSharer, "applyLink" | "reconcile">; log: WorkerLog };
 
+/** `deps.push`, or a `none` sender with the default gap/debounce (see `QueueDeps.push`). */
+function pushDepsOf(deps: QueueDeps): PushQueueDeps {
+  return (
+    deps.push ?? {
+      sender: createPushSender(
+        {
+          PUSH_PROVIDER: "none",
+          APNS_BUNDLE_ID: "",
+          APNS_ENVIRONMENT: "sandbox",
+          NODE_ENV: "test",
+        },
+        deps.log,
+      ),
+      minGapMin: PUSH_MIN_GAP_MIN_DEFAULT,
+      photosDebounceSec: PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+    }
+  );
+}
+
+/**
+ * `push.notify` handler (docs/plans/step-9.md 2.8; `apps/worker/src/push/notify.ts`): the
+ * min-gap re-send goes back through `sendPushNotify`. Malformed payloads are dropped (job id
+ * logged); a failed send makes it throw after recording so pg-boss retries.
+ */
+export async function handlePushJob(
+  deps: { pool: QueueDeps["ingest"]["pool"]; push: PushQueueDeps; log: WorkerLog },
+  boss: Pick<PgBoss, "send">,
+  job: PushNotifyJobLike,
+): Promise<PushNotifyResult | null> {
+  return handlePushNotifyJob(
+    {
+      pool: deps.pool,
+      sender: deps.push.sender,
+      log: deps.log,
+      minGapMin: deps.push.minGapMin,
+      resend: (payload, startAfterSec) => sendPushNotify(boss, payload, startAfterSec),
+    },
+    job,
+  );
+}
+
 /**
  * `share.apply` handler (`shareApplyJobSchema`): full auto-share sync of one link. A malformed
  * payload is logged (job id only) and dropped; sync errors propagate so pg-boss retries.
@@ -526,6 +639,7 @@ export async function startWorkers(
 ): Promise<void> {
   const autoSharer = autoSharerOf(deps);
   const shareDeps: ShareHandlerDeps = { autoSharer, log: deps.log };
+  const push = pushDepsOf(deps);
   await boss.work(
     JOBS.ingest,
     {
@@ -566,7 +680,18 @@ export async function startWorkers(
       pollingIntervalSeconds: 2,
     },
     async (jobs) => {
-      await handleReindexJobs({ indexer: deps.indexer, autoSharer, log: deps.log }, jobs);
+      await handleReindexJobs(
+        {
+          indexer: deps.indexer,
+          autoSharer,
+          log: deps.log,
+          pushHook: {
+            pool: deps.ingest.pool,
+            send: (job) => sendPushNotify(boss, job, push.photosDebounceSec),
+          },
+        },
+        jobs,
+      );
     },
   );
   // Step 6 AI batch pipeline (docs/plans/step-6.md 2.6, 2.7). One job at a time per process;
@@ -604,4 +729,14 @@ export async function startWorkers(
   await boss.work(JOBS.shareReconcile, { pollingIntervalSeconds: 10 }, async (jobs) => {
     for (const job of jobs) await handleShareReconcileJob(shareDeps, job);
   });
+  // Step 9 push (docs/plans/step-9.md 2.8): one job at a time per process; `createdOn` (metadata)
+  // is the event time the share_viewed "already covered" rule compares with.
+  const pushJobDeps = { pool: deps.ingest.pool, push, log: deps.log };
+  await boss.work(
+    JOBS.pushNotify,
+    { pollingIntervalSeconds: 5, batchSize: 1, includeMetadata: true },
+    async (jobs) => {
+      for (const job of jobs) await handlePushJob(pushJobDeps, boss, job);
+    },
+  );
 }

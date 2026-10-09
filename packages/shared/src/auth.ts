@@ -9,6 +9,7 @@ import {
   planSchema,
   shareRuleModeSchema,
 } from "./db-enums";
+import { APP_UA_TOKEN } from "./native";
 import { uploadFileErrorSchema } from "./upload";
 
 // Auth constants and helpers shared by the API and the SPA (docs/plans/step-3.md 2.2, 2.6, 2.9).
@@ -118,8 +119,12 @@ export function maskEmail(email: string): string {
   return `${local[0]}***@${domain}`;
 }
 
+/** The native apps' User-Agent product token, `Littlelight/<version>` (`appendUserAgent`). */
+const APP_UA_RE = new RegExp(`(^|[\\s;(])${APP_UA_TOKEN}/[0-9A-Za-z.+-]+`);
+const APP_LABEL = "Littlelight app";
+
 const BROWSERS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/Littlelight\//, "Littlelight app"],
+  [APP_UA_RE, APP_LABEL],
   [/Edg(A|iOS)?\//, "Edge"],
   [/OPR\/|Opera/, "Opera"],
   [/SamsungBrowser\//, "Samsung Internet"],
@@ -140,13 +145,17 @@ const DEVICES: ReadonlyArray<readonly [RegExp, string]> = [
 
 /**
  * Coarse, non-identifying device label from a User-Agent string for the devices list and the
- * new-device email, e.g. "Safari on iPhone", "Chrome on Windows". Never includes versions.
+ * new-device email, e.g. "Safari on iPhone", "Chrome on Windows". Never includes versions. The
+ * native apps (`Littlelight/<version>`) are "Littlelight app on iPhone" / "on iPad" / "on Android".
  */
 export function userAgentLabel(ua: string | null | undefined): string {
   if (!ua) return "Unknown device";
   const s = ua.slice(0, 512);
   const browser = BROWSERS.find(([re]) => re.test(s))?.[1];
-  const device = DEVICES.find(([re]) => re.test(s))?.[1];
+  let device = DEVICES.find(([re]) => re.test(s))?.[1];
+  // The app ships for iOS and Android only; an iPad's WKWebView sends a desktop-class
+  // ("Macintosh") User-Agent by default, so the app on "Mac" is an iPad.
+  if (browser === APP_LABEL && device === "Mac") device = "iPad";
   if (browser && device) return `${browser} on ${device}`;
   if (device) return `Browser on ${device}`;
   if (browser) return browser;
@@ -243,6 +252,8 @@ export type ShareLinkAuditField = z.infer<typeof shareLinkAuditFieldSchema>;
  * notes, prompts, people, location labels, milestone names or measurement values. Strict: any other key is rejected, so `audit()` cannot be handed one.
  */
 export const auditMetadataSchema = z.strictObject({
+  /** `auth.sign_in` through the store-review account (step 9, D4); absent for normal sign-ins. */
+  method: z.enum(["review"]).optional(),
   /** `CF-IPCountry` value (ISO 3166-1 alpha-2, or Cloudflare's `XX`/`T1`). */
   ip_country: z
     .string()

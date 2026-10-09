@@ -1,4 +1,11 @@
 import { z } from "zod";
+import { emailSchema } from "./auth";
+import { APP_ID, NATIVE_ORIGINS_DEFAULT } from "./native";
+import {
+  PUSH_MIN_GAP_MIN_DEFAULT,
+  PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+  PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
+} from "./push";
 
 // Environment schemas shared by api, worker and db tooling (docs/plans/step-1.md 2.10, 2.5).
 // Apps compose these in their own config modules and fail fast on invalid env, printing field
@@ -341,3 +348,177 @@ export const shareEnvSchema = z.object({
   SHARE_RECONCILE_CRON: z.preprocess(emptyAsUndefined, cronSchema.default(SH.SHARE_RECONCILE_CRON)),
 });
 export type ShareEnv = z.infer<typeof shareEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Native apps (docs/plans/step-9.md 2.3, 2.5, 2.8, 2.10). Push provider secrets live in the
+// worker env only; the CORS allow-list and the store-review account in the api env only. Every
+// field below may hold a secret or an identifier: errors name the field, never the value.
+// ---------------------------------------------------------------------------------------------
+
+/** Provider endpoints used when the `PUSH_*_URL` overrides (mock servers in tests) are unset. */
+export const PUSH_ENDPOINTS = {
+  APNS_SANDBOX: "https://api.sandbox.push.apple.com",
+  APNS_PRODUCTION: "https://api.push.apple.com",
+  FCM: "https://fcm.googleapis.com",
+} as const;
+
+/** `PUSH_PROVIDER`: `none` (production default until keys exist), `fake` (dev; refused in production), `live`. */
+export const PUSH_PROVIDERS = ["none", "fake", "live"] as const;
+export const pushProviderModeSchema = z.enum(PUSH_PROVIDERS);
+export type PushProviderMode = z.infer<typeof pushProviderModeSchema>;
+
+const base64Schema = z.string().regex(/^[A-Za-z0-9+/_-]+={0,2}$/, "must be base64 on one line");
+const overrideUrlSchema = z.url({ protocol: /^https?$/ }).transform((u) => u.replace(/\/+$/, ""));
+
+/**
+ * Worker push settings (2.8). `PUSH_PROVIDER=live` sends through APNs when `APNS_TEAM_ID`,
+ * `APNS_KEY_ID` and `APNS_PRIVATE_KEY_BASE64` (the `.p8` file, base64) are set, and through FCM
+ * HTTP v1 when `FCM_PROJECT_ID` and `FCM_SERVICE_ACCOUNT_BASE64` (the service-account JSON,
+ * base64) are set; otherwise that provider's sends are `unconfigured`. `PUSH_APNS_BASE_URL`
+ * defaults from `APNS_ENVIRONMENT` (`PUSH_ENDPOINTS`), `PUSH_FCM_BASE_URL` to `PUSH_ENDPOINTS.FCM`,
+ * `PUSH_OAUTH_TOKEN_URL` to the service account's `token_uri`; the overrides exist for mock
+ * servers and must be https in production. `fake` is refused when `NODE_ENV=production`.
+ */
+export const pushEnvSchema = z
+  .object({
+    PUSH_PROVIDER: z.preprocess(emptyAsUndefined, pushProviderModeSchema.default("none")),
+    APNS_TEAM_ID: z.preprocess(
+      emptyAsUndefined,
+      z
+        .string()
+        .regex(/^[A-Z0-9]{10}$/)
+        .optional(),
+    ),
+    APNS_KEY_ID: z.preprocess(
+      emptyAsUndefined,
+      z
+        .string()
+        .regex(/^[A-Z0-9]{10}$/)
+        .optional(),
+    ),
+    APNS_PRIVATE_KEY_BASE64: z.preprocess(emptyAsUndefined, base64Schema.optional()),
+    APNS_BUNDLE_ID: z.preprocess(
+      emptyAsUndefined,
+      z
+        .string()
+        .regex(/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/)
+        .default(APP_ID),
+    ),
+    APNS_ENVIRONMENT: z.preprocess(
+      emptyAsUndefined,
+      z.enum(["sandbox", "production"]).default("sandbox"),
+    ),
+    FCM_PROJECT_ID: z.preprocess(
+      emptyAsUndefined,
+      z
+        .string()
+        .regex(/^[a-z][a-z0-9-]{4,29}$/)
+        .optional(),
+    ),
+    FCM_SERVICE_ACCOUNT_BASE64: z.preprocess(emptyAsUndefined, base64Schema.optional()),
+    PUSH_APNS_BASE_URL: z.preprocess(emptyAsUndefined, overrideUrlSchema.optional()),
+    PUSH_FCM_BASE_URL: z.preprocess(emptyAsUndefined, overrideUrlSchema.optional()),
+    PUSH_OAUTH_TOKEN_URL: z.preprocess(emptyAsUndefined, overrideUrlSchema.optional()),
+    PUSH_PHOTOS_DEBOUNCE_SEC: z.preprocess(
+      emptyAsUndefined,
+      z.coerce.number().int().min(0).max(3600).default(PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT),
+    ),
+    PUSH_SHARE_DEBOUNCE_SEC: z.preprocess(
+      emptyAsUndefined,
+      z.coerce.number().int().min(0).max(3600).default(PUSH_SHARE_DEBOUNCE_SEC_DEFAULT),
+    ),
+    PUSH_MIN_GAP_MIN: z.preprocess(
+      emptyAsUndefined,
+      z.coerce.number().int().min(0).max(1440).default(PUSH_MIN_GAP_MIN_DEFAULT),
+    ),
+    /** Same field as `logEnvSchema` (default `production`), read here for the refinements. */
+    NODE_ENV: logEnvSchema.shape.NODE_ENV,
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV !== "production") return;
+    if (env.PUSH_PROVIDER === "fake") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["PUSH_PROVIDER"],
+        message: "fake is refused in production",
+      });
+    }
+    for (const key of [
+      "PUSH_APNS_BASE_URL",
+      "PUSH_FCM_BASE_URL",
+      "PUSH_OAUTH_TOKEN_URL",
+    ] as const) {
+      const url = env[key];
+      if (url !== undefined && !url.startsWith("https://")) {
+        ctx.addIssue({ code: "custom", path: [key], message: "must be https in production" });
+      }
+    }
+  });
+export type PushEnv = z.infer<typeof pushEnvSchema>;
+
+/** One allowed native WebView origin: scheme `capacitor`/`http`/`https`, host, optional port. */
+const NATIVE_ORIGIN_RE = /^(capacitor|https?):\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/;
+
+/**
+ * API CORS allow-list for the native apps (2.3): `NATIVE_APP_ORIGINS`, a comma-separated list
+ * (default `capacitor://localhost,https://localhost`), parsed to a lowercase, de-duplicated
+ * array. No wildcard, path or trailing slash is accepted. Unset or empty ⇒ the default.
+ */
+export const nativeCorsEnvSchema = z.object({
+  NATIVE_APP_ORIGINS: z.preprocess(
+    emptyAsUndefined,
+    z
+      .string()
+      .default(NATIVE_ORIGINS_DEFAULT.join(","))
+      .transform((v) => [
+        ...new Set(
+          v
+            .split(",")
+            .map((o) => o.trim().toLowerCase())
+            .filter((o) => o !== ""),
+        ),
+      ])
+      .pipe(
+        z
+          .array(z.string().regex(NATIVE_ORIGIN_RE, "each origin must be scheme://host[:port]"))
+          .min(1)
+          .max(10),
+      ),
+  ),
+});
+export type NativeCorsEnv = z.infer<typeof nativeCorsEnvSchema>;
+
+/** `scrypt$1$N$r$p$<salt b64url>$<dk b64url>`, the share-link passcode hash format. */
+const SCRYPT_HASH_RE = /^scrypt\$1\$[0-9]+\$[0-9]+\$[0-9]+\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$/;
+
+/**
+ * Store-review sign-in (2.5, D4), api only. Off unless both are set: `REVIEW_ACCOUNT_EMAIL`
+ * (normalized like every email) and `REVIEW_ACCOUNT_CODE_HASH` (the static code's
+ * `scrypt$1$…` hash, same format as share-link passcodes). Exactly one set is an error.
+ */
+export const reviewAccountEnvSchema = z
+  .object({
+    REVIEW_ACCOUNT_EMAIL: z.preprocess(emptyAsUndefined, emailSchema.optional()),
+    REVIEW_ACCOUNT_CODE_HASH: z.preprocess(
+      emptyAsUndefined,
+      z.string().max(512).regex(SCRYPT_HASH_RE, "must be a scrypt$1$ hash").optional(),
+    ),
+  })
+  .superRefine((env, ctx) => {
+    const hasEmail = env.REVIEW_ACCOUNT_EMAIL !== undefined;
+    const hasHash = env.REVIEW_ACCOUNT_CODE_HASH !== undefined;
+    if (hasEmail === hasHash) return;
+    ctx.addIssue({
+      code: "custom",
+      path: [hasEmail ? "REVIEW_ACCOUNT_CODE_HASH" : "REVIEW_ACCOUNT_EMAIL"],
+      message: "set both REVIEW_ACCOUNT_EMAIL and REVIEW_ACCOUNT_CODE_HASH, or neither",
+    });
+  });
+export type ReviewAccountEnv = z.infer<typeof reviewAccountEnvSchema>;
+
+/** True when the store-review sign-in is configured (both review vars set). */
+export function reviewAccountEnabled(
+  env: ReviewAccountEnv,
+): env is ReviewAccountEnv & { REVIEW_ACCOUNT_EMAIL: string; REVIEW_ACCOUNT_CODE_HASH: string } {
+  return env.REVIEW_ACCOUNT_EMAIL !== undefined && env.REVIEW_ACCOUNT_CODE_HASH !== undefined;
+}

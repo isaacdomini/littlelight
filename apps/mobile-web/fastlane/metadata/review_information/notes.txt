@@ -1,0 +1,28 @@
+Littlelight is a private photo album for parents of a baby. Parents add photos, browse them by the baby's age, and can share a private, expiring link with family.
+
+HOW TO SIGN IN
+The app uses passwordless sign-in. For review we provide a static code so no email is needed.
+1. Tap "Continue with email".
+2. Enter this email: REVIEW_ACCOUNT_EMAIL
+3. When asked for the 6-digit code, enter: REVIEW_ACCOUNT_CODE
+The account is preloaded with one sample baby album ("Maya") with 24 photos. All sample photos are illustrations of non-real babies; no real child appears anywhere in the app.
+
+WHAT TO LOOK AT
+- Timeline: photos grouped by the baby's age; tap one for the full-screen viewer and details.
+- Upload: the Upload tab, "Choose photos", opens the system photo picker or the camera. Photos you pick are uploaded to the album.
+- Search and Chat (the AI features) are available on this account. They describe and search the sample photos using AI from our model provider. Free accounts are never analysed and no photo from a free account is sent to any AI model. Photos are never used to train models.
+- Family: "Share" creates a private link that expires after 24 hours by default. People opening the link see only the photos the parent chose, without an account.
+- Notifications: not requested at launch. Settings > Notifications turns them on. Notification text is generic ("12 new photos are ready to search.") and never contains names or photo content.
+- Account deletion: Settings > Account > Delete account (requires re-entering the email code; for the review account use the static code above).
+
+PERMISSIONS
+- Photo library: only to let the parent choose photos to upload (the system picker). We do not read the whole library.
+- Camera: only to take a photo to add to the album.
+- Location: the app never asks for your location. If a photo contains GPS in its metadata (iPhone photos do), we store it encrypted and show only a coarse place name to the parent; it is never shown to people who receive a share link.
+- No tracking, no ads, no analytics SDKs, no face recognition.
+
+PURCHASES
+This app does not offer any purchase or subscription inside the app.
+
+CONTACT
+REVIEW_CONTACT_EMAIL

@@ -73,6 +73,8 @@ export type IssueKind = "sign_in" | "refresh";
 export interface IssueOptions {
   /** `sign_in`: profile upsert, audit `auth.sign_in`, new-device detection. `refresh`: liveness only. */
   kind: IssueKind;
+  /** Sign-in method recorded in the audit metadata; only the store-review sign-in sets it (D4). */
+  method?: "review";
 }
 
 /**
@@ -108,6 +110,7 @@ export async function issueSession(
       client: kind,
       user_agent_label: deviceLabel,
       ...(country ? { ip_country: country } : {}),
+      ...(opts.method ? { method: opts.method } : {}),
     };
     await audit(client, "auth.sign_in", { actorUserId: ctx.uid, metadata });
     const newDevice = liveSessions > 1;

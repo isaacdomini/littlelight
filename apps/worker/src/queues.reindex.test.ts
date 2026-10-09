@@ -15,8 +15,8 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("reindex queue (step 5) in the twelve-queue set", () => {
-  it("QUEUES has exactly the twelve jobs, all exclusive", () => {
+describe("reindex queue (step 5) in the thirteen-queue set", () => {
+  it("QUEUES has exactly the thirteen jobs, all exclusive except push.notify (short)", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
       [
         "photo.ingest",
@@ -31,9 +31,11 @@ describe("reindex queue (step 5) in the twelve-queue set", () => {
         "search.backfill",
         "share.apply",
         "share.reconcile",
+        "push.notify",
       ].sort(),
     );
-    for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
+    for (const [name, q] of Object.entries(QUEUES))
+      expect(q.policy).toBe(name === "push.notify" ? "short" : "exclusive");
   });
 
   it("photo.reindex: 3 retries, 15 s delay, backoff, 5 minute expiry, no notify", () => {
@@ -74,7 +76,7 @@ describe("reindex queue (step 5) in the twelve-queue set", () => {
     );
   });
 
-  it("startWorkers registers twelve handlers; reindex runs batches of 25 through one indexer call", async () => {
+  it("startWorkers registers thirteen handlers; reindex runs batches of 25 through one indexer call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;

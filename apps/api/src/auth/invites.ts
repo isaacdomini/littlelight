@@ -29,6 +29,7 @@ import {
   withServiceRole,
 } from "./context";
 import { requireAuth } from "./plugin";
+import { isReviewEmail } from "./review";
 import type { AuthRuntime } from "./runtime";
 
 // Invites (PRD "Invites", FR-1.3, FR-1.6; docs/plans/step-3.md 2.4, 3.5).
@@ -392,6 +393,12 @@ export function inviteRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
         // the same thing in SQL (`auth_email()` is lower-cased); this gives the exact message.
         if (!ctx.email || normalizeEmail(ctx.email) !== found.email) {
           throw new ApiError(403, "invite_email_mismatch", inviteEmailMismatchMessage(found.email));
+        }
+        // Store-review account (D4, review.ts): it signs in without proving its mailbox, so it
+        // may never join a family; its sign-in guard allows only its synthetic review family.
+        if (isReviewEmail(runtime.review, normalizeEmail(ctx.email))) {
+          request.log.warn({ userId: ctx.uid }, "invite accept refused for the review account");
+          throw forbidden("This account can't join a family");
         }
         const existing = await client.query<{ role: BabyRole }>(
           "SELECT role FROM public.baby_members WHERE baby_id = $1 AND user_id = $2",

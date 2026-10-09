@@ -18,8 +18,22 @@ export interface PutPartOptions {
   signal?: AbortSignal;
 }
 
+/** A picked or captured file on the device, copied into app-private storage (native only). */
+export interface NativeFileRef {
+  /** File URI/path inside the app cache (`Caches/ll-uploads/…`). Never logged. */
+  path: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
 export interface Uploader {
   putPart(url: string, blob: Blob, opts?: PutPartOptions): Promise<void>;
+  /**
+   * Native only: PUT the whole file from disk as one raw-body request that keeps running while
+   * the app is backgrounded. Used when the file is a single part (<= the part size).
+   */
+  putFile?(url: string, file: NativeFileRef, opts?: PutPartOptions): Promise<void>;
 }
 
 /** Web implementation: XMLHttpRequest, because `fetch` has no upload progress events. */

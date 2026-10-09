@@ -468,3 +468,77 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Carried: Cloudflare "Bypass cache" rule for `files.`, production credentials, Apple/Google IDs,
     Turnstile, legal text, CSAM provider, ~1.1 GB unused Docker volumes; final combined review.
 - **Commit**: step 8: sharing
+
+## Step 9 (part A): native apps without store accounts
+
+- **Built**: Capacitor 8 iOS (SPM) and Android projects, bundle id `com.tesarsoft.littlelight`,
+  iPhone only, portrait. Permission strings, `PrivacyInfo.xcprivacy` (no tracking; precise location
+  from photo metadata), entitlements (`applinks:`, `aps-environment`), Android manifest without
+  media/storage/location permissions, no backup, cleartext only to localhost in debug, App Links and
+  AASA/assetlinks files with placeholder team id and fingerprints, debug-only `littlelight://` scheme.
+  In-house `LittlelightUploader` plugin (iOS background `URLSession`, Android WorkManager `dataSync`
+  foreground worker): raw-body PUT to presigned MinIO URLs, no extra headers, no URL logging,
+  survives backgrounding and app kill (capgo uploader evaluated and dropped). App layer
+  (`src/platform/native/**`): API origin via `VITE_API_URL`, tokens only in Keychain/Keystore
+  (wiped on first launch after install), session refresh on resume, deep links (invite, share,
+  `/signin/native`), photo picker keeping HEIC originals, camera, native share/download sheets, push
+  opt-in. UI: OTP-only welcome, native upload screen, push primer after first upload, Settings →
+  Notifications (two toggles), share viewer "Done", purchase prompts hidden on native. API: native
+  CORS allow-list (no credentials, native header required), `POST/DELETE /me/push-devices`,
+  notify prefs on `/me`, `enqueuePush`; static-code store-review sign-in (off unless both env vars
+  set; refused for any account in a real family; audited; throttled). Migration 16 (`push_devices`,
+  `push_deliveries`, notify prefs, DB-side recipient rules: admins only, live sessions within 90
+  days, prefs on, Plus for photos), migration 17 (paid-tier tripwire allows detaching `photo_ai`
+  from a deleted batch). Worker: `push.notify` queue (13 queues) with APNs (HTTP/2, ES256 JWT) and FCM
+  v1 senders, fake sender in dev, debounce + 60-min per-user gap, generic text only;
+  `photos_analyzed` hook on reindex; `share_viewed` on new viewer sessions. Demo media: 12 Maya + 24
+  review illustrations drawn in code (SVG → JPEG, no metadata, ~98 KB of TS, no image files), dev
+  auto-run, `demo:media --review-baby`. Icons/splash (coral mark), fastlane metadata drafts, App
+  Store privacy label, Play Data Safety, age rating, review notes (placeholders) under
+  `apps/mobile-web/{fastlane,store}`. `NATIVE.md` runbook incl. pitfalls. CI: native hygiene, Android
+  debug build + lint + manifest check, manual iOS sim build, push gate with log tap/secret scan.
+  Tests: 2,539 unit, 1,254 integration, 42 web e2e (now self-resetting), push gate, iOS gate, Android
+  gate (written).
+- **Gate**: orchestrator ran lint, typecheck, share/native/ai hygiene, unit 2,539/2,539, integration
+  1,253/1,254 on the used dev DB (the one failure was a dev-state token assertion, since made
+  robust; full suite 1,254/1,254 on fresh pgvector + MinIO, CI-style, by test-engineer), push gate
+  23/23, share gate passed, smoke passed, Android `assembleDebug` + `lintDebug` + manifest check
+  passed (JDK 21), production worker image contains `dist/demo-media.js`, **iOS simulator gate
+  45/45** (iPhone 17, iOS 26.4: install, deep links, OTP sign-in, relaunch persistence,
+  uninstall→reinstall signed out, share viewer + Done, push permission, device registration,
+  `simctl push`, banner tap → Chat, sign-out removes device, log scan). Web e2e 42/42 after the
+  order-independence fix (test-engineer ran push gate → share gate → e2e ×2 → smoke back to back).
+  **Not run: Android runtime gate.** The emulator (36.1.9) crashes on this macOS 27 host, inside and
+  outside the sandbox. **PRD check ("TestFlight and Play internal builds install; invite and share
+  links open the app"): pending user credentials (part B).**
+- **Decisions**:
+  - **User decisions (2026-10-09):** split step 9 into part A (now) and part B (store accounts);
+    bundle id `com.tesarsoft.littlelight`; no purchase prompts in the native apps (billing is a
+    later step); static-code review account; free disk then install tools; deleted iOS 26.0/26.1
+    simulator runtimes (kept 26.4.1; iOS 27 runtime not installed); commit without the Android
+    runtime check.
+  - In-house uploader instead of `@capgo/capacitor-uploader` (extra headers, no privacy manifest,
+    lost events after app kill, per-upload notifications). Simulator builds are ad-hoc signed
+    (background URLSession requires it).
+  - Push ledger keeps rows when a device is removed (`ON DELETE SET NULL`), so the gap is per user.
+  - Review originals live under `babies/<baby>/originals/` so purge and account deletion cover them;
+    the review account cannot accept invites while review is enabled.
+  - iPad: not supported in v1. Android uploads carry no GPS (Photo Picker strips it).
+- **Open issues**:
+  - **Android runtime unverified:** background upload, deep links (incl. share-link reload fix),
+    push-disabled launch. Run `pnpm e2e:native-android` on a newer emulator or a real phone
+    (steps in `e2e/native/android-gate.ts`). Check whether `HttpURLConnection` adds a Content-Type.
+  - **Part B (user):** Apple Developer team id + signing, APNs key, App Store Connect app/API key,
+    Play Console app + signing fingerprints, Firebase `google-services.json` + FCM service account,
+    production deploy of association files, review account mailbox + code, store listings, support
+    URL, real privacy/terms text, decide whether to declare the push token as "Device ID".
+  - Native social sign-in (Apple/Google) deferred; if Google is added on iOS, Sign in with Apple
+    must ship too. Native upload resume after OS kill means re-picking (server dedupes by SHA-256).
+  - `appUrlOpen` URLs received while running are not recorded for the once-per-session rule (a
+    later full reload can route the last one once; no loop).
+  - Gates with `AI_BATCH_FLUSH_MINUTES=0` analyse every ingested photo (worker flush is global); the
+    gates now restore Maya's seed state afterwards.
+  - For the final review: co-members can read each other's notify prefs (profiles SELECT grant);
+    90-day session window hardcoded to GoTrue's inactivity timeout; strict review guard can lock the
+    reviewer out if they create a second baby.
+- **Commit**: step 9 (part A): native builds without store accounts

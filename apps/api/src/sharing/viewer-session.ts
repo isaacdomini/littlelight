@@ -51,6 +51,8 @@ import { clearViewerCookie, setViewerCookie, withViewerClaims } from "./viewer-a
 // - Web: `ll_viewer` httpOnly cookie, nothing secret in the body. Native: the viewer JWT in the
 //   body (`viewerToken`), no cookie.
 // - Logs: link id and outcome only; never the token, its hash, the passcode, the IP or its hash.
+// - Step 9: a NEW viewer session (not a reused one) enqueues the `share_viewed` push to the
+//   baby's admins (`notifyShareViewed`), after commit, never blocking the response.
 
 const HOUR_MS = 60 * 60 * 1000;
 /** `viewer_sessions_guard`'s message (packages/db/migrations/1792100000100_sharing-v1.sql). */
@@ -140,6 +142,10 @@ export function viewerSessionRoutes(app: FastifyInstance): void {
         { shareLinkId: outcome.linkId, sessionId: outcome.sessionId, reused: outcome.reused },
         "share session opened",
       );
+      // "Someone opened your shared album" (docs/plans/step-9.md 2.8): only for a NEW viewer
+      // session, after the exchange committed and outside `runAs`, never awaited (a failed send
+      // retries once, ~1 s, and must not delay the album). Only the link id goes in the job.
+      if (!outcome.reused) notifyShareViewed(request, outcome.linkId);
       return sendSession(request, reply, kind, outcome);
     },
   });
@@ -165,6 +171,23 @@ export function viewerSessionRoutes(app: FastifyInstance): void {
       return reply.code(204).send();
     },
   });
+}
+
+/**
+ * Fire-and-forget `push.notify {kind:"share_viewed", shareLinkId}`. `enqueuePush` resolves
+ * `false` on a transport failure (it logged the category) and throws only for an invalid payload;
+ * both are logged here with the link id only and never reach the viewer.
+ */
+function notifyShareViewed(request: FastifyRequest, shareLinkId: string): void {
+  const log = request.log;
+  void request.server.jobs
+    .enqueuePush({ kind: "share_viewed", shareLinkId })
+    .then((accepted) => {
+      if (!accepted) log.warn({ shareLinkId }, "share_viewed push not enqueued");
+    })
+    .catch(() => {
+      log.error({ shareLinkId }, "share_viewed push rejected");
+    });
 }
 
 interface ExchangeInput {

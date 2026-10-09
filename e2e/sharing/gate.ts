@@ -29,6 +29,7 @@ import {
 } from "../../packages/shared/src/index";
 import { ApiClient, uniqueEmail } from "../helpers/api";
 import { psql } from "../helpers/db";
+import { restoreMayaSeedState } from "../helpers/reset";
 import {
   BASE,
   type Created,
@@ -672,6 +673,8 @@ async function main(): Promise<void> {
       console.error(`restore failed: ${e}`),
     );
     await recreate("api", {}).catch(() => undefined);
+    // The flush-0 worker analysed Maya's seeded (ingested) photos too: put her back to the seed.
+    await restoreMayaSeedState().catch((e) => console.error(`maya restore failed: ${e}`));
   }
   const failed = results.filter((r) => !r.ok);
   writeFileSync(

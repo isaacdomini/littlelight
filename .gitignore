@@ -17,3 +17,23 @@ e2e/test-results-perf/
 e2e/ai-gate/
 e2e/search-gate/
 e2e/share-gate/
+e2e/native-results/
+
+# Capacitor native projects (docs/plans/step-9.md 2.14): generated web copies, build output,
+# Firebase configs and signing material never enter git.
+apps/mobile-web/ios/App/App/public/
+apps/mobile-web/ios/App/build/
+apps/mobile-web/ios/DerivedData/
+apps/mobile-web/ios/App/App/GoogleService-Info.plist
+apps/mobile-web/android/app/src/main/assets/public/
+apps/mobile-web/android/**/build/
+apps/mobile-web/android/.gradle/
+apps/mobile-web/android/local.properties
+apps/mobile-web/android/app/google-services.json
+apps/mobile-web/android/keystore.properties
+apps/mobile-web/fastlane/report.xml
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision

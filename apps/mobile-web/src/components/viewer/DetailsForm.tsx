@@ -2,6 +2,7 @@ import { PHOTO_DETAILS_LIMITS, type Photo, type PhotoDetailsPatch } from "@littl
 import { useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
+import { hapticSuccess } from "../../lib/haptics";
 import { useCreateMilestone, useMilestones } from "../../lib/queries/milestones";
 import { Button, Message, TextAreaField, TextField } from "../ui";
 import { MilestoneSelect } from "./MilestoneSelect";
@@ -72,6 +73,7 @@ export function DetailsForm({
         locationLabel: location.trim() || null,
         note: note.trim() || null,
       });
+      if (milestoneId) hapticSuccess(); // a milestone was saved on this photo (app only)
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);

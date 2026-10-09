@@ -1,0 +1,23 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		A001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLUITests.swift; sourceTree = "<group>"; };
+		A002 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LLUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A003 = {isa = PBXBuildFile; fileRef = A001; };
+		A004 = {isa = PBXGroup; children = (A001); path = LLUITests; sourceTree = "<group>"; };
+		A005 = {isa = PBXGroup; children = (A004, A006); sourceTree = "<group>"; };
+		A006 = {isa = PBXGroup; children = (A002); name = Products; sourceTree = "<group>"; };
+		A007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A003); runOnlyForDeploymentPostprocessing = 0; };
+		A008 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A009 = {isa = PBXNativeTarget; buildConfigurationList = A010; buildPhases = (A007, A008); buildRules = (); dependencies = (); name = LLUITests; productName = LLUITests; productReference = A002; productType = "com.apple.product-type.bundle.ui-testing"; };
+		A010 = {isa = XCConfigurationList; buildConfigurations = (A011); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+		A011 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = com.tesarsoft.lluitests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 15.0; SWIFT_VERSION = 5.0; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_IDENTITY = "-"; }; name = Debug; };
+		A012 = {isa = PBXProject; attributes = {}; buildConfigurationList = A013; compatibilityVersion = "Xcode 14.0"; mainGroup = A005; productRefGroup = A006; projectDirPath = ""; projectRoot = ""; targets = (A009); };
+		A013 = {isa = XCConfigurationList; buildConfigurations = (A014); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+		A014 = {isa = XCBuildConfiguration; buildSettings = {}; name = Debug; };
+	};
+	rootObject = A012;
+}

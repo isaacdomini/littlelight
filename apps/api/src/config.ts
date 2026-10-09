@@ -10,6 +10,14 @@ import {
   jwtEnvSchema,
   logEnvSchema,
   mailEnvSchema,
+  NATIVE_ORIGINS_DEFAULT,
+  type NativeCorsEnv,
+  nativeCorsEnvSchema,
+  PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+  PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
+  pushEnvSchema,
+  type ReviewAccountEnv,
+  reviewAccountEnvSchema,
   SEARCH_DEFAULTS,
   type SearchEnv,
   SHARE_DEFAULTS,
@@ -35,6 +43,15 @@ import { z } from "zod";
 // column width (1024): anything else fails boot.
 // Step 8 (docs/plans/step-8.md 2.9) adds `SHARE_MEDIA_URL_TTL_SEC` (viewer media URL lifetime,
 // 30..900 s, default 300); the worker reads `SHARE_RECONCILE_CRON` from the same shared schema.
+// Step 9 (docs/plans/step-9.md 2.3, 2.8, 2.14) adds the native CORS allow-list
+// (`NATIVE_APP_ORIGINS`, `nativeCorsEnvSchema`) and the `push.notify` debounce the API applies
+// when it enqueues (`PUSH_SHARE_DEBOUNCE_SEC`; `PUSH_PHOTOS_DEBOUNCE_SEC` is read too, with the
+// shared default, so `enqueuePush` can send either kind). `PUSH_PROVIDER` and the APNs/FCM
+// secrets are worker-only and never read here.
+// Step 9 (docs/plans/step-9.md 2.5, D4) adds the store-review sign-in (`reviewAccountEnvSchema`):
+// off unless BOTH `REVIEW_ACCOUNT_EMAIL` and `REVIEW_ACCOUNT_CODE_HASH` are set (empty counts as
+// unset); one without the other, a malformed email or a hash that is not `scrypt$1$…` fails boot
+// naming the field only. `auth/review.ts` (`loadReviewAccount`) reads the parsed values from here.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -51,6 +68,16 @@ const aiApiEnvSchema = aiPipelineEnvSchema.pick({ AI_BABY_MONTHLY_BUDGET_USD: tr
 /** Step 8: the API reads only the viewer media URL lifetime from `shareEnvSchema`. */
 const shareApiEnvSchema = shareEnvSchema.pick({ SHARE_MEDIA_URL_TTL_SEC: true });
 export type ShareApiEnv = Pick<ShareEnv, "SHARE_MEDIA_URL_TTL_SEC">;
+
+/**
+ * Step 9: the two debounce fields of the worker's `pushEnvSchema` (same validation and defaults).
+ * Built from its `shape` because `pick` is not available on a refined object.
+ */
+const pushApiEnvSchema = z.object({
+  PUSH_PHOTOS_DEBOUNCE_SEC: pushEnvSchema.shape.PUSH_PHOTOS_DEBOUNCE_SEC,
+  PUSH_SHARE_DEBOUNCE_SEC: pushEnvSchema.shape.PUSH_SHARE_DEBOUNCE_SEC,
+});
+export type PushApiEnv = z.output<typeof pushApiEnvSchema>;
 
 /**
  * `EMBED_DIMS` (read by `@littlelight/ai`, default 1024) must equal the `vector(1024)` column.
@@ -80,7 +107,12 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   Partial<SearchEnv> &
   Partial<ChatEnv> &
   // Optional in the type (always set by `loadConfig`); read through `shareSettings`.
-  Partial<ShareApiEnv>;
+  Partial<ShareApiEnv> &
+  // Optional in the type (always set by `loadConfig`); read through `nativeSettings`.
+  Partial<NativeCorsEnv> &
+  Partial<PushApiEnv> &
+  // Both optional: absent ⇒ the review sign-in is off (`reviewAccountEnabled`).
+  ReviewAccountEnv;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -122,6 +154,9 @@ export function loadConfig(
     searchEnvSchema,
     chatEnvSchema,
     shareApiEnvSchema,
+    nativeCorsEnvSchema,
+    pushApiEnvSchema,
+    reviewAccountEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];
@@ -181,5 +216,18 @@ export function shareSettings(config: Partial<ShareApiEnv>): ShareApiEnv {
   return {
     SHARE_MEDIA_URL_TTL_SEC:
       config.SHARE_MEDIA_URL_TTL_SEC ?? SHARE_DEFAULTS.SHARE_MEDIA_URL_TTL_SEC,
+  };
+}
+
+/** Step 9 settings with the shared defaults filled in (docs/plans/step-9.md 2.3, 2.8). */
+export function nativeSettings(config: Partial<NativeCorsEnv> & Partial<PushApiEnv>): {
+  NATIVE_APP_ORIGINS: string[];
+  PUSH_PHOTOS_DEBOUNCE_SEC: number;
+  PUSH_SHARE_DEBOUNCE_SEC: number;
+} {
+  return {
+    NATIVE_APP_ORIGINS: config.NATIVE_APP_ORIGINS ?? [...NATIVE_ORIGINS_DEFAULT],
+    PUSH_PHOTOS_DEBOUNCE_SEC: config.PUSH_PHOTOS_DEBOUNCE_SEC ?? PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
+    PUSH_SHARE_DEBOUNCE_SEC: config.PUSH_SHARE_DEBOUNCE_SEC ?? PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
   };
 }

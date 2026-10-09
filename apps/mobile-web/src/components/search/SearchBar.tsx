@@ -1,6 +1,7 @@
 import { SEARCH_QUERY_LIMITS } from "@littlelight/shared";
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
+import { isNative } from "../../platform/platform";
 
 const DEBOUNCE_MS = 300;
 
@@ -75,7 +76,7 @@ export function SearchBar({
           </button>
         ) : null}
       </div>
-      {disabled ? (
+      {disabled && !isNative() ? (
         <p className="ll-caption" data-testid="search-upsell">
           {t("search.upsell")}
         </p>

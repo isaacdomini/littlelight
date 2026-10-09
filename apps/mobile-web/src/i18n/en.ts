@@ -719,4 +719,50 @@ export const en = {
   "shareViewer.installDismiss": "Dismiss",
   "shareViewer.installStepsA": "Tap",
   "shareViewer.installStepsB": "in Safari, then choose Add to Home Screen.",
+
+  "native.upload.choose": "Choose photos",
+  "native.upload.camera": "Take photo",
+  "native.upload.primer": "You pick the photos. Littlelight only receives the ones you choose.",
+  "native.upload.background":
+    "Keep the app open until photos are queued. Uploads continue in the background after that.",
+  "native.upload.denied":
+    "Littlelight can't open your photos. Allow access in Settings, then try again.",
+  "native.upload.cameraDenied":
+    "Littlelight can't use the camera. Allow access in Settings, then try again.",
+  "native.upload.pickError": "Couldn't get those photos. Please try again.",
+  "native.upload.skipped": "{n} photos couldn't be read and were skipped.",
+  "native.upload.androidNote":
+    "Android removes location from photos you pick, so places like Home aren't labelled automatically. You can add a location under details.",
+  "native.primer.body":
+    "Choose the photos to add. Littlelight only receives the photos you pick, and the originals stay untouched.",
+  "native.signin.title": "Open this link in the app",
+  "native.signin.webBody": "Open this link on your phone with the Littlelight app installed.",
+  "native.signin.appBody":
+    "Sign-in with this link isn't available yet. Use your email code instead.",
+  "native.signin.back": "Back to sign-in",
+  "native.share.done": "Done",
+  "native.settings.deleteAccount": "Delete account",
+  "native.chat.unavailable": "Chat isn't available for this album.",
+  "native.ai.unavailable": "AI descriptions aren't available for this album.",
+
+  "push.settings.title": "Notifications",
+  "push.settings.row": "Notifications",
+  "push.settings.intro": "Notifications are short and never show names, captions or notes.",
+  "push.settings.enable": "Turn on notifications",
+  "push.settings.enabled": "Notifications are on for this device.",
+  "push.settings.denied":
+    "Notifications are turned off for Littlelight. Turn them on in your phone's Settings.",
+  "push.settings.unavailable": "Notifications are not available in this build.",
+  "push.settings.failed": "Couldn't turn on notifications. Please try again.",
+  "push.settings.kinds": "Tell me when",
+  "push.settings.photosAnalyzed": "New photos are ready to search",
+  "push.settings.photosAnalyzedHint": "After photos have been described.",
+  "push.settings.shareViewed": "Someone opens a shared album",
+  "push.settings.shareViewedHint": "When a family member opens one of your links.",
+  "push.settings.saveError": "Couldn't save that. Please try again.",
+  "push.primer.title": "Get a heads-up when photos are ready?",
+  "push.primer.body":
+    "We can send a short notification. It never includes names, captions or notes.",
+  "push.primer.enable": "Turn on notifications",
+  "push.primer.later": "Not now",
 } as const;

@@ -13,6 +13,8 @@ import {
 import { apiFetch, isApiError, onSignedOut } from "../lib/api";
 import { clearImageCache } from "../lib/imageCache";
 import { currentBabyStore } from "../lib/session";
+import { isNative } from "../platform/platform";
+import { getTokenStore } from "../platform/tokenStore";
 
 export const ME_KEY = ["me"] as const;
 
@@ -57,6 +59,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     queryClient.setQueryData(ME_KEY, null);
     void clearImageCache();
+    if (isNative()) {
+      // Signed out, session lost or account deleted: nothing of this user stays on the device.
+      void getTokenStore().clear();
+      void import("../platform/native/cleanup").then((m) => m.wipeNativeLocalData());
+    }
   }, [queryClient]);
 
   useEffect(() => onSignedOut(clearSession), [clearSession]);

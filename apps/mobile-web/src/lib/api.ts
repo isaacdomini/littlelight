@@ -1,5 +1,6 @@
 import { type ApiErrorCode, apiErrorSchema } from "@littlelight/shared";
 import type { ZodType } from "zod";
+import { apiUrl } from "../platform/apiBase";
 import { clientKind, isNative } from "../platform/platform";
 import { getTokenStore } from "../platform/tokenStore";
 
@@ -28,6 +29,8 @@ export function onSignedOut(cb: Listener): () => void {
   return () => signedOutListeners.delete(cb);
 }
 function emitSignedOut() {
+  // The session is gone: drop the Keychain copy too (no-op on the web).
+  void getTokenStore().clear();
   for (const cb of signedOutListeners) cb();
 }
 
@@ -42,7 +45,6 @@ export interface RequestOptions<T> {
   schema?: ZodType<T>;
 }
 
-const API_PREFIX = "/api";
 // Endpoints whose 401/4xx are ordinary form errors, not a lost session.
 const NO_SESSION_EFFECT = ["/auth/otp", "/auth/verify", "/auth/pkce", "/auth/id-token"];
 
@@ -78,7 +80,7 @@ export function refreshSession(): Promise<boolean> {
     try {
       const native = isNative();
       const stored = native ? await getTokenStore().get() : null;
-      const res = await fetch(`${API_PREFIX}/auth/refresh`, {
+      const res = await fetch(apiUrl("/auth/refresh"), {
         method: "POST",
         credentials: "same-origin",
         headers: await headers(true),
@@ -107,7 +109,7 @@ export function refreshSession(): Promise<boolean> {
 async function once(path: string, opts: RequestOptions<unknown>): Promise<Response> {
   const hasBody = opts.body !== undefined;
   try {
-    return await fetch(`${API_PREFIX}${path}`, {
+    return await fetch(apiUrl(path), {
       method: opts.method ?? "GET",
       credentials: "same-origin",
       headers: await headers(hasBody),

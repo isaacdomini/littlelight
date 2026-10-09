@@ -11,12 +11,26 @@ import { configDefaults, defineConfig } from "vitest/config";
 // (e.g. jsdom for apps/mobile-web) adds its own vitest.config.ts and it is picked up automatically.
 // Folder projects do NOT inherit root `test` options, while inline projects do, so the
 // integration-test exclusion lives on the `pnpm test` CLI (`--exclude`), not here.
+// apps/mobile-web is declared inline (extending its own config) so the Capacitor native projects,
+// their copied web bundles and fastlane output are never scanned for tests
+// (docs/plans/step-9.md 2.14).
+const nativeExcludes = ["ios/**", "android/**", "fastlane/**"];
+
 export default defineConfig({
   test: {
     passWithNoTests: true,
     projects: [
       "apps/*",
+      "!apps/mobile-web",
       "packages/*",
+      {
+        extends: "./apps/mobile-web/vitest.config.ts",
+        test: {
+          name: "@littlelight/mobile-web",
+          root: "./apps/mobile-web",
+          exclude: [...configDefaults.exclude, ...nativeExcludes],
+        },
+      },
       {
         test: {
           name: "db-integration",

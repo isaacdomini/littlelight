@@ -8,6 +8,7 @@ import {
 import type { ApiConfig } from "../config";
 import type { Mailer } from "../email/mailer";
 import type { GoTrueClient } from "./gotrue";
+import { loadReviewAccount, type ReviewAccount } from "./review";
 import { createThrottle, type Throttle } from "./throttle";
 import { createTurnstile, type Turnstile } from "./turnstile";
 
@@ -35,6 +36,11 @@ export interface AuthRuntime {
   /** `null` without `TURNSTILE_SECRET_KEY` (dev, CI): the captcha threshold is inert. */
   turnstile: Turnstile | null;
   throttles: AuthThrottles;
+  /**
+   * Store-review sign-in (docs/plans/step-9.md 2.5, D4): `null` unless both
+   * `REVIEW_ACCOUNT_EMAIL` and `REVIEW_ACCOUNT_CODE_HASH` are set. Holds a hash: never log it.
+   */
+  review: ReviewAccount | null;
   close(): void;
 }
 
@@ -60,7 +66,11 @@ export function createAuthRuntime(deps: {
   config: ApiConfig;
   gotrue: GoTrueClient;
   mailer: Mailer;
+  /** Tests inject the review account; default: from `config` only (`loadReviewAccount`). */
+  review?: ReviewAccount | null;
 }): AuthRuntime {
+  // Before the throttles: a bad review config fails boot without leaving timers behind.
+  const review = deps.review !== undefined ? deps.review : loadReviewAccount(deps.config);
   const throttles = createAuthThrottles();
   return {
     config: deps.config,
@@ -68,6 +78,7 @@ export function createAuthRuntime(deps: {
     mailer: deps.mailer,
     turnstile: createTurnstile(deps.config.TURNSTILE_SECRET_KEY),
     throttles,
+    review,
     close() {
       for (const t of Object.values(throttles)) t.close();
     },

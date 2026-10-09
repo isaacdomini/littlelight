@@ -15,13 +15,14 @@ import {
 } from "@littlelight/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import { ApiError, rateLimited, safeErrorLog } from "../lib/errors";
+import { ApiError, forbidden, rateLimited, safeErrorLog } from "../lib/errors";
 import { clientIp, clientKindHeader, upstreamClientHeaders } from "../lib/request";
 import { audit, withClaims } from "./context";
-import { GoTrueError, type GoTrueSession } from "./gotrue";
+import { GoTrueError, type GoTrueSession, hasReviewLinks } from "./gotrue";
 import { csrfRejected, requireAuth } from "./plugin";
+import { countOtherFamilies, isReviewEmail, type ReviewAccount, verifyReviewCode } from "./review";
 import type { AuthRuntime } from "./runtime";
-import { clearSessionCookies, issueSession } from "./session";
+import { clearSessionCookies, type IssueOptions, issueSession } from "./session";
 
 // `/auth/*` routes of the API (docs/plans/step-3.md 2.3, 2.4, 2.9). Registered without the
 // `/api` prefix (nginx/Vite strip it). Bodies are validated by the shared zod schemas; the
@@ -70,11 +71,19 @@ async function logoutPresentedSession(
   }
 }
 
+interface SignInOptions {
+  /** Audit `method` (store-review sign-in only). */
+  method?: IssueOptions["method"];
+  /** The exchange must yield this user (store-review sign-in: the id `generate_link` returned). */
+  expectUserId?: string;
+}
+
 async function signIn(
   request: FastifyRequest,
   reply: FastifyReply,
   runtime: AuthRuntime,
   exchange: () => Promise<GoTrueSession>,
+  opts: SignInOptions = {},
 ) {
   let session: GoTrueSession;
   try {
@@ -82,13 +91,86 @@ async function signIn(
   } catch (err) {
     throw mapExchangeError(err, request);
   }
+  if (opts.expectUserId !== undefined && session.user.id.toLowerCase() !== opts.expectUserId) {
+    // Cannot happen with a well-behaved GoTrue; never hand out a session for another user.
+    request.log.error("sign-in exchange returned an unexpected user");
+    try {
+      await runtime.gotrue.logout(session.accessToken, "local", upstreamClientHeaders(request));
+    } catch {
+      // Best effort; the session is not returned either way.
+    }
+    throw upstreamUnavailable();
+  }
   await logoutPresentedSession(request, runtime);
-  return issueSession(request, reply, session, { kind: "sign_in" });
+  return issueSession(request, reply, session, {
+    kind: "sign_in",
+    ...(opts.method ? { method: opts.method } : {}),
+  });
+}
+
+/**
+ * Store-review sign-in (docs/plans/step-9.md 2.5, D4; see review.ts). The caller has already
+ * counted the attempt against the per-email verify throttle. Wrong code ⇒ the same 400
+ * `invalid_code` as a wrong emailed code. Right code ⇒ GoTrue admin `generate_link` (no email;
+ * yields the user id and a single-use hashed token) ⇒ guard (no family but the review baby, else
+ * 403 before any session exists; the unredeemed token never leaves the API) ⇒ `verify` of the
+ * hashed token ⇒ a normal session, audited `auth.sign_in {method:"review"}`.
+ * Logs: outcome and user id only; never the code, the hash, the token or the email.
+ */
+async function reviewSignIn(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  runtime: AuthRuntime,
+  review: ReviewAccount,
+  code: string,
+) {
+  if (!(await verifyReviewCode(review, code))) {
+    request.log.info({ outcome: "invalid_code" }, "review sign-in refused");
+    throw new ApiError(400, "invalid_code", INVALID_CODE_MESSAGE);
+  }
+  const { gotrue } = runtime;
+  if (!hasReviewLinks(gotrue)) throw upstreamUnavailable();
+  let link: { userId: string; hashedToken: string };
+  try {
+    link = await gotrue.adminGenerateMagicLink(review.email);
+  } catch (err) {
+    // Any failure here is ours or GoTrue's (admin JWT, upstream down), never the caller's code.
+    if (err instanceof GoTrueError) {
+      request.log.warn(
+        { status: err.status, code: err.code },
+        "review sign-in: generate_link failed",
+      );
+    } else {
+      request.log.error({ err: safeErrorLog(err) }, "review sign-in: generate_link failed");
+    }
+    throw upstreamUnavailable();
+  }
+  const otherFamilies = await countOtherFamilies(request.server, link.userId);
+  if (otherFamilies > 0) {
+    request.log.warn(
+      { userId: link.userId, otherFamilies, outcome: "other_family" },
+      "review sign-in refused: the account belongs to a family other than its review family",
+    );
+    throw forbidden("This account can't use the review sign-in");
+  }
+  const result = await signIn(
+    request,
+    reply,
+    runtime,
+    () =>
+      gotrue.verify(
+        { kind: "token_hash", tokenHash: link.hashedToken },
+        upstreamClientHeaders(request),
+      ),
+    { method: "review", expectUserId: link.userId },
+  );
+  request.log.info({ userId: link.userId, outcome: "signed_in" }, "review sign-in");
+  return result;
 }
 
 export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
-  const { config, gotrue, throttles, turnstile } = runtime;
+  const { config, gotrue, throttles, turnstile, review } = runtime;
 
   r.route({
     method: "GET",
@@ -129,6 +211,11 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
         throw rateLimited(byIp.retryAfterSec, "Too many codes requested, try again later");
       }
 
+      // Store-review account (D4): its code is static, so no email goes out (same 202).
+      if (isReviewEmail(review, email)) {
+        request.log.debug("otp request for the review account: nothing sent");
+        return reply.code(202).send({ ok: true });
+      }
       try {
         await gotrue.sendOtp(email, upstreamClientHeaders(request));
       } catch (err) {
@@ -154,6 +241,12 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
         const attempt = throttles.verifyPerEmail.hit(body.email);
         if (!attempt.allowed) {
           throw rateLimited(attempt.retryAfterSec, "Too many attempts, request a new code");
+        }
+        if (review && isReviewEmail(review, body.email)) {
+          // Only the static code is accepted for this email (an emailed code never exists).
+          const result = await reviewSignIn(request, reply, runtime, review, body.code);
+          throttles.verifyPerEmail.reset(body.email);
+          return result;
         }
         const result = await signIn(request, reply, runtime, () =>
           gotrue.verify({ kind: "code", email: body.email, token: body.code }, upstream),
@@ -261,12 +354,17 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
       // Whatever happens next, this browser's session ends.
       if (auth.transport === "cookie") clearSessionCookies(reply, config);
       // Audit first: once GoTrue drops the session, no transaction can run under its claims.
-      await withClaims(request, (client, ctx) =>
-        audit(client, "auth.sign_out", {
+      // Same transaction: this session's push devices go too (docs/plans/step-9.md 2.5, 2.8), so
+      // a phone that missed its best-effort `DELETE /me/push-devices/current` keeps no token
+      // row. (Other sessions ended by `global` stop receiving pushes anyway: `push_targets`
+      // requires a live `auth.sessions` row.)
+      await withClaims(request, async (client, ctx) => {
+        await client.query("SELECT public.unregister_push_devices_for_session()");
+        await audit(client, "auth.sign_out", {
           actorUserId: ctx.uid,
           metadata: { scope, client: auth.clientKind },
-        }),
-      );
+        });
+      });
       try {
         await gotrue.logout(auth.token, scope, upstreamClientHeaders(request));
       } catch (err) {

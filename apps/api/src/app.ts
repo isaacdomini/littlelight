@@ -10,7 +10,7 @@ import {
 import pkg from "../package.json" with { type: "json" };
 import { createGoTrueClient, type GoTrueClient, registerAuth } from "./auth";
 import { chatRoutes } from "./chat";
-import { type ApiConfig, chatSettings, searchSettings } from "./config";
+import { type ApiConfig, chatSettings, nativeSettings, searchSettings } from "./config";
 import { createSmtpMailer, type Mailer } from "./email/mailer";
 import { registerErrorHandling } from "./lib/errors";
 import { measurementsRoutes } from "./measurements/routes";
@@ -18,12 +18,14 @@ import { milestonesRoutes } from "./milestones/routes";
 import { aiRoutes } from "./photos/ai-routes";
 import { photosRoutes } from "./photos/routes";
 import { type AiServices, createAiServices, registerAi } from "./plugins/ai";
+import { registerNativeCors } from "./plugins/cors";
 import { createPool, type DbClient, registerDb } from "./plugins/db";
 import { createJobQueue, type JobQueue, registerJobs, sendOnlyBoss } from "./plugins/jobs";
 import { createS3Client, registerStorage, type StorageClient } from "./plugins/storage";
 import { babiesRoutes } from "./routes/babies";
 import { healthzRoutes } from "./routes/healthz";
 import { meRoutes } from "./routes/me";
+import { pushRoutes } from "./routes/push";
 import { type SearchChatDeps, searchRoutes } from "./search";
 import { registerSharing, registerViewerAuth } from "./sharing";
 import { createUrlSigner, type UrlSigner } from "./storage/sign";
@@ -152,6 +154,9 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         "req.body.passcode",
         "req.query.t",
         "req.cookies",
+        // Step 9 (docs/plans/step-9.md 2.8): `POST /me/push-devices {token}` is covered by
+        // `req.body.token` above; the app version is not secret but not request context either.
+        "req.body.appVersion",
       ],
       censor: "[redacted]",
     },
@@ -183,6 +188,8 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
     detail: config.NODE_ENV === "production" ? "loopback" : "full",
   });
   meRoutes(app);
+  // Step 9: native push device registration (docs/plans/step-9.md 2.8).
+  pushRoutes(app);
   babiesRoutes(app);
   // Step 4: uploads, photos (docs/plans/step-4.md 2.4).
   uploadsRoutes(app);
@@ -210,6 +217,7 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */
 export async function buildApp(opts: BuildAppOptions) {
   const { config } = opts;
+  const native = nativeSettings(config);
   const app = Fastify({
     logger: opts.logger ?? loggerOptions(config),
     // nginx (prod) / Vite (dev) are the only hops in front of us; port 3000 is never public.
@@ -223,6 +231,9 @@ export async function buildApp(opts: BuildAppOptions) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerErrorHandling(app);
+  // Step 9 (docs/plans/step-9.md 2.3): CORS for the native WebView origins only, before every
+  // other hook so a preflight never reaches auth. The web SPA stays same-origin.
+  registerNativeCors(app, native.NATIVE_APP_ORIGINS);
 
   // Parses `Cookie` into `request.cookies`; enables `reply.setCookie`/`clearCookie`. No secret:
   // auth cookies hold GoTrue-signed JWTs / opaque refresh tokens, nothing we sign ourselves.
@@ -234,7 +245,15 @@ export async function buildApp(opts: BuildAppOptions) {
   app.decorate("signer", opts.signer ?? createUrlSigner(config));
   registerJobs(
     app,
-    opts.jobs ?? createJobQueue({ log: app.log, createBoss: () => sendOnlyBoss(config) }),
+    opts.jobs ??
+      createJobQueue({
+        log: app.log,
+        createBoss: () => sendOnlyBoss(config),
+        pushDebounce: {
+          photosAnalyzedSec: native.PUSH_PHOTOS_DEBOUNCE_SEC,
+          shareViewedSec: native.PUSH_SHARE_DEBOUNCE_SEC,
+        },
+      }),
   );
   app.decorate("mailer", opts.mailer ?? createSmtpMailer(config, app.log));
   registerAi(app, opts.ai ?? createAiServices(opts.aiEnv ?? process.env, app.log));

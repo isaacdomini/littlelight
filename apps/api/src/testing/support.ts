@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
-import type { GoTrueClient, GoTrueSession } from "../auth/gotrue";
+import type { GoTrueClient, GoTrueReviewLinks, GoTrueSession } from "../auth/gotrue";
 import type { ApiConfig } from "../config";
 
 // Test-only helpers for the API unit and integration tests (docs/plans/step-3.md 3.10). Not
@@ -80,19 +80,35 @@ export function unsignedToken(payload: Record<string, unknown>): string {
   return `${b64({ alg: "none", typ: "JWT" })}.${b64(payload)}.`;
 }
 
-export type GoTrueStub = GoTrueClient & {
-  calls: Record<keyof GoTrueClient, unknown[][]>;
+/** Everything the real `createGoTrueClient` implements (step 9 adds the review links). */
+export type FullGoTrueClient = GoTrueClient & GoTrueReviewLinks;
+
+export type GoTrueStub = FullGoTrueClient & {
+  calls: Record<keyof FullGoTrueClient, unknown[][]>;
   /** Behaviour per method; assign to change what GoTrue answers mid-test. */
-  impl: Partial<GoTrueClient>;
+  impl: Partial<FullGoTrueClient>;
 };
 
+export interface StubGoTrueOptions {
+  /**
+   * Default true: the stub has `adminGenerateMagicLink`, like the real client. `false` leaves the
+   * method off the object (it is still in `calls`/`impl` for typing, never called), so
+   * `hasReviewLinks` is false: the review sign-in's fail-closed 503 path.
+   */
+  reviewLinks?: boolean;
+}
+
 /**
- * A recording `GoTrueClient`. `stub.calls.<method>` lists the argument arrays of every call. By
- * default `sendOtp`, `logout` and `adminDeleteUser` succeed and every other method throws (a
- * test must say what GoTrue does); pass `impl` to override any of them.
+ * A recording GoTrue client (`GoTrueClient` + `GoTrueReviewLinks`). `stub.calls.<method>` lists
+ * the argument arrays of every call. By default `sendOtp`, `logout` and `adminDeleteUser` succeed
+ * and every other method (including `adminGenerateMagicLink`) throws (a test must say what GoTrue
+ * does); pass `impl` to override any of them.
  */
-export function stubGoTrue(initial: Partial<GoTrueClient> = {}): GoTrueStub {
-  const impl: Partial<GoTrueClient> = { ...initial };
+export function stubGoTrue(
+  initial: Partial<FullGoTrueClient> = {},
+  opts: StubGoTrueOptions = {},
+): GoTrueStub {
+  const impl: Partial<FullGoTrueClient> = { ...initial };
   const calls: GoTrueStub["calls"] = {
     sendOtp: [],
     verify: [],
@@ -101,6 +117,7 @@ export function stubGoTrue(initial: Partial<GoTrueClient> = {}): GoTrueStub {
     refresh: [],
     logout: [],
     adminDeleteUser: [],
+    adminGenerateMagicLink: [],
   };
   const defaults: Record<string, (...a: never[]) => Promise<unknown>> = {
     sendOtp: async () => undefined,
@@ -108,7 +125,8 @@ export function stubGoTrue(initial: Partial<GoTrueClient> = {}): GoTrueStub {
     adminDeleteUser: async () => undefined,
   };
   const client: Record<string, unknown> = {};
-  for (const name of Object.keys(calls) as (keyof GoTrueClient)[]) {
+  for (const name of Object.keys(calls) as (keyof FullGoTrueClient)[]) {
+    if (name === "adminGenerateMagicLink" && opts.reviewLinks === false) continue;
     client[name] = async (...args: unknown[]) => {
       calls[name].push(args);
       const fn = (impl[name] ?? defaults[name]) as
@@ -118,7 +136,7 @@ export function stubGoTrue(initial: Partial<GoTrueClient> = {}): GoTrueStub {
       return fn(...args);
     };
   }
-  return Object.assign(client as unknown as GoTrueClient, { calls, impl });
+  return Object.assign(client as unknown as FullGoTrueClient, { calls, impl });
 }
 
 export async function gotrueSession(

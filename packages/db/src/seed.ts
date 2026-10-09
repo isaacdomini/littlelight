@@ -5,8 +5,10 @@
  * it exits 0 with "skipped" (so a production image that accidentally runs it does nothing); with
  * the flag in production it exits 1 without touching the database.
  *
- * Every row has a fixed id and is upserted, so any number of runs yields identical counts. No real
- * images are written: storage keys are placeholders. GPS / home coordinates are stored only
+ * Every row has a fixed id and is upserted, so any number of runs yields identical counts. No image
+ * bytes are written here: every original is `image/jpeg` at `babies/<baby>/originals/<photo>.jpg`,
+ * and in dev the worker's `ensureDemoMedia()` (step 9) puts metadata-free JPEG illustrations of
+ * non-real babies at those keys and writes the derivatives. GPS / home coordinates are stored only
  * through `encrypt_coord`, with `DATA_ENCRYPTION_KEY` passed as a bind parameter
  * (`set_config('app.data_key', $1, true)`), never in statement text. Nothing here logs
  * coordinates, notes or keys; the only secret-looking thing printed is the fixed dev share token.
@@ -74,8 +76,14 @@ interface DemoPhoto {
   note?: string;
   /** Only one photo carries (encrypted) GPS; the value never appears in logs. */
   gps?: { lat: number; lng: number; placeLabel: string };
-  mime: "image/jpeg" | "image/heic";
 }
+
+/**
+ * Every demo original is a JPEG (step 9, docs/plans/step-9.md 2.9 item 5): the worker's
+ * `ensureDemoMedia()` writes real, metadata-free JPEG illustrations at these keys (HEIC cannot be
+ * rendered in-repo), so the rows must say `image/jpeg` with `.jpg` keys.
+ */
+const DEMO_MIME = "image/jpeg";
 
 const PHOTOS: readonly DemoPhoto[] = [
   {
@@ -85,7 +93,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     caption: "Newborn asleep in a white blanket on the sofa.",
     tags: ["sleeping", "newborn", "indoor"],
     approval: "approved",
-    mime: "image/heic",
   },
   {
     nn: 2,
@@ -95,7 +102,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     tags: ["smiling", "indoor"],
     approval: "approved",
     milestoneId: PRESET.firstSmile,
-    mime: "image/heic",
   },
   {
     nn: 3,
@@ -104,7 +110,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     caption: "Tummy time on a striped play mat, head lifted.",
     tags: ["tummy time", "indoor", "play mat"],
     approval: "approved",
-    mime: "image/jpeg",
   },
   {
     nn: 4,
@@ -114,7 +119,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     tags: ["bath", "indoor"],
     approval: "approved",
     sensitive: true,
-    mime: "image/heic",
   },
   {
     nn: 5,
@@ -124,7 +128,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     tags: ["christmas", "indoor", "family"],
     approval: "approved",
     people: ["Grandma Rose"],
-    mime: "image/jpeg",
   },
   {
     nn: 6,
@@ -133,7 +136,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     caption: "Sitting up unassisted on the rug, holding a wooden rattle.",
     tags: ["sitting", "indoor", "toy"],
     approval: "approved",
-    mime: "image/heic",
   },
   {
     nn: 7,
@@ -143,7 +145,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     tags: ["outdoor", "stroller"],
     approval: "approved",
     deleted: true,
-    mime: "image/jpeg",
   },
   {
     nn: 8,
@@ -152,7 +153,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     caption: "Crawling across the kitchen floor toward the camera.",
     tags: ["crawling", "indoor", "kitchen"],
     approval: "approved",
-    mime: "image/heic",
   },
   {
     nn: 9,
@@ -167,7 +167,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     locationLabel: "Riverside Park",
     note: "three wobbly steps then a fall into Dad's arms.",
     gps: { lat: 47.6097, lng: -122.3331, placeLabel: "Riverside Park" },
-    mime: "image/jpeg",
   },
   {
     nn: 10,
@@ -178,7 +177,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     approval: "approved",
     milestoneId: PRESET.firstBirthday,
     people: ["Dad", "Grandma Rose"],
-    mime: "image/heic",
   },
   {
     nn: 11,
@@ -187,7 +185,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     caption: "Reading a picture book on the nanny's lap.",
     tags: ["reading", "indoor"],
     approval: "pending",
-    mime: "image/jpeg",
   },
   {
     nn: 12,
@@ -196,7 +193,6 @@ const PHOTOS: readonly DemoPhoto[] = [
     caption: "Pushing a toy cart across the living room.",
     tags: ["walking", "toy", "indoor"],
     approval: "pending",
-    mime: "image/jpeg",
   },
 ];
 
@@ -453,8 +449,10 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
 
     for (const p of PHOTOS) {
       const id = DEMO.photo(p.nn);
-      const key = `babies/${DEMO.baby}/originals/${id}.${p.mime === "image/heic" ? "heic" : "jpg"}`;
+      const key = `babies/${DEMO.baby}/originals/${id}.jpg`;
       const approved = p.approval === "approved";
+      // width/height/bytes: placeholders on first insert only (deliberately absent from the
+      // DO UPDATE list); the worker's demo-media step writes the real original's sizes.
       await q(
         `INSERT INTO public.photos (id, baby_id, uploaded_by, storage_key_original, sha256, width, height, bytes, mime,
            status, approval, approved_by, approved_at, taken_at, age_days, is_sensitive, deleted_at)
@@ -470,7 +468,7 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
           DEMO.users[p.uploadedBy],
           key,
           sha256(`demo-photo-${p.nn}`),
-          p.mime,
+          DEMO_MIME,
           p.approval,
           approved ? DEMO.users.mom : null,
           approved ? p.takenAt : null,
@@ -503,6 +501,10 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
           }),
         ],
       );
+      // Placeholder sizes on first insert only. The worker's `ensureDemoMedia()` (9.12) rewrites
+      // width/height/bytes to the real objects, so a re-seed must not reset them: an existing row
+      // is left alone unless its key was changed, in which case it is restored whole (the sizes
+      // then describe another object, and the worker corrects them again on its next run).
       for (const [kind, w, h, bytes] of [
         ["thumb", 300, 400, 24_000],
         ["display", 1536, 2048, 310_000],
@@ -511,7 +513,8 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
           `INSERT INTO public.photo_derivatives (photo_id, kind, storage_key, width, height, bytes)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (photo_id, kind) DO UPDATE SET storage_key = EXCLUDED.storage_key, width = EXCLUDED.width,
-             height = EXCLUDED.height, bytes = EXCLUDED.bytes`,
+             height = EXCLUDED.height, bytes = EXCLUDED.bytes
+           WHERE public.photo_derivatives.storage_key IS DISTINCT FROM EXCLUDED.storage_key`,
           [id, kind, `babies/${DEMO.baby}/derivatives/${id}/${kind}.jpg`, w, h, bytes],
         );
       }

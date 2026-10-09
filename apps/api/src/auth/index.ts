@@ -6,6 +6,7 @@ import type { GoTrueClient } from "./gotrue";
 import { inviteRoutes } from "./invites";
 import { memberRoutes } from "./members";
 import { registerAuthHook } from "./plugin";
+import type { ReviewAccount } from "./review";
 import { authRoutes } from "./routes";
 import { createAuthRuntime } from "./runtime";
 import { sessionRoutes } from "./sessions";
@@ -33,10 +34,13 @@ export {
 } from "./context";
 export {
   createGoTrueClient,
+  type GeneratedMagicLink,
   type GoTrueClient,
   GoTrueError,
+  type GoTrueReviewLinks,
   type GoTrueSession,
   type GoTrueUser,
+  hasReviewLinks,
   type IdTokenInput,
   type LogoutScope,
   type PkceInput,
@@ -47,6 +51,13 @@ export { hashInviteToken, inviteAcceptUrl, newInviteToken, toInvite } from "./in
 export { verifyAccessToken } from "./jwt";
 export { removalRequestLive, toMember } from "./members";
 export { csrfRejected, extractToken, needsCsrfHeader, requireAuth } from "./plugin";
+export {
+  countOtherFamilies,
+  isReviewEmail,
+  loadReviewAccount,
+  type ReviewAccount,
+  verifyReviewCode,
+} from "./review";
 export { type AuthRuntime, type AuthThrottles, createAuthThrottles } from "./runtime";
 export {
   accessCookieOptions,
@@ -62,6 +73,8 @@ export interface RegisterAuthDeps {
   gotrue: GoTrueClient;
   mailer: Mailer;
   config: ApiConfig;
+  /** Store-review account override (tests); default from the config / environment. */
+  review?: ReviewAccount | null;
 }
 
 /**

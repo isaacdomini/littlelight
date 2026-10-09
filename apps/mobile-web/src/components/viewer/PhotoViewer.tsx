@@ -15,6 +15,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Swiper as SwiperType } from "swiper";
 import { Keyboard, Virtual, Zoom } from "swiper/modules";
 import { Swiper, SwiperSlide } from "swiper/react";
+import { isNative } from "../../platform/platform";
 import "swiper/css";
 import "swiper/css/virtual";
 import "swiper/css/zoom";
@@ -57,7 +58,15 @@ export interface PhotoViewerProps {
   onEndReached?: () => void;
 }
 
-function download(url: string) {
+async function download(url: string, photoId: string) {
+  if (isNative()) {
+    // Fetch -> temp file -> share sheet ("Save Image"); the temp file is deleted afterwards.
+    const { downloadAndShare } = await import("../../platform/native/share");
+    if (!(await downloadAndShare(url, `Littlelight-${photoId.slice(0, 8)}`))) {
+      throw new Error("share failed");
+    }
+    return;
+  }
   const a = document.createElement("a");
   a.href = url;
   a.rel = "noopener";
@@ -326,7 +335,7 @@ function ViewerBody({
           icon={downloadOutline}
           label={t("viewer.downloadOriginal")}
           testId="viewer-download-original"
-          onClick={() => void run(async () => download(await fetchOriginalUrl(photo.id)))}
+          onClick={() => void run(async () => download(await fetchOriginalUrl(photo.id), photo.id))}
         />
       ) : null}
       {photo && isTrashed && isAdmin ? (

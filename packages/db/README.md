@@ -37,12 +37,12 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link (no parent user ids), the allow-listed columns of `photos`, `photo_derivatives` (thumb/display, and never those of a hidden sensitive photo), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Its only writes go through `viewer_session_check()`. Nothing else, and nothing once the link is expired/revoked or the baby is deleted (see "Sharing (step 8)"). |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`). Never invites, tokens, chat, members, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables). Never invites, tokens, chat, members, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
 | `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
-Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" for the one, narrow
-door into `auth.sessions`). Every table in `public` has
+Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" and "Native push" for
+the narrow doors into `auth.sessions`). Every table in `public` has
 `ENABLE` + `FORCE ROW LEVEL SECURITY`; policies are written `TO <role>` and named
 `<table>_<role>_<verb>`. Column-level grants mean `SELECT *` fails for `viewer`/`pipeline` on
 restricted tables and for `authenticated` on `babies` (no `home_*_enc`), `invites`, `photo_exif`
@@ -136,8 +136,9 @@ GoTrue keeps one `auth.sessions` row per device sign-in and deletes it on sign-o
 reuse and user deletion. The API uses that row as the liveness check behind every request (a
 deleted session is a `401 session_revoked` within one request, not after the JWT's hour), for the
 devices screen and for new-device alerts (PRD "Sessions and tokens"; step-3 D2). Four
-SECURITY DEFINER functions, owned by the superuser that runs migrations, are the **only** access
-path from an app role into `auth.*`: no table or schema grant on `auth` exists for
+SECURITY DEFINER functions, owned by the superuser that runs migrations, are the access path
+from an app role into `auth.*` (the step-9 push functions also read `auth.sessions`, through the
+internal, ungranted `push_session_live`; see "Native push"): no table or schema grant on `auth` exists for
 `authenticated`, `viewer`, `pipeline`, `service_role`, `littlelight_api` or `littlelight_worker`
 (GoTrue also enables RLS with no policies on every `auth` table, so even a stray grant would
 return nothing). Each function filters by `auth_uid()`, pins `search_path = pg_catalog, public`
@@ -407,6 +408,10 @@ anything else) and `photo_ai_paid_tier_tripwire` (step 2; no result row either).
 `baby_ai_enabled()` (plan `plus`, entitlement not expired, baby not deleted), the same predicate
 the API and `ai_eligible_photos` use, so a downgrade, an expired entitlement or a paying admin
 leaving (step 3 trigger) stops the pipeline at once.
+
+The tripwire's single exemption (migration `1792200000200`): an UPDATE that only clears
+`photo_ai.batch_id` is allowed for any baby, because batches mix babies and `ai_batches` deletes
+null that FK. It adds no AI content; any other column change is still refused.
 
 **Eligibility (`ai_eligible_photos(p_limit, p_prompt_version, p_schema_version, p_baby_id DEFAULT
 NULL, p_reprocess DEFAULT false, p_max_attempts DEFAULT 2) RETURNS SETOF uuid`).** The one
@@ -767,6 +772,105 @@ one include tag`, `share_rules tags …`, `share_links.…`, `share link expiry 
 approved, non-deleted photos …`, `a sensitive photo can only be shown …`) ⇒ 409; `share link is not
 active` (session insert raced a revoke) ⇒ 410 `share_link_expired`.
 
+## Native push (step 9)
+
+Migration `1792200000100_native-push.sql` (docs/plans/step-9.md 2.8, 2.9). Push is opt-in on the
+device (OS permission + "Turn on notifications"); the two `profiles` booleans are per-kind
+opt-outs. Text is generic and fixed in `@littlelight/shared` `pushMessage(kind, count)`; nothing
+in these tables or functions carries a name, caption or note.
+
+**Tables.** `push_devices` (one row per GoTrue session that turned notifications on: `user_id`,
+`session_id`, `platform` ios|android, `provider` apns|fcm with ios⇔apns, `token` 8..4096 chars
+without whitespace, `app_version`, `created_at`, `last_registered_at`, `disabled_at` +
+`disabled_reason` 'invalid_token'). Uniqueness is on `digest(token, 'sha256')` (a btree on the raw
+token would reject tokens above ~2,700 bytes, and a violation's DETAIL would print the token).
+`push_devices_shape` (BEFORE INSERT/UPDATE) checks every shape rule with fixed text before the
+CHECKs run, so no error ever echoes a token. `push_deliveries` (ledger: device, user, baby,
+optional share link, `kind` photos_analyzed|share_viewed, `status`
+sent|fake|failed|invalid_token|unconfigured, `item_count`, `created_at`). Ledger rows are per
+user: when a device row goes (unregister, sign-out prune, token moved) `device_id` becomes NULL and
+the row stays, so `push_targets`' `last_sent_at` (latest `sent`/`fake` row for user + baby + kind)
+and therefore the `PUSH_MIN_GAP_MIN` gap survive signing out and back in. Rows are deleted with
+the profile (account deletion) or the baby, and each delivery prunes that user's rows older than
+30 days (NULL-device rows included). Both ENABLE + FORCE RLS.
+
+**Functions** (SECURITY DEFINER, `search_path` pinned, REVOKEd from PUBLIC, fixed error text):
+
+| Function | Granted to | Behaviour |
+| --- | --- | --- |
+| `register_push_device(p_platform text, p_provider text, p_token text, p_app_version text) RETURNS uuid` | `authenticated` | Needs `auth_uid()` and the claims' `session_id` with a live session, else `push registration needs a session` (42501); shape errors are `check_violation`. Advisory-locked per token. A token held by another user or session moves here (old row deleted); other rows of this session are replaced (one device per session); the same token from the same session keeps its id, refreshes `app_version`/`last_registered_at` and clears a disable. Also deletes the caller's rows of dead sessions. Returns `push_devices.id`. |
+| `unregister_push_devices_for_session() RETURNS integer` | `authenticated` | Deletes the caller's rows for the claims' `session_id`; 0 without claims. |
+| `push_targets(p_baby_id uuid, p_kind text) RETURNS TABLE (device_id uuid, user_id uuid, provider text, token text, last_sent_at timestamptz)` | `pipeline`, `service_role` | Unknown kind ⇒ `unknown push kind`. First deletes every device row whose session is no longer live (VOLATILE for that reason). Returns enabled devices of **admins** of the baby (never contributors), baby `deleted_at IS NULL`, profile `deleted_at IS NULL`, the kind's `notify_*` true, session live (row in `auth.sessions` for that user, `not_after` not passed, used within 90 days = `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT`); `photos_analyzed` also needs `baby_ai_enabled()` (else no rows). `last_sent_at` = latest `sent`/`fake` delivery to that user for (baby, kind). |
+| `push_photos_analyzed_count(p_baby_id uuid, p_since timestamptz) RETURNS integer` | `pipeline`, `service_role` | `photo_ai` rows created after `p_since` for approved, live, unquarantined, non-duplicate photos of the baby. |
+| `push_link_baby(p_share_link_id uuid) RETURNS uuid` | `pipeline` | The link's baby while that baby is live, else NULL. |
+| `push_record_delivery(p_device_id uuid, p_baby_id uuid, p_share_link_id uuid, p_kind text, p_status text, p_count integer) RETURNS void` | `pipeline` | Validates kind/status/count and that the link belongs to the baby (`invalid_parameter_value`); a device deleted meanwhile records nothing; inserts the ledger row (user from the device); `invalid_token` ⇒ `disabled_at = now()`, `disabled_reason = 'invalid_token'`; prunes that user's rows older than 30 days (including rows whose device is gone). |
+
+Sign-out, sign-out everywhere, per-device sign-out, idle expiry and account deletion all stop
+pushes with no extra code path (the session row disappears or ages out; profiles cascade).
+
+**Who may read/write what.**
+
+| Table | `authenticated` | `viewer` | `pipeline` | `service_role` |
+| --- | --- | --- | --- | --- |
+| `push_devices` | own rows: SELECT `id, platform, provider, app_version, created_at, last_registered_at, disabled_at` (never `token`, `session_id`, `user_id`, `disabled_reason`; `SELECT *` fails), DELETE; INSERT/UPDATE only through the functions | – | – (functions only) | ALL |
+| `push_deliveries` | – | – | – (functions only) | ALL |
+| `profiles.notify_photos_analyzed`, `notify_share_viewed` | SELECT (existing policy), UPDATE own row | – | – | ALL |
+
+**Error mapping for the API**: `push registration needs a session` / `needs a profile` ⇒ 401
+`session_revoked` (or 403); `push registration has an invalid platform or provider`,
+`push_devices.token has an invalid shape`, `push_devices.app_version has an invalid shape` ⇒ 400
+`validation_failed` (the request schema rejects these first).
+
+## Store-review family (`src/review-family.ts`)
+
+`pnpm db:review-family --email <address> [--confirm-production]` (one transaction;
+docs/plans/step-9.md 2.9 item 6, 2.11, D4). It needs the **superuser** `DATABASE_URL` (it reads
+`auth.users` and writes past RLS, like `db:plan`): the `migrate` container already has it; on
+the host export it yourself (the api/worker role URLs are refused by RLS and grants). For an **existing** GoTrue user with a
+live profile it creates or refreshes baby "Sunny" (born 10 months before the first run; the birth
+date is kept on re-runs), the user as admin, plan `plus` owned by that user (no billing), 24 photo
+rows (`uploaded`, approved, `image/jpeg`, originals `babies/<babyId>/originals/<photoId>.jpg`,
+the demo seed's pattern, `created_at` spread over the 10 months so ingest's no-EXIF fallback gives
+plausible ages), parent details on 8 photos
+(First smile / First food / First steps, people "Grandma" and "Dad", short notes) and 4
+measurements, plus `baby.created` / `baby.plan_changed` audit rows (`actor_user_id` NULL). Every id
+is `reviewId(userId, label)` (sha256-derived, UUID version 8), so re-runs touch the same rows;
+existing photo rows are never reset. Prints ids and counts only.
+
+Every review object lives under the baby prefix `babies/<babyId>/`, like any uploaded photo, so
+the worker's `purge.trash` removes it with a purged photo (`photoPrefixes`: the original key
+starts with `babies/<babyId>/originals/<photoId>`) or a purged baby (`babyPrefix`). Account
+deletion covers it the same way: the review account is the sole admin of "Sunny", so deleting
+the account first requires trashing the album (409 `sole_admin` otherwise), which `purge.trash`
+then hard-deletes, objects included, within the 30-day window. No key outside `babies/` is
+ever written for the review family.
+
+Refusals: `NODE_ENV=production` without `--confirm-production`; no GoTrue user for the email; no
+live profile; in production, any membership of the account in another baby (the review sign-in
+must never open a real family; outside production this is a warning so the dev check can use
+`demo-dad@littlelight.local`). Exit codes 0 / 1 refused or failed / 2 usage.
+
+The id rule lives in `src/review-ids.ts` (only `node:crypto`), exported as the subpath
+`@littlelight/db/review` (`reviewId`, `reviewBabyId`, `reviewPhotoId`) so the api can import it
+without the package root (`pg`, `node-pg-migrate`). The api's review sign-in
+(`apps/api/src/auth/review.ts`, task 9.10) refuses, in **every** environment, an account that
+belongs to any baby other than `reviewBabyId(userId)` (403 before any session exists), and while
+the review account is enabled it cannot accept invites. So the script's dev-only warning case
+(`demo-dad`, who is in the demo families) can be provisioned but cannot use the review sign-in;
+try the sign-in in dev with a fresh account instead (sign up once, then run the script for it).
+
+Runbook (production needs the user's approval, plan 5.2 U12):
+1. Sign up once in the app with the review email (normal email code) and accept the terms.
+2. `docker compose run --rm migrate pnpm db:review-family --email <review email> --confirm-production`
+   (the `migrate` container has the superuser `DATABASE_URL`; from the host, export it first).
+3. `docker compose exec worker node apps/worker/dist/demo-media.js --review-baby <babyId> --confirm-production`
+   (worker, task 9.12; the production worker image has no `pnpm`) writes the 24 illustrations and
+   runs the normal ingest. In dev: `docker compose -f docker-compose.dev.yml exec worker pnpm demo:media --review-baby <babyId>`. Until it runs, the worker's `ingest.reconcile` cron
+   retries these `uploaded` rows every 5 minutes and logs a fetch failure (ids only); once the
+   objects exist reconcile alone would ingest them.
+4. Set `REVIEW_ACCOUNT_EMAIL` and `REVIEW_ACCOUNT_CODE_HASH` (`sh docker/tools/review-code-hash.sh`)
+   on the api only. If App Review deletes the account, repeat from step 1.
+
 ## Environment
 
 | Variable | Used by | Notes |
@@ -792,6 +896,7 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 | `pnpm db:migrate:down [n\|all]` | Revert the last `n` migrations (default 1); `all` reverts everything |
 | `pnpm db:seed` | Demo family (needs `SEED_DEMO_FAMILY=true`, `DATA_ENCRYPTION_KEY`; refuses in production) |
 | `pnpm db:plan <babyId> plus\|free [--owner <userId>] [--expires <iso>]` | Dev/operator plan switch, audited (`baby.plan_changed`); refuses in production without `--i-know-this-is-production` (see "AI pipeline") |
+| `pnpm db:review-family --email <addr> [--confirm-production]` | Store-review family for an existing user (see "Store-review family"); refuses in production without the flag |
 | `pnpm --filter @littlelight/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
 | `pnpm --filter @littlelight/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` |
 
@@ -818,13 +923,17 @@ Mom), `demo-dad@…` (admin, Dad), `demo-nanny@…` (contributor); baby `…-000
 "Grandparents" (dev token `demo-grandparents-share-token` = `DEMO_IDS.shareToken`, only its sha256
 stored; `ttl_hours = 24`, re-upserted so it always expires 24 h after the last seed run, no
 passcode; a revoked demo link is deleted and recreated because a revoked link cannot be revived
-with the same token; rule `milestones`); 12 photos `…-0000000003NN`: 8 approved, 1 approved and
+with the same token; rule `milestones`); 12 photos `…-0000000003NN` (all `image/jpeg`, originals `babies/<baby>/originals/<photo>.jpg`): 8 approved, 1 approved and
 sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny;
 4 shared photos, all hand-picked by mom: 2, 9, 10 and the bath photo 4, which is **not released**
 (viewers get a hidden tile and cannot read its derivatives); 3 measurements; `photo_search` rows for the 9 live approved photos (with `place`;
 `embedding`, `embed_model`, `doc_version`, `content_hash` and `embedded_at` NULL, also reset on every
 re-seed, so the worker's `search.reconcile` rebuilds and embeds them); one audit row.
-Storage keys are placeholders; no image bytes exist.
+The seed writes no image bytes: in dev the worker's `ensureDemoMedia()` (step 9, task 9.12)
+puts metadata-free JPEG illustrations of non-real babies at those keys and writes the derivatives.
+Re-seeding never clobbers the real sizes it wrote: `photos.width/height/bytes` are placeholders on
+first insert only, and an existing `photo_derivatives` row is left untouched unless its
+`storage_key` differs (then it is restored whole and the worker corrects the sizes again).
 
 A separate, dev-only **performance seed** (`pnpm perf:seed`, lives in
 `apps/worker/src/tools/perf-seed.ts`, docs/plans/step-5.md 2.8) adds a second baby
@@ -906,3 +1015,5 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1791800000100_timeline-and-details.sql` | `photos_baby_id_sort_idx` (replaces `photos_baby_id_taken_at_idx`) + `photos_baby_id_age_days_idx`; `age_group(integer)` (IMMUTABLE; authenticated/viewer/pipeline/service_role); `milestones.updated_at` + trigger, `UPDATE (updated_at)` grant, `milestones_cap` (200 custom per baby), `milestones_name_guard` (1..80 chars, no preset names ⇒ 23505); `photo_details_milestone_id_photo_id_idx` (replaces `photo_details_milestone_id_idx`); `measurements_photo_same_baby` trigger, `measurements_photo_id_idx`; 14 CHECK constraints on parent-entered text dropped and re-stated as shape triggers (`photo_details_shape`, `measurements_shape`, `babies_shape`, `upload_sessions_shape`, `share_links_shape`, `chat_threads_shape`, `invites_shape`, `photo_ai_overrides_shape`; see "Shape triggers") | drop the new indexes/triggers/functions/column, recreate the two step-2 indexes and every dropped CHECK verbatim |
 | `1792000000100_search-and-chat.sql` | `photo_search.doc_version/content_hash/embedded_at/place` + unembedded, (baby_id, place) and `lower_text_array(people)` GIN indexes; `lower_text_array(text[])`; `search_baby_ids()` and the `photo_search_authenticated_select` rewrite to `baby_id = ANY (ARRAY(SELECT search_baby_ids()))`; `photo_search_guard`, `photos_search_cleanup`, `photo_search_mark_stale` (5 triggers); `search_stale_photos(...)`, `photo_search_orphans(...)` (pipeline/service_role); `photo_search_text_candidates(...)`, `photo_search_term_candidates(...)` (SECURITY DEFINER, authenticated/service_role); `ai_spend` (ENABLE+FORCE RLS, `ai_spend_guard`); `ai_baby_month_cost_usd` = items + spend; `chat_threads (baby_id, user_id)` unique; `chat_messages.cited_measurement_ids/cost_usd/tools_used/status` + `chat_messages_shape`; `chat_turns` + `chat_reserve_turn(integer)`, `chat_user_turns_24h()`, `chat_messages_claim_turn` | drop all of it; restore the step-2 `photo_search` SELECT policy and the step-6 `ai_baby_month_cost_usd` body verbatim |
 | `1792100000100_sharing-v1.sql` | `share_links.ttl_hours`, `token_rotated_at` (DB-maintained), `has_passcode` (generated); `share_links_shape` (+ ttl 1..720, expiry ≤ 30 days, hash format), `share_links_cap` (20/baby), `share_links_lifecycle` (no renew/un-revoke of a revoked link with the old token), `share_links_end_sessions`; `viewer_sessions.revoked_at` + `viewer_sessions_guard` + `viewer_session_check(uuid)`; `shared_photo_exclusions` (ENABLE+FORCE RLS, guard); `shared_photos.sensitive_released_at/_by`, narrowed user UPDATE grant, viewer column grant, `shared_photos_pipeline_delete` (rule rows); `shared_photos_gate` hardened (`FOR SHARE`, quarantine, analysed-only / exclusions / no release for rule rows, release normalisation); `photos_sensitive_unshare_rules` also clears releases; `viewer_link_id()`, `viewer_photo_ids()`, `viewer_media_photo_ids()`, `viewer_can_see_media(uuid)` and the four viewer policies rewritten on them; `share_rules.evaluated_at` (pipeline UPDATE), narrowed user grants, updated_at on rule columns only, `share_rules_shape` (tags, include tag, paid plan); `share_passcode_failures` (service_role only) + `share_passcode_lock_state(uuid, bytea)` + `share_link_passcode_locked(uuid)` | drop the new tables, functions, triggers, columns, index and policies; restore the step-2 gate, unshare trigger, viewer policies (photos: step 4), shared_photos/share_rules grants and policies, share_rules updated_at trigger, and the step-5 `share_links_shape`, verbatim |
+| `1792200000100_native-push.sql` | guard (`auth.sessions`); `profiles.notify_photos_analyzed/notify_share_viewed` (default true, own-row UPDATE grant); `push_devices` (ENABLE+FORCE RLS, owner SELECT of safe columns + DELETE, unique `digest(token,'sha256')`, `push_devices_shape`) and `push_deliveries` (ENABLE+FORCE RLS, service_role only); internal `push_session_live`, `push_claims_session_id`; `register_push_device`, `unregister_push_devices_for_session` (authenticated); `push_targets`, `push_photos_analyzed_count` (pipeline/service_role), `push_link_baby`, `push_record_delivery` (pipeline) | drop the functions, both tables and the shape function; revoke and drop the two `profiles` columns |
+| `1792200000200_photo-ai-tripwire-detach.sql` | `photo_ai_paid_tier_tripwire` exempts exactly one UPDATE shape: `batch_id` becomes NULL and every other column except `updated_at` is unchanged (whole-row jsonb compare), so deleting an `ai_batches` row (FK `ON DELETE SET NULL`) works when the batch holds photos of a free/lapsed/trashed baby; every other INSERT/UPDATE for such a baby is still refused (23514, same fixed message) | restore the step-2 tripwire body verbatim |

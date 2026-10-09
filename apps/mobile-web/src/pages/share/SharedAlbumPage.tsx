@@ -4,6 +4,7 @@ import { type InfiniteData, useInfiniteQuery, useQueryClient } from "@tanstack/r
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlowPage } from "../../components/Page";
 import { InstallPrompt } from "../../components/share/InstallPrompt";
+import { NativeDone } from "../../components/share/NativeDone";
 import { PasscodeForm } from "../../components/share/PasscodeForm";
 import { SharedAlbumGrid } from "../../components/share/SharedAlbumGrid";
 import { SharedPhotoViewer } from "../../components/share/SharedPhotoViewer";
@@ -107,6 +108,7 @@ export function SharedAlbumPage({ token }: { token: string }) {
       <FlowPage title={t("shareViewer.errorTitle")} testId="share-error">
         <Message>{view.message}</Message>
         <Button onClick={() => window.location.reload()}>{t("common.retry")}</Button>
+        <NativeDone />
       </FlowPage>
     );
   }
@@ -193,13 +195,16 @@ function Album({ album, onLost }: { album: ShareAlbum; onLost: () => void }) {
           data-testid="share-album"
         >
           <header className="flex flex-col gap-3 px-4 pb-2 pt-[max(env(safe-area-inset-top),1rem)]">
-            <div className="flex flex-col gap-0.5">
-              <h1 className="text-2xl font-semibold" data-testid="share-album-title">
-                {t("shareViewer.title", { name })}
-              </h1>
-              <p className="text-sm text-muted" aria-live="polite">
-                {[album.linkName, tn("shareViewer.photoCount", count)].join(" · ")}
-              </p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <h1 className="text-2xl font-semibold" data-testid="share-album-title">
+                  {t("shareViewer.title", { name })}
+                </h1>
+                <p className="text-sm text-muted" aria-live="polite">
+                  {[album.linkName, tn("shareViewer.photoCount", count)].join(" · ")}
+                </p>
+              </div>
+              <NativeDone />
             </div>
             <InstallPrompt />
           </header>

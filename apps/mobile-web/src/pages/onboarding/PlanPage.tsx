@@ -1,12 +1,15 @@
 import { PLUS_PRICE_USD_MONTHLY } from "@littlelight/shared";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { FlowPage } from "../../components/Page";
 import { Button, Card } from "../../components/ui";
 import { t } from "../../i18n";
+import { isNative } from "../../platform/platform";
 
 /** Plan step. Upgrade is UI only in step 3: payments arrive with billing (RevenueCat/Stripe). */
 export function PlanPage() {
   const navigate = useNavigate();
+  // Plus is bought on the web: the app has no plan step, prices or upgrade prompts.
+  if (isNative()) return <Navigate to="/onboarding/first-upload" replace />;
   return (
     <FlowPage title={t("plan.title")} testId="plan">
       <Card>

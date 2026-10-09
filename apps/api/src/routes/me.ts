@@ -33,6 +33,8 @@ interface ProfileRow {
   terms_version: string | null;
   privacy_version: string | null;
   accepted_at: Date | null;
+  notify_photos_analyzed: boolean;
+  notify_share_viewed: boolean;
 }
 
 function toProfile(r: ProfileRow): Profile {
@@ -45,13 +47,15 @@ function toProfile(r: ProfileRow): Profile {
     termsVersion: r.terms_version,
     privacyVersion: r.privacy_version,
     acceptedAt: r.accepted_at?.toISOString() ?? null,
+    notifyPhotosAnalyzed: r.notify_photos_analyzed,
+    notifyShareViewed: r.notify_share_viewed,
   };
 }
 
 async function loadMe(client: Tx, ctx: TxContext): Promise<MeResponse> {
   const { rows } = await client.query<ProfileRow>(
     `SELECT user_id, display_name, relationship_label, timezone, units, terms_version,
-            privacy_version, accepted_at
+            privacy_version, accepted_at, notify_photos_analyzed, notify_share_viewed
        FROM public.profiles WHERE user_id = $1`,
     [ctx.uid],
   );
@@ -100,13 +104,19 @@ export function normalizeTimeZone(input: string): string | null {
   return resolved === "UTC" || zones.has(resolved) ? input : null;
 }
 
-/** Profile field → column (fixed map: column names never come from input). */
+/**
+ * Profile field → column (fixed map: column names never come from input). Step 9 adds the push
+ * opt-outs (`profiles.notify_*`, column-granted UPDATE to `authenticated`, migration 16).
+ */
 const PROFILE_COLUMNS = {
   displayName: "display_name",
   relationshipLabel: "relationship_label",
   timezone: "timezone",
   units: "units",
+  notifyPhotosAnalyzed: "notify_photos_analyzed",
+  notifyShareViewed: "notify_share_viewed",
 } as const;
+type ProfileField = keyof typeof PROFILE_COLUMNS;
 
 export function meRoutes(app: FastifyInstance): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -173,12 +183,18 @@ export function meRoutes(app: FastifyInstance): void {
     preHandler: requireAuth,
     handler: async (request) => {
       const body = request.body;
-      const update: Partial<Record<keyof typeof PROFILE_COLUMNS, string>> = {
+      const update: Partial<Record<ProfileField, string | boolean>> = {
         ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
         ...(body.relationshipLabel !== undefined
           ? { relationshipLabel: body.relationshipLabel }
           : {}),
         ...(body.units !== undefined ? { units: body.units } : {}),
+        ...(body.notifyPhotosAnalyzed !== undefined
+          ? { notifyPhotosAnalyzed: body.notifyPhotosAnalyzed }
+          : {}),
+        ...(body.notifyShareViewed !== undefined
+          ? { notifyShareViewed: body.notifyShareViewed }
+          : {}),
       };
       if (body.timezone !== undefined) {
         const zone = normalizeTimeZone(body.timezone);
@@ -193,18 +209,19 @@ export function meRoutes(app: FastifyInstance): void {
         await requireConsent(client, ctx);
         const sets: string[] = [];
         const values: unknown[] = [ctx.uid];
-        for (const [field, value] of Object.entries(update) as [
-          keyof typeof PROFILE_COLUMNS,
-          string,
-        ][]) {
+        for (const [field, value] of Object.entries(update) as [ProfileField, string | boolean][]) {
           values.push(value);
           sets.push(`${PROFILE_COLUMNS[field]} = $${values.length}`);
         }
         // requireConsent proved the row exists; RLS limits the UPDATE to the caller's own row.
-        await client.query(
-          `UPDATE public.profiles SET ${sets.join(", ")} WHERE user_id = $1`,
-          values,
-        );
+        // The schema requires at least one field, so `sets` is never empty; guard anyway rather
+        // than send `UPDATE … SET  WHERE` (a 500).
+        if (sets.length > 0) {
+          await client.query(
+            `UPDATE public.profiles SET ${sets.join(", ")} WHERE user_id = $1`,
+            values,
+          );
+        }
         return loadMe(client, ctx);
       });
     },

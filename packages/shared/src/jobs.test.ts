@@ -33,8 +33,9 @@ describe("JOBS", () => {
       searchBackfill: "search.backfill",
       shareApply: "share.apply",
       shareReconcile: "share.reconcile",
+      pushNotify: "push.notify",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(12);
+    expect(new Set(Object.values(JOBS)).size).toBe(13);
   });
 });
 

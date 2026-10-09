@@ -30,6 +30,7 @@ import { ShareExpired } from "./components/share/ShareExpired";
 import { t } from "./i18n";
 import { ApiError } from "./lib/api";
 import { CallbackPage } from "./pages/auth/CallbackPage";
+import { NativeSignInPage } from "./pages/auth/NativeSignInPage";
 import { VerifyPage } from "./pages/auth/VerifyPage";
 import { WelcomePage } from "./pages/auth/WelcomePage";
 import { ChatPage } from "./pages/ChatPage";
@@ -46,10 +47,13 @@ import { ProfilePage } from "./pages/onboarding/ProfilePage";
 import { ShareLinkPhotosPage } from "./pages/ShareLinkPhotosPage";
 import { AccountPage } from "./pages/settings/AccountPage";
 import { DevicesPage } from "./pages/settings/DevicesPage";
+import { NotificationsPage } from "./pages/settings/NotificationsPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 import { SharedAlbumPage } from "./pages/share/SharedAlbumPage";
 import { TimelinePage } from "./pages/TimelinePage";
 import { UploadPage } from "./pages/UploadPage";
+import { NativeEvents, NativeViewerEvents } from "./platform/native/NativeEvents";
+import { isNative } from "./platform/platform";
 
 const TAB_ROUTES = ["/chat", "/timeline", "/upload", "/milestones", "/family", "/settings"];
 
@@ -106,6 +110,7 @@ function ParentApp() {
         <IonApp>
           <IonReactRouter>
             <FreshSignInProvider>
+              {isNative() && <NativeEvents />}
               <IonTabs>
                 <IonRouterOutlet>
                   {/* public */}
@@ -119,6 +124,7 @@ function ParentApp() {
                   />
                   <Route path="/verify" element={<VerifyPage />} />
                   <Route path="/signin/callback" element={<CallbackPage />} />
+                  <Route path="/signin/native" element={<NativeSignInPage />} />
                   <Route path="/invite/:token" element={<InvitePage />} />
                   <Route path="/legal/terms" element={<LegalPage kind="terms" />} />
                   <Route path="/legal/privacy" element={<LegalPage kind="privacy" />} />
@@ -157,6 +163,10 @@ function ParentApp() {
                     element={app("/settings/devices", <DevicesPage />, true)}
                   />
                   <Route
+                    path="/settings/notifications"
+                    element={app("/settings/notifications", <NotificationsPage />, true)}
+                  />
+                  <Route
                     path="/settings/account"
                     element={app("/settings/account", <AccountPage />, true)}
                   />
@@ -181,6 +191,7 @@ function ViewerApp({ token }: { token: string }) {
   return (
     <QueryClientProvider client={queryClient}>
       <IonApp>
+        {isNative() && <NativeViewerEvents />}
         <SharedAlbumPage token={token} />
       </IonApp>
     </QueryClientProvider>

@@ -2,6 +2,7 @@ import { setupIonicReact } from "@ionic/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { isNative } from "./platform/platform";
 import "./styles.css";
 
 // Quiet motion: Ionic page transitions are skipped when the OS asks for reduced motion.
@@ -21,8 +22,18 @@ setupIonicReact({
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element");
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+async function start() {
+  // Native only: Keychain token store, background uploader, token refresh. A lazy chunk, so the
+  // web bundle never loads Capacitor code.
+  const native = isNative() ? await import("./platform/native/bootstrap") : null;
+  await native?.bootstrapNative();
+  if (!root) return;
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+  void native?.afterFirstRender();
+}
+
+void start();

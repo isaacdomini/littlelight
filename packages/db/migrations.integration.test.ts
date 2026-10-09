@@ -11,7 +11,7 @@ import { databaseUrl, env } from "./test/harness";
 // auth.users is created by GoTrue in the dev stack; on a bare pgvector (CI) the harness stubs it.
 // WARNING: reverts every migration, so only point it at a disposable database.
 
-const EXPECTED_MIGRATIONS = 15;
+const EXPECTED_MIGRATIONS = 17;
 const quiet = () => undefined;
 
 const APP_TABLES = [
@@ -35,6 +35,8 @@ const APP_TABLES = [
   "photo_search",
   "photos",
   "profiles",
+  "push_deliveries",
+  "push_devices",
   "share_links",
   "share_passcode_failures",
   "share_rules",
@@ -106,7 +108,8 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     const set = new Set(withPolicy.map((r) => r.tablename));
     // chat_turns is deny-all by design (and share_passcode_failures, step 8) (FORCE RLS, no policy, no grant but service_role): it is
     // reached only through SECURITY DEFINER functions (search-chat.integration.test.ts).
-    const denyAll = new Set(["chat_turns", "share_passcode_failures"]);
+    // push_deliveries (step 9) is deny-all too: only push_record_delivery() writes it.
+    const denyAll = new Set(["chat_turns", "share_passcode_failures", "push_deliveries"]);
     for (const table of APP_TABLES) {
       if (denyAll.has(table)) {
         expect(set.has(table), `${table} must stay policy-less (deny-all)`).toBe(false);
@@ -400,6 +403,30 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
            OR (table_name = 'milestones' AND column_name = 'updated_at'))`,
     );
     expect(stepFiveCols, "step 5 columns left behind").toEqual([]);
+    const stepNine = await rows(
+      `SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE nspname = 'public' AND proname = ANY($1)`,
+      [
+        [
+          "push_devices_shape",
+          "push_session_live",
+          "push_claims_session_id",
+          "register_push_device",
+          "unregister_push_devices_for_session",
+          "push_targets",
+          "push_photos_analyzed_count",
+          "push_link_baby",
+          "push_record_delivery",
+        ],
+      ],
+    );
+    expect(stepNine, "step 9 push functions left behind").toEqual([]);
+    const stepNineCols = await rows(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'profiles'
+          AND column_name IN ('notify_photos_analyzed', 'notify_share_viewed')`,
+    );
+    expect(stepNineCols, "step 9 profile columns left behind").toEqual([]);
     const policies = await rows("SELECT policyname FROM pg_policies WHERE schemaname = 'public'");
     expect(policies).toEqual([]);
     const table = await scalar("SELECT to_regclass('public.worker_heartbeats') AS t");

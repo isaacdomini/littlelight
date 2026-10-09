@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 // pg-boss job names (queues) and payloads (docs/plans/step-4.md 2.5, docs/plans/step-5.md 2.5,
-// docs/plans/step-6.md 2.4, docs/plans/step-7.md 2.4, docs/plans/step-8.md 2.4).
+// docs/plans/step-6.md 2.4, docs/plans/step-7.md 2.4, docs/plans/step-8.md 2.4,
+// docs/plans/step-9.md 2.8).
 // The worker owns queue creation and scheduling; the API sends `photo.ingest` and
 // `photo.reindex`. Names live here so every producer
 // and consumer refers to one constant, never a string literal. Payloads carry ids and a time
@@ -55,6 +56,13 @@ export const JOBS = {
    * (`shareReconcileJobSchema`): watermark sync of every auto-share rule.
    */
   shareReconcile: "share.reconcile",
+  /**
+   * On demand (`pushNotifyJobSchema`, `short` queue, singleton key `pushNotifySingletonKey`):
+   * one push notification fan-out to a baby's admins (docs/plans/step-9.md 2.8). Sent by the
+   * worker's reindex hook (`photos_analyzed`) and by the api after a new viewer session
+   * (`share_viewed`), with a per-kind debounce as `startAfter`.
+   */
+  pushNotify: "push.notify",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -218,3 +226,31 @@ export type ShareApplyJob = z.infer<typeof shareApplyJobSchema>;
 /** `share.reconcile` payload: none (cron ticks send no data; handlers parse `job.data ?? {}`). */
 export const shareReconcileJobSchema = z.strictObject({});
 export type ShareReconcileJob = z.infer<typeof shareReconcileJobSchema>;
+
+/**
+ * Queue name of push notifications (docs/plans/step-9.md 2.8): an alias of `JOBS.pushNotify`,
+ * kept for the api's `enqueuePush`. Queue policy `short` (one queued job per
+ * `pushNotifySingletonKey(job)`, so a burst coalesces), `retryLimit 2`, `retryDelay 30`,
+ * `expireInSeconds 300`; `startAfter` = `PUSH_PHOTOS_DEBOUNCE_SEC` / `PUSH_SHARE_DEBOUNCE_SEC`.
+ */
+export const PUSH_NOTIFY_JOB = JOBS.pushNotify;
+
+/**
+ * `push.notify` payload: a kind and one id (strict: never a token, name, count or text). The
+ * worker resolves recipients at run time through `push_targets` (admins, prefs on, live sessions;
+ * `photos_analyzed` only for babies with AI enabled) and builds the text with `pushMessage`.
+ * - `photos_analyzed`: sent by the worker's reindex hook for `reason: "ai"` batches, per baby.
+ * - `share_viewed`: sent by the api after a viewer exchange created a new viewer session.
+ */
+export const pushNotifyJobSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("photos_analyzed"), babyId: z.uuid() }),
+  z.strictObject({ kind: z.literal("share_viewed"), shareLinkId: z.uuid() }),
+]);
+export type PushNotifyJob = z.infer<typeof pushNotifyJobSchema>;
+
+/** pg-boss `singletonKey` of a `push.notify` job: `${kind}:${id}`, so a burst coalesces. */
+export function pushNotifySingletonKey(job: PushNotifyJob): string {
+  return job.kind === "photos_analyzed"
+    ? `${job.kind}:${job.babyId}`
+    : `${job.kind}:${job.shareLinkId}`;
+}

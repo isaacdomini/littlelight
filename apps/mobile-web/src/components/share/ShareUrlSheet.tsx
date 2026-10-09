@@ -1,6 +1,8 @@
 import { IonModal } from "@ionic/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { t } from "../../i18n";
+import { hapticSuccess } from "../../lib/haptics";
+import { isNative } from "../../platform/platform";
 import { Button } from "../ui";
 import { copyText } from "./format";
 
@@ -10,12 +12,25 @@ import { copyText } from "./format";
  */
 export function ShareUrlBody({ url, onDone }: { url: string; onDone: () => void }) {
   const [copied, setCopied] = useState(false);
-  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const native = isNative();
+  const canShare =
+    native || (typeof navigator !== "undefined" && typeof navigator.share === "function");
+
+  // A link was just created: a light confirmation tap in the app.
+  useEffect(() => {
+    if (native) hapticSuccess();
+  }, [native]);
 
   async function copy() {
     setCopied(await copyText(url));
   }
   async function share() {
+    if (native) {
+      // The iOS/Android share sheet; the URL is handed to the OS and never logged or stored.
+      const { shareLink } = await import("../../platform/native/share");
+      await shareLink({ url, title: t("share.url.shareTitle") }); // dismissing is not an error
+      return;
+    }
     try {
       await navigator.share({ title: t("share.url.shareTitle"), url });
     } catch (e) {

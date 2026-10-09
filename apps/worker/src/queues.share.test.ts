@@ -145,7 +145,7 @@ describe("share handlers", () => {
       log: recordingLog(),
       ingestConcurrency: 1,
     });
-    expect(registered.size).toBe(12);
+    expect(registered.size).toBe(13);
     await registered.get(JOBS.shareApply)?.([
       job({ shareLinkId: LINK, reason: "rule_changed" }),
       job({ bad: true }),

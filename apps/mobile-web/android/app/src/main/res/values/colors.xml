@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/DESIGN.md: warm coral accent; calm light surface. -->
+<resources>
+    <color name="colorPrimary">#E8836B</color>
+    <color name="colorPrimaryDark">#C96A53</color>
+    <color name="colorAccent">#E8836B</color>
+    <color name="splash_background">#FFFFFF</color>
+    <color name="notification_accent">#E8836B</color>
+</resources>

@@ -5,6 +5,7 @@ import {
   ingestJobSchema,
   JOBS,
   type JobName,
+  pushNotifyJobSchema,
   reindexJobSchema,
   searchBackfillJobSchema,
   searchReconcileJobSchema,
@@ -20,6 +21,7 @@ import { ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
 import { purgeTrash } from "./purge";
+import { createPushSender, handlePushNotifyJob, type PushSender } from "./push";
 import {
   chainSearchBackfill,
   SEARCH_RECONCILE_SEND_OPTIONS,
@@ -27,6 +29,7 @@ import {
   sendAiBackfill,
   sendAiFlush,
   sendIngest,
+  sendPushNotify,
   sendReindex,
   sendSearchBackfill,
   sendShareApply,
@@ -51,13 +54,21 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job search.backfill '{"babyId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job share.apply '{"shareLinkId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job share.reconcile
+//   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"share_viewed","shareLinkId":"…"}'
+//   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"photos_analyzed","babyId":"…"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
 //   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
+//   pnpm --filter @littlelight/worker run-job --enqueue push.notify '{"kind":"photos_analyzed","babyId":"…"}'
 //
 // `photo.reindex` runs the auto-share hook first, like the worker; the share jobs make no model
 // call and need no AI env.
+//
+// `push.notify` runs in-process with this process's `PUSH_PROVIDER` (and APNS_*/FCM_* for live),
+// the min-gap rule from `PUSH_MIN_GAP_MIN` (a re-send goes to the queue), and no "already covered"
+// check (there is no job creation time). `--enqueue push.notify` uses the per-kind debounce
+// (`PUSH_PHOTOS_DEBOUNCE_SEC` / `PUSH_SHARE_DEBOUNCE_SEC`) like the real producers.
 //
 // The AI jobs run in-process with this process's AI env (`VISION_PROVIDER`, keys): without a
 // provider, flush/poll print `{skipped: true}`, and the search jobs (`photo.reindex`,
@@ -111,6 +122,7 @@ async function main(argv: string[]): Promise<number> {
   const storage = createStorage(s3, config.S3_BUCKET);
   // Send-only pg-boss on the worker role: the running worker owns migrations and cron.
   let boss: PgBoss | undefined;
+  let pushSender: PushSender | undefined;
   const getBoss = async () => {
     if (!boss) {
       boss = new PgBoss({
@@ -168,6 +180,15 @@ async function main(argv: string[]): Promise<number> {
             }),
           };
           break;
+        case JOBS.pushNotify: {
+          const job = pushNotifyJobSchema.parse(payload);
+          const debounce =
+            job.kind === "photos_analyzed"
+              ? config.PUSH_PHOTOS_DEBOUNCE_SEC
+              : config.PUSH_SHARE_DEBOUNCE_SEC;
+          result = { jobId: await sendPushNotify(b, job, debounce) };
+          break;
+        }
         default:
           result = { jobId: await b.send(name, {}) };
       }
@@ -210,7 +231,16 @@ async function main(argv: string[]): Promise<number> {
           });
           result = reindexJob
             ? await handleReindexJobs(
-                { indexer, autoSharer: createAutoSharer({ pool, log }), log },
+                {
+                  indexer,
+                  autoSharer: createAutoSharer({ pool, log }),
+                  pushHook: {
+                    pool,
+                    send: async (job) =>
+                      sendPushNotify(await getBoss(), job, config.PUSH_PHOTOS_DEBOUNCE_SEC),
+                  },
+                  log,
+                },
                 [{ id: "run-job", data: reindexJob }],
               )
             : backfillJob
@@ -227,6 +257,22 @@ async function main(argv: string[]): Promise<number> {
           shareReconcileJobSchema.parse(payload);
           result = await createAutoSharer({ pool, log }).reconcile();
           break;
+        case JOBS.pushNotify: {
+          // Strict parse first: a bad payload is an error (exit 1), not a silent drop.
+          const job = pushNotifyJobSchema.parse(payload);
+          pushSender = createPushSender(config, log);
+          result = await handlePushNotifyJob(
+            {
+              pool,
+              sender: pushSender,
+              log,
+              minGapMin: config.PUSH_MIN_GAP_MIN,
+              resend: async (j, startAfterSec) => sendPushNotify(await getBoss(), j, startAfterSec),
+            },
+            { id: "run-job", data: job },
+          );
+          break;
+        }
         case JOBS.aiFlush:
         case JOBS.aiPoll:
         case JOBS.aiBackfill: {
@@ -268,6 +314,7 @@ async function main(argv: string[]): Promise<number> {
     console.error(JSON.stringify({ job: name, error: errorCategory(err) }));
     return 1;
   } finally {
+    await pushSender?.close().catch(() => undefined);
     await boss?.stop({ graceful: false, timeout: 2_000 }).catch(() => undefined);
     await pool.end().catch(() => undefined);
     s3.destroy();

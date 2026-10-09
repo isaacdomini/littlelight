@@ -4,11 +4,12 @@ import {
   UPLOAD_MAX_FILES_PER_SESSION,
   type UploadDetails,
 } from "@littlelight/shared";
-import { chevronDown, cloudUploadOutline, imagesOutline } from "ionicons/icons";
-import { type DragEvent, useRef, useState } from "react";
+import { cameraOutline, chevronDown, cloudUploadOutline, imagesOutline } from "ionicons/icons";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { AppHeader } from "../components/AppHeader";
+import { PushPrimer } from "../components/PushPrimer";
 import { UploadRow } from "../components/UploadRow";
 import {
   Button,
@@ -20,10 +21,13 @@ import {
   TextField,
 } from "../components/ui";
 import { t } from "../i18n";
+import { hapticSuccess } from "../lib/haptics";
 import { usePhotosInvalidation } from "../lib/queries";
 import { clearResumableUpload, hasResumableUpload, uploadManager } from "../lib/upload/manager";
 import { useUploadItems } from "../lib/upload/useUploads";
 import { FILE_ACCEPT } from "../lib/upload/validate";
+import type { PickOutcome } from "../platform/native/picker";
+import { isNative, nativePlatform } from "../platform/platform";
 
 interface DetailsForm {
   milestoneId: string;
@@ -150,7 +154,14 @@ export function UploadPage() {
   const dragDepth = useRef(0);
   const [showDetails, setShowDetails] = useState(false);
   const [form, setForm] = useState<DetailsForm>(EMPTY_DETAILS);
-  const [resumable, setResumable] = useState(() => (babyId ? hasResumableUpload(babyId) : false));
+  const native = isNative();
+  // Native has no "choose the same photos" step: re-picking is safe because the server skips
+  // photos it already holds (SHA-256), and the picker copies are gone after a restart anyway.
+  const [resumable, setResumable] = useState(
+    () => !native && (babyId ? hasResumableUpload(babyId) : false),
+  );
+  const [pickBusy, setPickBusy] = useState(false);
+  const [pickMessage, setPickMessage] = useState<string | null>(null);
   const [tooMany, setTooMany] = useState(false);
 
   const isContributor = baby?.role === "contributor";
@@ -168,6 +179,45 @@ export function UploadPage() {
     setTooMany(files.length > UPLOAD_MAX_FILES_PER_SESSION);
     uploadManager.add(babyId, files, toDetails(form));
   };
+
+  const addNativeOutcome = (out: PickOutcome, source: "library" | "camera") => {
+    if (out.status === "denied") {
+      setPickMessage(
+        t(source === "camera" ? "native.upload.cameraDenied" : "native.upload.denied"),
+      );
+    } else if (out.status === "error") {
+      setPickMessage(t("native.upload.pickError"));
+    } else if (out.status === "picked" && babyId) {
+      setPickMessage(out.failed > 0 ? t("native.upload.skipped", { n: out.failed }) : null);
+      setTooMany(false);
+      if (out.files.length > 0) uploadManager.addNative(babyId, out.files, toDetails(form));
+    }
+  };
+
+  const pickNative = async (source: "library" | "camera") => {
+    if (!babyId || pickBusy) return;
+    setPickBusy(true);
+    setPickMessage(null);
+    try {
+      const picker = await import("../platform/native/picker");
+      addNativeOutcome(
+        source === "camera" ? await picker.takePhoto() : await picker.pickPhotos(),
+        source,
+      );
+    } finally {
+      setPickBusy(false);
+    }
+  };
+
+  // A light tap when a batch finishes (app only).
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (summary.active > 0) wasActive.current = true;
+    else if (wasActive.current) {
+      wasActive.current = false;
+      if (summary.uploaded > 0) hapticSuccess();
+    }
+  }, [summary.active, summary.uploaded]);
 
   const resumeFiles = (list: FileList | null) => {
     if (!babyId || !list || list.length === 0) return;
@@ -226,34 +276,38 @@ export function UploadPage() {
               </EmptyState>
             ) : (
               <>
-                <input
-                  ref={inputRef}
-                  data-testid="upload-input"
-                  type="file"
-                  multiple
-                  accept={FILE_ACCEPT}
-                  className="sr-only"
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  onChange={(e) => {
-                    addFiles(e.target.files);
-                    e.target.value = "";
-                  }}
-                />
-                <input
-                  ref={resumeInputRef}
-                  data-testid="upload-resume-input"
-                  type="file"
-                  multiple
-                  accept={FILE_ACCEPT}
-                  className="sr-only"
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  onChange={(e) => {
-                    resumeFiles(e.target.files);
-                    e.target.value = "";
-                  }}
-                />
+                {native ? null : (
+                  <>
+                    <input
+                      ref={inputRef}
+                      data-testid="upload-input"
+                      type="file"
+                      multiple
+                      accept={FILE_ACCEPT}
+                      className="sr-only"
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      onChange={(e) => {
+                        addFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    <input
+                      ref={resumeInputRef}
+                      data-testid="upload-resume-input"
+                      type="file"
+                      multiple
+                      accept={FILE_ACCEPT}
+                      className="sr-only"
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      onChange={(e) => {
+                        resumeFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </>
+                )}
 
                 {resumable ? (
                   <Card className="flex flex-col gap-2" data-testid="upload-resume">
@@ -284,17 +338,56 @@ export function UploadPage() {
                   >
                     <IonIcon icon={imagesOutline} className="h-7 w-7" />
                   </span>
-                  <Button
-                    variant={summary.uploaded > 0 ? "secondary" : "primary"}
-                    data-testid="upload-choose"
-                    onClick={() => inputRef.current?.click()}
-                  >
-                    {t("upload.choose")}
-                  </Button>
-                  <p className="hidden text-sm text-muted [@media(pointer:fine)]:block">
-                    {dragging ? t("upload.dropActive") : t("upload.dropHint")}
-                  </p>
-                  <p className="text-sm text-muted">{t("upload.limitHint")}</p>
+                  {native ? (
+                    <>
+                      <div className="flex w-full max-w-xs flex-col gap-3">
+                        <Button
+                          variant={summary.uploaded > 0 ? "secondary" : "primary"}
+                          data-testid="upload-choose"
+                          disabled={pickBusy}
+                          onClick={() => void pickNative("library")}
+                        >
+                          {t("native.upload.choose")}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          data-testid="upload-camera"
+                          disabled={pickBusy}
+                          onClick={() => void pickNative("camera")}
+                        >
+                          <IonIcon aria-hidden icon={cameraOutline} className="h-5 w-5" />
+                          {t("native.upload.camera")}
+                        </Button>
+                      </div>
+                      <p className="text-sm text-muted">{t("native.upload.primer")}</p>
+                      <p className="text-sm text-muted">{t("upload.limitHint")}</p>
+                      <p className="text-sm text-muted" data-testid="upload-background-note">
+                        {t("native.upload.background")}
+                      </p>
+                      {nativePlatform() === "android" ? (
+                        <p className="text-sm text-muted" data-testid="upload-android-note">
+                          {t("native.upload.androidNote")}
+                        </p>
+                      ) : null}
+                      {pickMessage ? (
+                        <Message data-testid="upload-pick-error">{pickMessage}</Message>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        variant={summary.uploaded > 0 ? "secondary" : "primary"}
+                        data-testid="upload-choose"
+                        onClick={() => inputRef.current?.click()}
+                      >
+                        {t("upload.choose")}
+                      </Button>
+                      <p className="hidden text-sm text-muted [@media(pointer:fine)]:block">
+                        {dragging ? t("upload.dropActive") : t("upload.dropHint")}
+                      </p>
+                      <p className="text-sm text-muted">{t("upload.limitHint")}</p>
+                    </>
+                  )}
                   {isContributor ? <p className="text-sm">{t("upload.reviewNote")}</p> : null}
                   {tooMany ? (
                     <Message kind="info">
@@ -388,6 +481,7 @@ export function UploadPage() {
                         ) : null}
                       </div>
                     </div>
+                    <PushPrimer uploaded={summary.uploaded > 0 && summary.active === 0} />
                     <ul className="ll-list" data-testid="upload-list">
                       {items.map((item) => (
                         <UploadRow

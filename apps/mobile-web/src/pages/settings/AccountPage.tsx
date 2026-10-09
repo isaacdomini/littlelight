@@ -8,6 +8,7 @@ import { Button, Card, CheckField, Message } from "../../components/ui";
 import { t } from "../../i18n";
 import { apiFetch, errorMessage, isApiError } from "../../lib/api";
 import { DELETION_PREVIEW_KEY, useDeletionPreview } from "../../lib/queries";
+import { isNative } from "../../platform/platform";
 
 export function AccountPage() {
   const navigate = useNavigate();
@@ -129,7 +130,7 @@ export function AccountPage() {
             <ul className="list-disc space-y-2 pl-5">
               <li>{t("account.consequence1")}</li>
               <li>{t("account.consequence2")}</li>
-              <li>{t("account.consequence3")}</li>
+              {isNative() ? null : <li>{t("account.consequence3")}</li>}
               <li>{t("account.consequence4")}</li>
             </ul>
             <CheckField

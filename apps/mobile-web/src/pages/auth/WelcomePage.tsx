@@ -9,6 +9,7 @@ import { errorMessage, isApiError } from "../../lib/api";
 import { requestCode } from "../../lib/authApi";
 import { useAuthConfig } from "../../lib/queries";
 import { createPkceChallenge, pendingEmail, pendingInvite } from "../../lib/session";
+import { isNative } from "../../platform/platform";
 
 const OAUTH_REDIRECT = `${window.location.origin}/signin/callback`;
 
@@ -33,7 +34,8 @@ export function WelcomePage() {
   const [needCaptcha, setNeedCaptcha] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | undefined>();
 
-  const providers = config.data?.providers;
+  // Native is email-code only until Apple/Google sign-in lands in the app (9b).
+  const providers = isNative() ? undefined : config.data?.providers;
   const siteKey = config.data?.turnstileSiteKey ?? null;
 
   async function onSubmit(e: FormEvent) {

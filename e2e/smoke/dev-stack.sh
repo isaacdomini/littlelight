@@ -93,9 +93,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 15 migrations applied"
+step "3a. database: all 17 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "15" ] || fail "expected 15 applied migrations, found $MIGS"
+[ "$MIGS" = "17" ] || fail "expected 17 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -206,8 +206,8 @@ echo "api/worker use their own MinIO service accounts; worker queues ready; logs
 
 
 step "5e. step 6: AI wiring (queues line, provider line), seeded bath description, paid-tier gate, no keys in clients"
-# step 6 added 2 queues (10), step 7/8 more (12): the newest worker boot line carries the total
-grep -Eq 'queues: 12' <<<"$WLOG" || fail "worker log does not show 12 queues"
+# step 6 added 2 queues (10), step 7/8 more (12), step 9 push.notify (13): the boot line carries the total
+grep -Eq 'queues: 13' <<<"$WLOG" || fail "worker log does not show 13 queues"
 W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
 W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
 if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
@@ -341,6 +341,81 @@ fi
 SHARE_LEAK="$("${DC[@]}" logs --no-color --since 10m api web 2>&1 | grep -cF -e "$LINK_TOKEN" || true)"
 [ "$SHARE_LEAK" = "0" ] || fail "the share token appears in api/web logs ($SHARE_LEAK line(s))"
 echo "sharing: viewer endpoints, 410 pages, parent isolation and log hygiene ok"
+
+step "5h. step 9: native transport: association files, CORS from the app origins, push device route, demo media"
+AASA_H="$(curl -sI "$BASE/.well-known/apple-app-site-association")"
+grep -qi '^content-type: application/json' <<<"$AASA_H" || fail "apple-app-site-association is not served as application/json: $AASA_H"
+AASA="$(curl -fsS "$BASE/.well-known/apple-app-site-association")" || fail "no apple-app-site-association"
+[ "$(printf '%s' "$AASA" | json 'j.applinks.details[0].components.map(c=>c["/"]).join(",")')" = "/invite/*,/s/*,/signin/native*" ] \
+  || fail "AASA components are not /invite/*, /s/*, /signin/native*: $AASA"
+[ "$(curl -fsS "$BASE/.well-known/assetlinks.json" | json 'j[0].target.package_name')" = "com.tesarsoft.littlelight" ] \
+  || fail "assetlinks.json package_name is not com.tesarsoft.littlelight"
+# CORS preflight through the web proxy (:8080): the two app origins are allowed, without credentials
+for ORIGIN in 'capacitor://localhost' 'https://localhost'; do
+  PH="$(curl -si -X OPTIONS "$BASE/api/me" -H "origin: $ORIGIN" -H 'access-control-request-method: GET' \
+    -H 'access-control-request-headers: authorization,x-littlelight-client')"
+  grep -qi "^access-control-allow-origin: $ORIGIN" <<<"$PH" || fail "preflight from $ORIGIN has no matching allow-origin: $PH"
+  grep -qi 'access-control-allow-credentials' <<<"$PH" && fail "preflight from $ORIGIN carries Access-Control-Allow-Credentials"
+done
+EVIL="$(curl -si -X OPTIONS "$BASE/api/me" -H 'origin: https://evil.example' -H 'access-control-request-method: GET' | grep -ci '^access-control-allow-origin' || true)"
+[ "$EVIL" = "0" ] || fail "preflight from a foreign origin got an allow-origin header"
+# an allowed origin without the native client header is refused (csrf), not served
+C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/auth/otp" -H 'origin: https://localhost' -H 'content-type: application/json' -d '{"email":"x@example.com"}')"
+[ "$C" = "403" ] || fail "an app origin without X-Littlelight-Client answered $C, expected 403"
+
+# native sign-in (bearer tokens in the body, no cookie), then the push device route
+N_EMAIL="smoke-native-$(date +%s)-$RANDOM@example.com"
+NH='X-Littlelight-Client: native'
+curl -fsS -o /dev/null -X POST "$BASE/api/auth/otp" -H 'content-type: application/json' -H "$NH" -d "{\"email\":\"$N_EMAIL\"}" || fail "native OTP request failed"
+N_CODE=""
+for _ in $(seq 1 30); do
+  NID="$(curl -fsS "$MAIL/api/v1/search?query=to:$N_EMAIL" | json 'j.messages?.[0]?.ID')" || true
+  if [ -n "$NID" ]; then
+    N_CODE="$(curl -fsS "$MAIL/api/v1/message/$NID" | json 'j.HTML' | grep -Eo '>[0-9]{6}<' | sed -n '1{s/[<>]//g;p;}' || true)"
+    [ -n "$N_CODE" ] && break
+  fi
+  sleep 1
+done
+[ -n "$N_CODE" ] || fail "no native sign-in code arrived"
+curl -s -D "$TMP/n-headers.txt" -o "$TMP/n-verify.json" -X POST "$BASE/api/auth/verify" -H 'content-type: application/json' -H "$NH" \
+  -d "{\"email\":\"$N_EMAIL\",\"code\":\"$N_CODE\"}" >/dev/null
+grep -qi '^set-cookie' "$TMP/n-headers.txt" && fail "native verify set a cookie"
+N_TOK="$(json 'j.tokens.accessToken' <"$TMP/n-verify.json")"
+[ -n "$N_TOK" ] || fail "native verify returned no tokens.accessToken"
+N_ME="$(curl -fsS "$BASE/api/me" -H "$NH" -H "authorization: Bearer $N_TOK")" || fail "GET /api/me with a bearer token failed"
+if [ "$(printf '%s' "$N_ME" | json 'j.consent.ok')" != "true" ]; then
+  curl -fsS -o /dev/null -X POST "$BASE/api/me/consent" -H "$NH" -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' \
+    -d "{\"termsVersion\":\"$(printf '%s' "$N_ME" | json 'j.consent.requiredTermsVersion')\",\"privacyVersion\":\"$(printf '%s' "$N_ME" | json 'j.consent.requiredPrivacyVersion')\",\"isAdult\":true}" \
+    || fail "native consent failed"
+fi
+PUSH_TOKEN="$(openssl rand -hex 32)"
+PUSH_BODY="{\"platform\":\"ios\",\"provider\":\"apns\",\"token\":\"$PUSH_TOKEN\",\"appVersion\":\"1.0.0\"}"
+C="$(curl -s -o "$TMP/push.json" -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H "$NH" -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' -d "$PUSH_BODY")"
+[ "$C" = "201" ] || fail "POST /api/me/push-devices (native) answered $C: $(cat "$TMP/push.json")"
+grep -qF "$PUSH_TOKEN" "$TMP/push.json" && fail "the push device response echoes the device token"
+C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H 'X-Littlelight-Client: web' -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' -d "$PUSH_BODY")"
+[ "$C" = "400" ] || fail "POST /api/me/push-devices as the web client answered $C, expected 400"
+C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H "$NH" -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' \
+  -d "{\"platform\":\"ios\",\"provider\":\"fcm\",\"token\":\"$PUSH_TOKEN\",\"appVersion\":\"1.0.0\"}")"
+[ "$C" = "400" ] || fail "an iOS device registered with provider fcm answered $C, expected 400"
+C="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/me/push-devices/current" -H "$NH" -H "authorization: Bearer $N_TOK")"
+[ "$C" = "204" ] || fail "DELETE /api/me/push-devices/current answered $C, expected 204"
+[ "$("${PSQL[@]}" -c "select count(*) from push_devices d join auth.users u on u.id=d.user_id where u.email='$N_EMAIL'")" = "0" ] \
+  || fail "the smoke user's push device row survived DELETE .../current"
+PLOG="$("${DC[@]}" logs --no-color --since 10m api worker 2>&1 || true)"
+grep -qF "$PUSH_TOKEN" <<<"$PLOG" && fail "the device token appears in api/worker logs"
+grep -qF "$N_TOK" <<<"$PLOG" && fail "the native bearer token appears in api/worker logs"
+
+# demo family media: every demo photo has real thumbnails (200 image/jpeg), not placeholders
+DEMO_IDS='["00000000-0000-4000-8000-000000000301","00000000-0000-4000-8000-000000000302","00000000-0000-4000-8000-000000000303","00000000-0000-4000-8000-000000000304","00000000-0000-4000-8000-000000000305","00000000-0000-4000-8000-000000000306","00000000-0000-4000-8000-000000000307","00000000-0000-4000-8000-000000000308","00000000-0000-4000-8000-000000000309","00000000-0000-4000-8000-000000000310","00000000-0000-4000-8000-000000000311","00000000-0000-4000-8000-000000000312"]'
+DEMO_URLS="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/photos/urls" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"photoIds\":$DEMO_IDS}")" \
+  || fail "POST photos/urls for the demo photos failed"
+for u in $(printf '%s' "$DEMO_URLS" | json 'Object.values(j.urls).map(x=>x.thumbUrl).join(" ")'); do
+  THUMB="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$u")"
+  [ "$THUMB" = "200 image/jpeg" ] || fail "a demo thumbnail answered '$THUMB', expected '200 image/jpeg'"
+done
+[ "$(printf '%s' "$DEMO_URLS" | json 'Object.keys(j.urls).length')" = "12" ] || fail "expected thumbnail URLs for 12 demo photos"
+echo "association files, CORS, native sign-in, push device route and 12 demo thumbnails ok"
 
 if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   step "5c. stopping storage degrades the api (503) and the worker (unhealthy)"

@@ -4,8 +4,9 @@ import { FlowPage } from "../../components/Page";
 import { Button } from "../../components/ui";
 import { t } from "../../i18n";
 import { markOnboardingDone } from "../../lib/session";
+import { isNative } from "../../platform/platform";
 
-/** Permission primer. The real picker arrives with the upload screen (step 4). */
+/** Permission primer (PRD sign-up step 8); the picker itself is on the Upload screen. */
 export function FirstUploadPage() {
   const navigate = useNavigate();
   const { baby } = useCurrentBaby();
@@ -14,7 +15,11 @@ export function FirstUploadPage() {
     navigate(to, { replace: true });
   };
   return (
-    <FlowPage title={t("primer.title")} subtitle={t("primer.body")} testId="primer">
+    <FlowPage
+      title={t("primer.title")}
+      subtitle={isNative() ? t("native.primer.body") : t("primer.body")}
+      testId="primer"
+    >
       <Button data-testid="primer-continue" onClick={() => finish("/upload")}>
         {t("primer.choose")}
       </Button>

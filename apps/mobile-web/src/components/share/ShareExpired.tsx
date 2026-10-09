@@ -1,5 +1,6 @@
 import { t } from "../../i18n";
 import { FlowPage } from "../Page";
+import { NativeDone } from "./NativeDone";
 
 /**
  * Friendly end of the line for an unknown, expired, revoked or regenerated link (410). Says
@@ -13,7 +14,7 @@ export function ShareExpired() {
       testId="share-expired"
       brand
     >
-      {null}
+      <NativeDone variant="secondary" />
     </FlowPage>
   );
 }

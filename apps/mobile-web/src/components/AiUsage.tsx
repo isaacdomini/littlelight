@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import { useAiUsage } from "../lib/queries/ai";
+import { isNative } from "../platform/platform";
 
 const usd = (n: number) => n.toFixed(2);
 
@@ -18,6 +19,7 @@ export function AiUsage({ babyId, paid }: { babyId: string; paid: boolean }) {
     });
     if (d.photos.failed > 0) line += ` · ${t("ai.usageFailed", { n: d.photos.failed })}`;
   }
+  if (!paid && isNative()) return null;
   return (
     <section
       aria-labelledby="ai-usage-h"

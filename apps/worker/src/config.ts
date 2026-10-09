@@ -6,6 +6,7 @@ import {
   ingestEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
+  pushEnvSchema,
   s3EnvSchema,
   searchEnvSchema,
   shareEnvSchema,
@@ -26,7 +27,9 @@ import { z } from "zod";
 // and one AI-env guard that DOES fail boot: `EMBED_DIMS` must equal the `photo_search.embedding`
 // column width (1024), or every upsert would fail. Step 8 adds the worker's part of
 // `shareEnvSchema`: `SHARE_RECONCILE_CRON` (docs/plans/step-8.md 2.8; `SHARE_MEDIA_URL_TTL_SEC` is
-// the api's and never fails worker boot).
+// the api's and never fails worker boot). Step 9 adds `pushEnvSchema` as-is (docs/plans/step-9.md
+// 2.8, 2.10): `PUSH_PROVIDER` (none|fake|live; `fake` fails boot in production), APNS_*/FCM_*
+// (secrets: never logged), the `PUSH_*_URL` overrides and the debounce/gap settings.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -44,6 +47,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof aiPipelineEnvSchema> &
   z.output<typeof searchEnvSchema> &
   z.output<typeof workerShareEnvSchema> &
+  z.output<typeof pushEnvSchema> &
   z.output<typeof logEnvSchema>;
 
 /** Env needed by `healthcheck.ts` only (no S3/JWT/encryption key: it reads the heartbeat row). */
@@ -115,6 +119,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     aiPipelineEnvSchema,
     searchEnvSchema,
     workerShareEnvSchema,
+    pushEnvSchema,
     embedDimsGuardSchema,
     logEnvSchema,
   ]);

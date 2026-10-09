@@ -31,6 +31,24 @@ export {
   runMigrations,
 } from "./migrate.js";
 export { describeError, redactSecrets } from "./redact.js";
+// Store-review family (docs/plans/step-9.md 2.9 item 6): `pnpm db:review-family`.
+export {
+  CONFIRM_PRODUCTION_FLAG,
+  parseReviewFamilyArgs,
+  provisionReviewFamily,
+  REVIEW_BABY_NAME,
+  REVIEW_PHOTO_COUNT,
+  REVIEW_PHOTOS,
+  REVIEW_USAGE,
+  type ReviewFamilyArgs,
+  type ReviewFamilyOptions,
+  type ReviewFamilyResult,
+  ReviewUsageError,
+  reviewBabyId,
+  reviewId,
+  reviewOriginalKey,
+  reviewPhotoId,
+} from "./review-family.js";
 export { DEMO, type SeedOptions, type SeedResult, seed, seedFromEnv } from "./seed.js";
 // Test/CI only (docs/plans/step-2.md 2.1): never used by the running stack.
 export { AUTH_USERS_STUB_SQL, appRoleUrl, ensureAuthSchemaStub } from "./test-support.js";

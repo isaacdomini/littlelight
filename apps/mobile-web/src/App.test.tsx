@@ -1,5 +1,5 @@
 import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
 afterEach(cleanup);
@@ -15,6 +15,11 @@ describe("App", () => {
       el.tagName.startsWith("ION-"),
     ) as Array<Element & { componentOnReady?: () => Promise<unknown> }>;
     await Promise.all(ionEls.map((el) => el.componentOnReady?.().catch(() => undefined)));
+    // Also settle every other pending dynamic import (platform/native/*, @capacitor/*, route
+    // chunks) and one macrotask, so nothing resolves after the environment is torn down.
+    await vi.dynamicImportSettled();
+    await new Promise((r) => setTimeout(r, 0));
+    await vi.dynamicImportSettled();
     expect(tabs).toEqual(["chat", "timeline", "upload", "milestones", "family"]);
     const labels = container.textContent ?? "";
     for (const label of ["Chat", "Timeline", "Upload", "Milestones", "Family"]) {

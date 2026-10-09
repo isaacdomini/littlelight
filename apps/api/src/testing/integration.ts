@@ -4,20 +4,38 @@ import { PRIVACY_VERSION, TERMS_VERSION } from "@littlelight/shared";
 import type { FastifyInstance, FastifyServerOptions, LightMyRequestResponse } from "fastify";
 import pg from "pg";
 import { buildApp } from "../app";
-import type { GoTrueClient } from "../auth/gotrue";
+import { GoTrueError, type VerifyInput } from "../auth/gotrue";
 import type { ApiConfig } from "../config";
 import { type CaptureMailer, captureMailer } from "../email/mailer";
 import type { AiServices } from "../plugins/ai";
 import type { JobQueue } from "../plugins/jobs";
 import type { StorageClient } from "../plugins/storage";
 import type { UrlSigner } from "../storage/sign";
-import { type GoTrueStub, signAccessToken, stubGoTrue, testConfig } from "./support";
+import {
+  type FullGoTrueClient,
+  type GoTrueStub,
+  gotrueSession,
+  signAccessToken,
+  stubGoTrue,
+  testConfig,
+} from "./support";
 
 // Shared harness for `*.integration.test.ts` in apps/api (docs/plans/step-3.md 3.10). These run
 // against a migrated Postgres (`DATABASE_URL`, the superuser URL, as in packages/db) and skip
 // when it is unset. The app under test uses a real `littlelight_api` pool, so every query goes
 // through `runAs` exactly like production; the superuser client `admin` is for fixtures and for
 // asserting persisted state only. GoTrue is a recording stub, mail is `captureMailer()`.
+//
+// GoTrue stub defaults that touch the database (each overridable via `opts.gotrue` or
+// `h.gotrue.impl.<method> = …`):
+// - `adminDeleteUser` deletes the `auth.users` row (GoTrue's hard delete cascades).
+// - `adminGenerateMagicLink(email)` (step 9 review sign-in) finds the non-SSO `auth.users` row for
+//   the email or creates one (as GoTrue does; tracked for `close()`), and returns its id with a
+//   fresh single-use hashed token. No email is captured (GoTrue sends none for admin links).
+// - `verify({kind:"token_hash"})` redeems a token issued by that fake once: it inserts a live
+//   `auth.sessions` row and returns a signed session for the user; a second redemption is
+//   GoTrue's 403 `otp_expired`. Any other `verify` input throws "unexpected GoTrue call: verify",
+//   exactly like the plain stub, so tests that never set `verify` behave as before.
 
 export const databaseUrl = process.env.DATABASE_URL;
 
@@ -104,7 +122,9 @@ export interface Harness {
 
 export interface HarnessOptions {
   config?: Partial<ApiConfig>;
-  gotrue?: Partial<GoTrueClient>;
+  gotrue?: Partial<FullGoTrueClient>;
+  /** Default true. `false`: the GoTrue stub lacks `adminGenerateMagicLink` (review 503 path). */
+  gotrueReviewLinks?: boolean;
   /** S3 stub (default: answers `{}` to everything; use `createS3Stub()` for uploads). */
   s3?: StorageClient;
   /** Job queue stub (default: the real lazy pg-boss, which the tests never trigger). */
@@ -129,13 +149,48 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     ...opts.config,
   });
   const mailer = captureMailer();
-  const gotrue = stubGoTrue({
-    // Realistic default: GoTrue's hard delete cascades through auth.users.
-    adminDeleteUser: async (uid: string) => {
-      await admin.query("DELETE FROM auth.users WHERE id = $1", [uid]);
+  const users: string[] = [];
+  const babies = new Set<string>();
+  /** Hashed tokens issued by the fake `adminGenerateMagicLink`, until redeemed by `verify`. */
+  const magicLinks = new Map<string, { userId: string; email: string; used: boolean }>();
+  const gotrue = stubGoTrue(
+    {
+      // Realistic default: GoTrue's hard delete cascades through auth.users.
+      adminDeleteUser: async (uid: string) => {
+        await admin.query("DELETE FROM auth.users WHERE id = $1", [uid]);
+      },
+      adminGenerateMagicLink: async (email: string) => {
+        const normalized = email.trim().toLowerCase();
+        const found = await admin.query<{ id: string }>(
+          "SELECT id FROM auth.users WHERE lower(email) = $1 AND is_sso_user = false",
+          [normalized],
+        );
+        let userId = found.rows[0]?.id;
+        if (!userId) {
+          userId = randomUUID();
+          await admin.query(
+            `INSERT INTO auth.users (id, aud, role, email, created_at, updated_at)
+             VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())`,
+            [userId, normalized],
+          );
+          users.push(userId);
+        }
+        const hashedToken = `fake-hashed-${randomUUID()}`;
+        magicLinks.set(hashedToken, { userId, email: normalized, used: false });
+        return { userId, hashedToken };
+      },
+      verify: async (input: VerifyInput) => {
+        const link = input.kind === "token_hash" ? magicLinks.get(input.tokenHash) : undefined;
+        if (!link) throw new Error("unexpected GoTrue call: verify");
+        if (link.used) throw new GoTrueError(403, "otp_expired");
+        link.used = true;
+        const sessionId = await insertSession(link.userId, 0);
+        return gotrueSession({ sub: link.userId, email: link.email, sessionId });
+      },
+      ...opts.gotrue,
     },
-    ...opts.gotrue,
-  });
+    { reviewLinks: opts.gotrueReviewLinks !== false },
+  );
   const app = await buildApp({
     config,
     mailer,
@@ -146,9 +201,6 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     ...(opts.ai ? { ai: opts.ai } : { aiEnv: {} }),
     logger: opts.logger ?? false,
   });
-
-  const users: string[] = [];
-  const babies = new Set<string>();
 
   async function insertSession(userId: string, ageMin: number, userAgent?: string) {
     const id = randomUUID();

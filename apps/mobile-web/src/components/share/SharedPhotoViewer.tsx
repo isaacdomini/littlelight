@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Swiper as SwiperType } from "swiper";
 import { Keyboard, Virtual, Zoom } from "swiper/modules";
 import { Swiper, SwiperSlide } from "swiper/react";
+import { isNative } from "../../platform/platform";
 import "swiper/css";
 import "swiper/css/virtual";
 import "swiper/css/zoom";
@@ -130,6 +131,13 @@ export function SharedPhotoViewer({
     setError(null);
     try {
       const res = await fetchShareDownload(photo.id);
+      if (isNative()) {
+        const { downloadAndShare } = await import("../../platform/native/share");
+        if (!(await downloadAndShare(res.url, `Littlelight-${photo.id.slice(0, 8)}`))) {
+          throw new Error("share failed");
+        }
+        return;
+      }
       const a = document.createElement("a");
       a.href = res.url;
       a.rel = "noopener noreferrer";

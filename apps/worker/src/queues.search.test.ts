@@ -45,9 +45,10 @@ const pipeline = () => ({
 });
 
 describe("search queue definitions (step 7)", () => {
-  it("there are twelve queues, all exclusive", () => {
-    expect(Object.keys(QUEUES)).toHaveLength(12);
-    for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
+  it("there are thirteen queues, all exclusive except push.notify (short)", () => {
+    expect(Object.keys(QUEUES)).toHaveLength(13);
+    for (const [name, q] of Object.entries(QUEUES))
+      expect(q.policy).toBe(name === "push.notify" ? "short" : "exclusive");
   });
 
   it("search.reconcile: a cron singleton with no retry (the next tick is the retry)", () => {
@@ -279,7 +280,7 @@ describe("startWorkers: the search handlers", () => {
       log,
       ingestConcurrency: 1,
     });
-    expect(registered.size).toBe(12);
+    expect(registered.size).toBe(13);
     await registered.get(JOBS.searchReconcile)?.handler([job({}), job({ bad: 1 })]);
     expect(ix.reconcile).toHaveBeenCalledTimes(1);
     await registered.get(JOBS.searchBackfill)?.handler([job({ reason: "manual", babyId: BABY })]);

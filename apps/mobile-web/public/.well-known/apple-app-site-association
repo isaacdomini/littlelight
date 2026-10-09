@@ -1,6 +1,10 @@
 {
   "applinks": {
-    "apps": [],
-    "details": []
+    "details": [
+      {
+        "appIDs": ["APPLE_TEAM_ID.com.tesarsoft.littlelight"],
+        "components": [{ "/": "/invite/*" }, { "/": "/s/*" }, { "/": "/signin/native*" }]
+      }
+    ]
   }
 }

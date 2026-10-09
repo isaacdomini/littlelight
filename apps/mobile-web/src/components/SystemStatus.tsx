@@ -1,8 +1,12 @@
 import { healthzResponseSchema } from "@littlelight/shared";
 import { useQuery } from "@tanstack/react-query";
+import { apiUrl, authUrl } from "../platform/apiBase";
+import { clientKind, isNative } from "../platform/platform";
 
 async function fetchApi(): Promise<"ok" | "degraded"> {
-  const res = await fetch("/api/healthz");
+  const res = await fetch(apiUrl("/healthz"), {
+    headers: { "X-Littlelight-Client": clientKind() },
+  });
   // 503 still carries a valid body with status "degraded".
   // Production returns only `{status}` to non-loopback callers; dev returns the full body.
   const body: unknown = await res.json();
@@ -12,7 +16,7 @@ async function fetchApi(): Promise<"ok" | "degraded"> {
 }
 
 async function fetchAuth(): Promise<"ok" | "degraded"> {
-  const res = await fetch("/auth/health");
+  const res = await fetch(authUrl("/health"));
   return res.ok ? "ok" : "degraded";
 }
 
@@ -31,7 +35,15 @@ function Row({ label, state }: { label: string; state: "loading" | "ok" | "degra
 
 export function SystemStatus() {
   const api = useQuery({ queryKey: ["status", "api"], queryFn: fetchApi, retry: false });
-  const auth = useQuery({ queryKey: ["status", "auth"], queryFn: fetchAuth, retry: false });
+  // GoTrue sends no CORS headers for native origins and the app never calls it directly, so the
+  // probe would read as a false error there; the API row already covers sign-in (via the API).
+  const native = isNative();
+  const auth = useQuery({
+    queryKey: ["status", "auth"],
+    queryFn: fetchAuth,
+    retry: false,
+    enabled: !native,
+  });
   const state = (q: { isPending: boolean; isError: boolean; data?: "ok" | "degraded" }) =>
     q.isPending ? "loading" : q.isError ? "error" : (q.data ?? "error");
 
@@ -40,7 +52,7 @@ export function SystemStatus() {
       <h2 className="mb-2 text-sm font-semibold text-muted">System status</h2>
       <ul>
         <Row label="API" state={state(api)} />
-        <Row label="Auth" state={state(auth)} />
+        {native ? null : <Row label="Auth" state={state(auth)} />}
       </ul>
     </section>
   );

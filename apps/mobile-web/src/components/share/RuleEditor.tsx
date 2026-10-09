@@ -7,6 +7,7 @@ import {
 import { useId, useState } from "react";
 import { t } from "../../i18n";
 import { useSearchFacets } from "../../lib/queries/search";
+import { isNative } from "../../platform/platform";
 import { Message } from "../ui";
 
 export type RuleMode = "manual" | ShareRuleMode;
@@ -123,6 +124,7 @@ export function RuleEditor({
   const facets = useSearchFacets(babyId, plus && (value.mode === "tags" || value.mode === "all"));
   const tagSuggestions = (facets.data?.tags ?? []).map((x) => x.tag);
 
+  if (!plus && isNative()) return null;
   if (!plus) {
     return (
       <div className="ll-card flex flex-col gap-1" data-testid="share-rule-upsell">

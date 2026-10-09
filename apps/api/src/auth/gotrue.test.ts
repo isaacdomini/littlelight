@@ -105,6 +105,71 @@ describe("createGoTrueClient", () => {
     expect(payload.role).toBe("service_role");
   });
 
+  describe("adminGenerateMagicLink (store-review sign-in)", () => {
+    const UID = "22222222-2222-4222-8222-222222222222";
+    const body = {
+      id: UID,
+      email: "r@example.com",
+      hashed_token: "hashed-token-abc",
+      email_otp: "654321",
+      action_link: "http://auth/verify?token=SECRET",
+      verification_type: "magiclink",
+    };
+
+    it("posts magiclink with a freshly minted service_role token and keeps only the id and hashed token", async () => {
+      const f = fakeFetch(() => Response.json(body));
+      const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+      const link = await client.adminGenerateMagicLink("r@example.com");
+      expect(link).toEqual({ userId: UID, hashedToken: "hashed-token-abc" });
+      expect(JSON.stringify(link)).not.toContain("654321");
+      expect(JSON.stringify(link)).not.toContain("SECRET");
+      const call = f.calls[0];
+      expect(call?.url).toBe("http://auth:9999/admin/generate_link");
+      expect(call?.init.method).toBe("POST");
+      expect(JSON.parse(String(call?.init.body))).toEqual({
+        type: "magiclink",
+        email: "r@example.com",
+      });
+      const auth = headersOf(call).authorization ?? "";
+      expect(auth).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
+      const payload = JSON.parse(Buffer.from(auth.split(".")[1] ?? "", "base64url").toString());
+      expect(payload.role).toBe("service_role");
+    });
+
+    it("lowercases the returned user id", async () => {
+      const f = fakeFetch(() => Response.json({ ...body, id: UID.toUpperCase() }));
+      const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+      expect((await client.adminGenerateMagicLink("r@example.com")).userId).toBe(UID);
+    });
+
+    it.each([
+      ["a non-object body", "nope"],
+      ["no id", { hashed_token: "h" }],
+      ["a non-uuid id", { id: "not-a-uuid", hashed_token: "h" }],
+      ["no hashed token", { id: UID }],
+      ["an empty hashed token", { id: UID, hashed_token: "" }],
+      ["an over-long hashed token", { id: UID, hashed_token: "h".repeat(513) }],
+      ["a numeric hashed token", { id: UID, hashed_token: 12345 }],
+    ])("rejects %s with a safe 502 bad_generate_link_body", async (_n, payload) => {
+      const f = fakeFetch(() => Response.json(payload));
+      const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+      await expect(client.adminGenerateMagicLink("r@example.com")).rejects.toMatchObject({
+        status: 502,
+        code: "bad_generate_link_body",
+      });
+    });
+
+    it("turns a GoTrue error into a GoTrueError without the body", async () => {
+      const f = fakeFetch(() =>
+        Response.json({ error_code: "user_banned", msg: "r@example.com banned" }, { status: 403 }),
+      );
+      const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+      const err = await client.adminGenerateMagicLink("r@example.com").catch((e) => e);
+      expect(err).toBeInstanceOf(GoTrueError);
+      expect(err.message).not.toContain("r@example.com");
+    });
+  });
+
   it("turns error responses into GoTrueError with only a safe identifier", async () => {
     const cases: Array<[Response, number, string]> = [
       [

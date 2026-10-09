@@ -138,6 +138,47 @@ const goto = async (page: Page, url: string, ready: string) => {
   await expect(tid(page, ready)).toBeVisible({ timeout: 20_000 });
 };
 
+/**
+ * Forces the Capacitor shell checks (`isNative()` / `nativePlatform()`) to true on iOS before any
+ * app script runs, so native-only screens render in plain Chromium. The cookie session still
+ * authenticates the API calls; native plugins are absent, so push reads as "unavailable" unless a
+ * plugin stub is routed in (see `stubPushPlugin`).
+ */
+async function forceNative(
+  ctx: BrowserContext,
+  as?: ApiClient,
+  platform: "ios" | "android" = "ios",
+) {
+  // A string, not a function: tsx would inject helpers that do not exist in the page. A getter
+  // with a no-op setter stops @capacitor/core from replacing the stub with its web build.
+  await ctx.addInitScript(
+    `Object.defineProperty(window, "Capacitor", { configurable: true, get: () => ({ isNativePlatform: () => true, getPlatform: () => "${platform}", convertFileSrc: (x) => x }), set: () => {} });`,
+  );
+  // The app authenticates with a bearer token (no cookies); replay the session's access token.
+  if (as) {
+    await as.call("GET", "/me"); // refreshes the cookie when it is near expiry
+    const token = (await as.storageState()).cookies.find((x) => x.name === "ll_access")?.value;
+    if (token) {
+      await ctx.route("**/api/**", (route) =>
+        route.continue({
+          headers: { ...route.request().headers(), authorization: `Bearer ${token}` },
+        }),
+      );
+    }
+  }
+}
+
+/** Serves a fake `@capacitor/push-notifications` whose permission is still undecided. */
+async function stubPushPlugin(ctx: BrowserContext) {
+  await ctx.route(/push-notifications/, async (route) => {
+    if (!route.request().url().includes("/node_modules/")) return route.continue();
+    await route.fulfill({
+      contentType: "text/javascript",
+      body: "export const PushNotifications = { checkPermissions: async () => ({ receive: 'prompt' }), requestPermissions: async () => ({ receive: 'prompt' }), register: async () => {}, addListener: async () => ({ remove: async () => {} }), createChannel: async () => {} };",
+    });
+  });
+}
+
 async function run(browser: Browser, c: Ctx, scheme: Scheme, size: Size) {
   const dir = path.join(OUT, `${scheme}-${size}`);
   if (!only) rmSync(dir, { recursive: true, force: true });
@@ -380,6 +421,76 @@ async function run(browser: Browser, c: Ctx, scheme: Scheme, size: Size) {
       await s.shot("settings-account");
     });
     await ctx.close();
+  }
+
+  // ---- native app (forced isNative, iOS): purchase prompts hidden, native-only screens ------
+  {
+    const ctx = await context(browser, scheme, size, c.mom, MAYA);
+    await forceNative(ctx, c.mom);
+    await stubPushPlugin(ctx);
+    const page = await ctx.newPage();
+    const s = new Shooter(dir, page);
+    await s.step("native-upload", async () => {
+      await goto(page, "/upload", "upload-camera");
+      await s.shot("native-upload");
+    });
+    await s.step("native-settings", async () => {
+      await goto(page, "/settings", "settings");
+      await expect(tid(page, "settings-notifications")).toBeVisible();
+      await s.shot("native-settings");
+    });
+    await s.step("native-notifications", async () => {
+      await goto(page, "/settings/notifications", "notifications-enable");
+      await expect(tid(page, "notifications-prefs")).toBeVisible();
+      await s.shot("native-notifications");
+    });
+    await s.step("native-signin", async () => {
+      await goto(page, "/signin/native", "native-signin");
+      await s.shot("native-signin-app");
+    });
+    await s.step("native-onboarding-plan", async () => {
+      await goto(page, "/onboarding/plan", "primer");
+      await s.shot("native-plan-skips-to-primer");
+    });
+    await ctx.close();
+
+    // free-tier album: no upsell, price or upgrade link anywhere
+    const free = await context(browser, scheme, size, c.fresh, c.freshBabyId);
+    await forceNative(free, c.fresh);
+    const fp = await free.newPage();
+    const fs = new Shooter(dir, fp);
+    await fs.step("native-chat-free", async () => {
+      await goto(fp, "/chat", "chat-unavailable");
+      await fs.shot("native-chat-free");
+    });
+    await fs.step("native-family-free", async () => {
+      await goto(fp, "/family", "family");
+      await fp.waitForTimeout(500);
+      await fs.shot("native-family-free");
+    });
+    await free.close();
+
+    // signed out, native: email-code only (no Apple / Google buttons)
+    const out = await context(browser, scheme, size);
+    await forceNative(out);
+    const op = await out.newPage();
+    const os = new Shooter(dir, op);
+    await os.step("native-welcome", async () => {
+      await goto(op, "/welcome", "welcome-email");
+      await op.waitForTimeout(500);
+      await os.shot("native-welcome");
+    });
+    await out.close();
+
+    // web: /signin/native explains where the link belongs
+    const web = await context(browser, scheme, size);
+    const wp = await web.newPage();
+    const ws = new Shooter(dir, wp);
+    await ws.step("web-signin-native", async () => {
+      await goto(wp, "/signin/native", "native-signin");
+      await ws.shot("web-signin-native");
+    });
+    await web.close();
   }
 
   // ---- demo-nanny (contributor) -------------------------------------------------------------

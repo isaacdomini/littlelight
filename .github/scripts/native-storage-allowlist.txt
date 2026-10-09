@@ -1,0 +1,16 @@
+# Allow-list for .github/scripts/native-hygiene.sh check 2 (docs/plans/step-9.md 9.16).
+#
+# Non-test, non-comment lines under apps/mobile-web/src/platform that mention localStorage or
+# sessionStorage, one per line, written as
+#
+#   <repo-relative path>: <the source line, leading/trailing whitespace trimmed>
+#
+# A listed line must never store a token, refresh token or viewer JWT (those live only in the
+# Keychain/Keystore secure store, docs/plans/step-9.md 2.5). Adding a line here needs a reviewer's
+# OK.
+
+# Launch-URL de-duplication (step 9): App.getLaunchUrl() is sticky for the process, so each
+# launch URL is routed once per WebView session. Stores only a 32-bit FNV-1a digest of the URL
+# under "ll.launch-url.v1", never the URL or its share/invite token.
+apps/mobile-web/src/platform/native/NativeEvents.tsx: if (window.sessionStorage.getItem(LAUNCH_KEY) === d) return false;
+apps/mobile-web/src/platform/native/NativeEvents.tsx: window.sessionStorage.setItem(LAUNCH_KEY, d);

@@ -69,9 +69,9 @@ describe("AI queue definitions (step 6)", () => {
     });
   });
 
-  it("there are exactly twelve queues, one per job name", () => {
+  it("there are exactly thirteen queues, one per job name", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(Object.values(JOBS).sort());
-    expect(Object.keys(QUEUES)).toHaveLength(12);
+    expect(Object.keys(QUEUES)).toHaveLength(13);
   });
 
   it("schedules(config) adds the two AI crons and the search reconcile and the share reconcile to the three fixed ones (7 total)", () => {

@@ -32,7 +32,10 @@
 # new-device alerts) only; the worker gets none, and auth gets no API secrets. AI provider keys:
 # OPENAI_API_KEY goes to the worker (vision batches, document embeddings) and the api (chat,
 # query embeddings, docs/plans/step-7.md 2.11); ANTHROPIC_API_KEY to the worker only; never
-# to web, migrate, db-init or the backup job. A new app
+# to web, migrate, db-init or the backup job. Native apps (docs/plans/step-9.md 2.3, 2.5, 2.8):
+# push credentials (PUSH_PROVIDER, APNS_*, FCM_*) go to the worker only; the store-review
+# account (REVIEW_ACCOUNT_*) and the CORS allow-list (NATIVE_APP_ORIGINS) to the api only; the
+# api additionally gets PUSH_SHARE_DEBOUNCE_SEC (a delay, not a secret). A new app
 # variable must be added to .env.example AND to the x-app-env anchor (or the service's own
 # block) below.
 #
@@ -51,7 +54,7 @@
 # bucket + versioning, the 7-day noncurrent-version lifecycle rule, and two bucket-scoped users:
 # api = S3_API_ACCESS_KEY (get/put/abort/list parts; no delete, no versions, no admin),
 # worker = S3_WORKER_ACCESS_KEY (+ delete incl. object versions). Browser CORS on storage allows
-# PUBLIC_URL only. The worker mounts STORAGE_PATH read-only at /storage for the 80 % disk alert.
+# PUBLIC_URL and the two Capacitor WebView origins by default. The worker mounts STORAGE_PATH read-only at /storage for the 80 % disk alert.
 # Never enable log_statement=all, log_parameter_max_length_on_error > 0 or pg_stat_statements
 # parameter capture on `db`: request claims and encryption keys travel as bind parameters.
 name: littlelight
@@ -299,9 +302,10 @@ services:
       MINIO_ROOT_USER: ${S3_ROOT_USER:?Set S3_ROOT_USER in .env}
       MINIO_ROOT_PASSWORD: ${S3_ROOT_PASSWORD:?Set S3_ROOT_PASSWORD in .env}
       MINIO_SERVER_URL: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
-      # Browser part PUTs and signed GETs come from the app origin only (comma list allowed, e.g.
-      # to add the Capacitor origins in step 9 via S3_CORS_ALLOW_ORIGIN).
-      MINIO_API_CORS_ALLOW_ORIGIN: ${S3_CORS_ALLOW_ORIGIN:-${PUBLIC_URL:-https://littlelight.tesarsoft.com}}
+      # Browser part PUTs and signed GETs come from the web app origin and the native apps'
+      # WebView origins (iOS capacitor://localhost, Android https://localhost; docs/plans/
+      # step-9.md 2.3). Override the whole comma list with S3_CORS_ALLOW_ORIGIN.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${S3_CORS_ALLOW_ORIGIN:-${PUBLIC_URL:-https://littlelight.tesarsoft.com},capacitor://localhost,https://localhost}
     volumes:
       - ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}:/data
     # S3 API only, for the host-run cloudflared (files. hostname). The console (:9001) is never
@@ -375,6 +379,18 @@ services:
       REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # Native apps (docs/plans/step-9.md 2.3): Origins allowed to call /api cross-origin (CORS
+      # without credentials; the apps use bearer tokens). iOS WebView = capacitor://localhost,
+      # Android WebView = https://localhost.
+      NATIVE_APP_ORIGINS: ${NATIVE_APP_ORIGINS:-capacitor://localhost,https://localhost}
+      # The api enqueues share_viewed pushes with this delay (s). No push credential or other
+      # push setting reaches the api: those are worker-only (below).
+      PUSH_SHARE_DEBOUNCE_SEC: ${PUSH_SHARE_DEBOUNCE_SEC:-60}
+      # Store-review sign-in (docs/plans/step-9.md 2.5, D4), api only. Off unless BOTH are set:
+      # then that one email signs in with the static code whose scrypt hash is given (no email
+      # is sent). See .env.example for how to generate the hash; quote it there with '...'.
+      REVIEW_ACCOUNT_EMAIL: ${REVIEW_ACCOUNT_EMAIL:-}
+      REVIEW_ACCOUNT_CODE_HASH: ${REVIEW_ACCOUNT_CODE_HASH:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -424,6 +440,25 @@ services:
       AI_POLL_INTERVAL_CRON: ${AI_POLL_INTERVAL_CRON:-}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-}
       AI_IMAGE_DETAIL: ${AI_IMAGE_DETAIL:-}
+      # Push notifications (docs/plans/step-9.md 2.8), worker only: none (default; nothing is
+      # sent until the keys exist) | live (APNs for iOS devices if APNS_* are set, FCM for
+      # Android if FCM_* are set). `fake` is refused when NODE_ENV=production. Empty values =
+      # unset / code defaults (APNS_BUNDLE_ID = com.tesarsoft.littlelight; *_BASE_URL = the
+      # real Apple/Google endpoints, mock servers in testing only).
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-none}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_PRIVATE_KEY_BASE64: ${APNS_PRIVATE_KEY_BASE64:-}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-}
+      APNS_ENVIRONMENT: ${APNS_ENVIRONMENT:-production}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      FCM_SERVICE_ACCOUNT_BASE64: ${FCM_SERVICE_ACCOUNT_BASE64:-}
+      PUSH_APNS_BASE_URL: ${PUSH_APNS_BASE_URL:-}
+      PUSH_FCM_BASE_URL: ${PUSH_FCM_BASE_URL:-}
+      PUSH_OAUTH_TOKEN_URL: ${PUSH_OAUTH_TOKEN_URL:-}
+      PUSH_PHOTOS_DEBOUNCE_SEC: ${PUSH_PHOTOS_DEBOUNCE_SEC:-600}
+      PUSH_SHARE_DEBOUNCE_SEC: ${PUSH_SHARE_DEBOUNCE_SEC:-60}
+      PUSH_MIN_GAP_MIN: ${PUSH_MIN_GAP_MIN:-60}
     volumes:
       # MinIO's data folder, read-only, only for statfs (objects are read through S3).
       - type: bind

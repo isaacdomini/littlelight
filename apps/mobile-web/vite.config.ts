@@ -71,11 +71,15 @@ export default defineConfig({
   server: {
     // `web` is required: GoTrue fetches its email templates from http://web:8080/email-templates/*.
     allowedHosts: ["web", ...extraHosts],
+    // Vite's built-in CORS would answer every preflight itself and reject `capacitor://`; with it
+    // off, preflights reach the proxy and the API's own CORS plugin (native origin allow-list).
+    cors: false,
     proxy,
     watch: process.env.VITE_USE_POLLING === "1" ? { usePolling: true } : undefined,
   },
   preview: {
     allowedHosts: ["web", ...extraHosts],
+    cors: false,
     proxy,
   },
 });

@@ -64,6 +64,33 @@ export interface GoTrueClient {
   adminDeleteUser(userId: string): Promise<void>;
 }
 
+/**
+ * Store-review sign-in only (docs/plans/step-9.md 2.5, D4). A separate interface (not a member of
+ * `GoTrueClient`) so recording stubs written before step 9 (`testing/support.ts`) still
+ * type-check; `createGoTrueClient` always implements it and the review sign-in fails closed (503)
+ * when the client in use does not (`hasReviewLinks`).
+ */
+export interface GoTrueReviewLinks {
+  /**
+   * `POST /admin/generate_link {type:"magiclink", email}` with a freshly minted 60 s
+   * `service_role` JWT. GoTrue sends no email for admin-generated links; it creates the user if
+   * the email is unknown (like `sendOtp`'s `create_user`). Returns the user id and the single-use
+   * `hashed_token` that `verify({kind:"token_hash"})` redeems; the response's `email_otp` and
+   * `action_link` are dropped here and never leave this function. Never log the result.
+   */
+  adminGenerateMagicLink(email: string): Promise<GeneratedMagicLink>;
+}
+
+export function hasReviewLinks<T extends object>(client: T): client is T & GoTrueReviewLinks {
+  return typeof (client as Partial<GoTrueReviewLinks>).adminGenerateMagicLink === "function";
+}
+
+/** What `adminGenerateMagicLink` keeps from GoTrue's response. `hashedToken` is a credential. */
+export interface GeneratedMagicLink {
+  userId: string;
+  hashedToken: string;
+}
+
 const SAFE_CODE = /^[A-Za-z0-9_]{1,64}$/;
 
 /** A GoTrue 4xx/5xx or transport failure. `code` is GoTrue's `error_code` or an errno, never text. */
@@ -124,6 +151,24 @@ function toSession(body: unknown): GoTrueSession {
   };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Keep only the user id and `hashed_token` of a `/admin/generate_link` body (verified on v2.197.0: top-level `id`, `hashed_token`). */
+function toGeneratedLink(body: unknown): GeneratedMagicLink {
+  if (!isRecord(body)) throw new GoTrueError(502, "bad_generate_link_body");
+  const { id, hashed_token } = body;
+  if (
+    typeof id !== "string" ||
+    !UUID_RE.test(id) ||
+    typeof hashed_token !== "string" ||
+    hashed_token.length === 0 ||
+    hashed_token.length > 512
+  ) {
+    throw new GoTrueError(502, "bad_generate_link_body");
+  }
+  return { userId: id.toLowerCase(), hashedToken: hashed_token };
+}
+
 export interface GoTrueClientOptions {
   /** Per-request timeout; GoTrue is on the internal network and should answer in milliseconds. */
   timeoutMs?: number;
@@ -136,7 +181,7 @@ type GoTrueConfig = Pick<ApiConfig, "AUTH_INTERNAL_URL" | "JWT_SECRET" | "PUBLIC
 export function createGoTrueClient(
   config: GoTrueConfig,
   options: GoTrueClientOptions = {},
-): GoTrueClient {
+): GoTrueClient & GoTrueReviewLinks {
   const base = config.AUTH_INTERNAL_URL.replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? 10_000;
   const doFetch = options.fetch ?? fetch;
@@ -248,6 +293,18 @@ export function createGoTrueClient(
       await call("DELETE", `/admin/users/${encodeURIComponent(userId)}`, undefined, {
         authorization: `Bearer ${jwt}`,
       });
+    },
+
+    async adminGenerateMagicLink(email) {
+      const jwt = await mintAdminJwt(config);
+      return toGeneratedLink(
+        await call(
+          "POST",
+          "/admin/generate_link",
+          { type: "magiclink", email },
+          { authorization: `Bearer ${jwt}` },
+        ),
+      );
     },
   };
 }

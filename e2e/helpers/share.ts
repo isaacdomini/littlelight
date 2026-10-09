@@ -21,6 +21,7 @@ export const GPS_COORDS: string[] = [];
 export interface LinkBody {
   id: string;
   status: string;
+  expiresAt: string;
   hasPasscode: boolean;
   photoCount: number;
   hiddenCount: number;
@@ -88,7 +89,7 @@ interface RegFile {
 
 /** Upload `count` distinct synthetic JPEGs through the real API; resolves with the photo ids. */
 export async function uploadPhotos(
-  api: ApiClient,
+  api: Pick<ApiClient, "call">,
   babyId: string,
   count: number,
   seedBase: number,

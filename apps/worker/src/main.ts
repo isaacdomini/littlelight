@@ -4,6 +4,7 @@ import { createAiPipeline, createSearchIndexer } from "./ai";
 import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig } from "./config";
+import { demoMediaEnabled, ensureDemoMedia } from "./demo/media";
 import { createDiskMonitor } from "./disk";
 import {
   createAiQueueAgeSampler,
@@ -13,6 +14,7 @@ import {
 } from "./heartbeat";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
+import { createPushSender } from "./push";
 import {
   ensureQueues,
   ensureSchedules,
@@ -35,7 +37,13 @@ import { WORKER_VERSION } from "./version";
 // OPENAI_API_KEY: search rows get no vector, keyword search still works) and the search indexer
 // serves `photo.reindex`, `search.reconcile` and `search.backfill`. Step 8 (docs/plans/step-8.md
 // 2.8): the auto-sharer runs inside `photo.reindex` (before indexing) and serves `share.apply`
-// and `share.reconcile`; no model call.
+// and `share.reconcile`; no model call. Step 9 (docs/plans/step-9.md 2.8): the push sender is
+// created once here from `PUSH_PROVIDER` (none | fake | live; one boot line names the mode and
+// which providers are configured, never a value) and serves `push.notify`; the reindex hook
+// enqueues `photos_analyzed`. Dev only (docs/plans/step-9.md 2.11): with SEED_DEMO_FAMILY=true and
+// NODE_ENV !== production, `ensureDemoMedia()` renders the seeded demo photos' originals and
+// derivatives into MinIO after the workers start, in the background (never delays readiness;
+// a failure is one warning and the next start retries).
 
 function readConfig() {
   try {
@@ -66,8 +74,9 @@ try {
 // Room for INGEST_CONCURRENCY handlers (a few short transactions each) plus the heartbeat, the
 // cron jobs and the AI flush/poll/backfill handlers (+2, docs/plans/step-6.md 2.7), and the
 // search reindex/reconcile/backfill handlers (+1, docs/plans/step-7.md 2.7), and the share
-// apply/reconcile handlers (+1, docs/plans/step-8.md 2.8).
-const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 8);
+// apply/reconcile handlers (+1, docs/plans/step-8.md 2.8), and the push.notify handler and the
+// reindex push hook (+1, docs/plans/step-9.md 2.8).
+const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 9);
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
 const s3 = createS3Client(config);
 const storage = createStorage(s3, config.S3_BUCKET);
@@ -104,6 +113,8 @@ const indexer = createSearchIndexer({
 
 const autoSharer = createAutoSharer({ pool, log });
 
+const pushSender = createPushSender(config, log);
+
 const heartbeat = startHeartbeat(
   {
     db: pool,
@@ -139,6 +150,7 @@ async function shutdown(signal: string, code = 0) {
   try {
     await heartbeat.stop();
     await boss.stop({ graceful: true, timeout: 30_000 });
+    await pushSender.close();
     await pool.end();
     s3.destroy();
   } catch (err) {
@@ -165,6 +177,11 @@ try {
     ai: aiPipeline,
     indexer,
     autoSharer,
+    push: {
+      sender: pushSender,
+      minGapMin: config.PUSH_MIN_GAP_MIN,
+      photosDebounceSec: config.PUSH_PHOTOS_DEBOUNCE_SEC,
+    },
     log,
     ingestConcurrency: config.INGEST_CONCURRENCY,
   });
@@ -172,6 +189,11 @@ try {
     { workerId: id, version: WORKER_VERSION, ingestConcurrency: config.INGEST_CONCURRENCY },
     "worker started",
   );
+  if (demoMediaEnabled(process.env, config.NODE_ENV)) {
+    void ensureDemoMedia({ pool, s3, bucket: config.S3_BUCKET, storage, log }).catch((err) =>
+      log.warn({ err: errorCategory(err) }, "demo media: skipped"),
+    );
+  }
 } catch (err) {
   log.error({ err: errorCategory(err) }, "worker failed to start");
   await shutdown("startup-failure", 1);

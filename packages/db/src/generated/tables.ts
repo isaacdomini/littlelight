@@ -614,6 +614,8 @@ export interface ProfilesRow {
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+  notify_photos_analyzed: boolean;
+  notify_share_viewed: boolean;
 }
 
 export interface ProfilesInsert {
@@ -629,6 +631,59 @@ export interface ProfilesInsert {
   created_at?: Date;
   updated_at?: Date;
   deleted_at?: Date | null;
+  notify_photos_analyzed?: boolean;
+  notify_share_viewed?: boolean;
+}
+
+export interface PushDeliveriesRow {
+  id: string;
+  device_id: string | null;
+  user_id: string;
+  baby_id: string;
+  share_link_id: string | null;
+  kind: "photos_analyzed" | "share_viewed";
+  status: "sent" | "fake" | "failed" | "invalid_token" | "unconfigured";
+  item_count: number | null;
+  created_at: Date;
+}
+
+export interface PushDeliveriesInsert {
+  device_id?: string | null;
+  user_id: string;
+  baby_id: string;
+  share_link_id?: string | null;
+  kind: "photos_analyzed" | "share_viewed";
+  status: "sent" | "fake" | "failed" | "invalid_token" | "unconfigured";
+  item_count?: number | null;
+  created_at?: Date;
+}
+
+export interface PushDevicesRow {
+  id: string;
+  user_id: string;
+  session_id: string;
+  platform: "ios" | "android";
+  provider: "apns" | "fcm";
+  token: string;
+  app_version: string;
+  created_at: Date;
+  last_registered_at: Date;
+  disabled_at: Date | null;
+  disabled_reason: string | null;
+}
+
+export interface PushDevicesInsert {
+  id?: string;
+  user_id: string;
+  session_id: string;
+  platform: "ios" | "android";
+  provider: "apns" | "fcm";
+  token: string;
+  app_version: string;
+  created_at?: Date;
+  last_registered_at?: Date;
+  disabled_at?: Date | null;
+  disabled_reason?: string | null;
 }
 
 export interface ShareLinksRow {
@@ -888,6 +943,8 @@ export interface Tables {
   photo_search: { row: PhotoSearchRow; insert: PhotoSearchInsert };
   photos: { row: PhotosRow; insert: PhotosInsert };
   profiles: { row: ProfilesRow; insert: ProfilesInsert };
+  push_deliveries: { row: PushDeliveriesRow; insert: PushDeliveriesInsert };
+  push_devices: { row: PushDevicesRow; insert: PushDevicesInsert };
   share_links: { row: ShareLinksRow; insert: ShareLinksInsert };
   share_passcode_failures: { row: SharePasscodeFailuresRow; insert: SharePasscodeFailuresInsert };
   share_rules: { row: ShareRulesRow; insert: ShareRulesInsert };
@@ -922,6 +979,8 @@ export const TABLE_NAMES = [
   "photo_search",
   "photos",
   "profiles",
+  "push_deliveries",
+  "push_devices",
   "share_links",
   "share_passcode_failures",
   "share_rules",

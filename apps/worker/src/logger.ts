@@ -6,7 +6,21 @@ export function createLogger(config: Pick<WorkerConfig, "LOG_LEVEL" | "NODE_ENV"
   return pino({
     name: "worker",
     level: config.LOG_LEVEL,
-    redact: { paths: ["*.authorization", "*.password", "*.secretAccessKey"], censor: "[redacted]" },
+    // Defense in depth: push code never puts a device token, provider JWT or OAuth token in a
+    // log object (docs/plans/step-9.md 2.8); these paths censor one if it ever slips in.
+    redact: {
+      paths: [
+        "authorization",
+        "*.authorization",
+        "*.password",
+        "*.secretAccessKey",
+        "token",
+        "*.token",
+        "*.access_token",
+        "*.assertion",
+      ],
+      censor: "[redacted]",
+    },
     ...(config.NODE_ENV === "development"
       ? { transport: { target: "pino-pretty", options: { translateTime: "SYS:HH:MM:ss" } } }
       : {}),

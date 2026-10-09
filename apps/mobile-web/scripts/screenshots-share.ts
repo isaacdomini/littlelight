@@ -323,6 +323,30 @@ async function run(browser: Browser, scheme: "light" | "dark", size: keyof typeo
     await ctx.close();
   }
 
+  // ---- parent in the app (forced isNative): the link sheet offers the OS share sheet ----
+  {
+    const { api } = await cached("mom");
+    const photos = await realPhotos(api, MAYA);
+    const ctx = await mk(api, MAYA);
+    await ctx.addInitScript(
+      'Object.defineProperty(window, "Capacitor", { configurable: true, get: () => ({ isNativePlatform: () => true, getPlatform: () => "ios", convertFileSrc: (x) => x }), set: () => {} });',
+    );
+    const page = await ctx.newPage();
+    await mockParent(page, photos);
+    await step("native-url-sheet", async () => {
+      await page.goto("/family");
+      await expect(tid(page, "share-links-list")).toBeVisible({ timeout: 20_000 });
+      await tid(page, "share-create-open").click();
+      await expect(page.getByTestId("share-create")).toBeVisible();
+      await page.getByTestId("share-name").fill("Grandparents");
+      await page.getByTestId("share-create-submit").click();
+      await expect(page.getByTestId("share-url")).toBeVisible();
+      await expect(page.getByTestId("share-native")).toBeVisible();
+      await shot(page, "native-url-sheet");
+    });
+    await ctx.close();
+  }
+
   // ---- parent: Juniper (free) ----
   {
     const { api, saved } = await cached("fresh");
@@ -386,6 +410,32 @@ async function run(browser: Browser, scheme: "light" | "dark", size: keyof typeo
       } else {
         await expect(page.getByTestId("share-expired")).toBeVisible();
         await shot(page, "expired");
+      }
+    });
+    await ctx.close();
+  }
+
+  // ---- viewer inside the app (forced isNative): "Done" returns to the parent app ----
+  for (const mode of ["album", "passcode", "expired"] as const) {
+    const ctx = await mk();
+    await ctx.addInitScript(
+      'Object.defineProperty(window, "Capacitor", { configurable: true, get: () => ({ isNativePlatform: () => true, getPlatform: () => "ios", convertFileSrc: (x) => x }), set: () => {} });',
+    );
+    const page = await ctx.newPage();
+    await mockViewer(page, mode);
+    await step(`native-viewer-${mode}`, async () => {
+      await page.goto(`/s/${TOKEN}`);
+      if (mode === "album") {
+        await expect(page.getByTestId("share-album")).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByTestId("share-done")).toBeVisible();
+        await page.waitForTimeout(800);
+        await shot(page, "native-album");
+      } else if (mode === "passcode") {
+        await expect(page.getByTestId("share-passcode")).toBeVisible();
+        await shot(page, "native-passcode");
+      } else {
+        await expect(page.getByTestId("share-expired")).toBeVisible();
+        await shot(page, "native-expired");
       }
     });
     await ctx.close();

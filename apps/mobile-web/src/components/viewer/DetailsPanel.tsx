@@ -7,6 +7,7 @@ import { t } from "../../i18n";
 import { ageText } from "../../lib/age";
 import { FEATURES } from "../../lib/features";
 import { measurementText, useProfileTimeZone, useProfileUnits } from "../../lib/units";
+import { isNative } from "../../platform/platform";
 import { Button, Tag } from "../ui";
 
 function Row({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
@@ -91,6 +92,10 @@ function AiSection({
     content = paid ? (
       <span className="text-muted" data-testid="details-ai-unavailable">
         {t("details.captionPending")}
+      </span>
+    ) : isNative() ? (
+      <span className="text-muted" data-testid="details-ai-unavailable-native">
+        {t("native.ai.unavailable")}
       </span>
     ) : (
       <span data-testid="details-ai-upgrade">

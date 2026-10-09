@@ -6,7 +6,11 @@
 #                    no ANTHROPIC_API_KEY in the api, no search_text in the chat/search/shared API
 #                    code), the step-8 sharing hygiene greps (.github/scripts/share-hygiene.sh:
 #                    exactly two withServiceRole call sites in the sharing api, no GPS/data key/
-#                    notes/people in the auto-sharer), typecheck (workspace + e2e/), unit tests
+#                    notes/people in the auto-sharer), the step-9 native hygiene checks
+#                    (.github/scripts/native-hygiene.sh: no signing material, APNs .p8, Firebase
+#                    config or private key in git, no web-storage token writes in the platform
+#                    layer, Capacitor loggingBehavior "none", no console.log/debug in native
+#                    code), typecheck (workspace + e2e/, incl. e2e/native), unit tests
 #                    (incl. packages/ai adapters against local mock servers), integration tests
 #                    (db-integration: RLS matrix, search + chat + sharing tables etc.;
 #                    api-integration: auth, invites, babies, uploads, photos, search, chat, share
@@ -35,7 +39,20 @@
 #                    `pnpm e2e:search-gate --provider fake --count 2000`), then the step-8 share
 #                    gate (docs/plans/step-8.md 4.1: `pnpm e2e:share-gate`) and the step-8 log
 #                    scan of api + worker for share tokens, passcodes, presign signatures and
-#                    GPS (docs/plans/step-8.md 4.5).
+#                    GPS (docs/plans/step-8.md 4.5), then the step-9 push gate (docs/plans/
+#                    step-9.md 2.15: `pnpm e2e:push-gate`, fake push provider) with a log tap
+#                    across its api/worker recreations and a scan of those logs for device
+#                    tokens, JWTs, bearer values and presign parts.
+#   android-debug    step-9 Android debug build on every push/PR (docs/plans/step-9.md 2.14):
+#                    JDK 21 and the Android SDK from the runner image, `native:sync:android`,
+#                    `android:build:debug` (assembleDebug) + lintDebug, then the merged-manifest
+#                    forbidden-permission / allowBackup check. Debug key only: no
+#                    google-services.json, no signing secrets, no emulator.
+#   ios-sim-build    step-9 iOS Simulator build, manual only (`workflow_dispatch`; macOS minutes
+#                    cost ~10x): `native:sync:ios` + `ios:build:sim` (ad-hoc signed, no team or
+#                    certificate) + plist lint. The native gates (`pnpm e2e:native-ios`,
+#                    `pnpm e2e:native-android`) need a simulator / an HVF/KVM emulator and run
+#                    locally only (docs/plans/step-9.md 4.4, 4.5); no store upload runs in CI.
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
 name: CI
@@ -44,6 +61,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual run: everything above plus the iOS Simulator build (ios-sim-build runs only here).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -62,7 +81,9 @@ jobs:
   check:
     name: Lint, typecheck, test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Step 9: 2,532 unit tests (~30 s locally) and 1,249 integration tests (~130 s locally,
+    # roughly 2-3x on a hosted runner) plus install, lint, typecheck, types drift.
+    timeout-minutes: 25
     services:
       db:
         # Same image as both Compose files.
@@ -130,19 +151,33 @@ jobs:
       - name: Sharing hygiene (service_role call sites, no GPS or private text in auto-share)
         run: bash .github/scripts/share-hygiene.sh
 
+      # docs/plans/step-9.md 9.16 / 2.14: no signing material (.p8, .p12, .jks, .keystore,
+      # provisioning profiles, keystore.properties), google-services.json /
+      # GoogleService-Info.plist or private-key body in git; apps/mobile-web/src/platform never
+      # writes a token to web storage (allow-list .github/scripts/native-storage-allowlist.txt);
+      # capacitor.config.ts loggingBehavior "none"; no console.log/debug in
+      # apps/mobile-web/src/platform/native. Same script runs locally.
+      - name: Native hygiene (signing material, web storage, Capacitor logging)
+        run: bash .github/scripts/native-hygiene.sh
+
       - name: Typecheck
         run: pnpm typecheck
 
       # e2e/ is not a workspace package and has no tsconfig, so `pnpm typecheck` skips it. Same
       # module settings as the workspace packages; `--types node` because the specs read
       # process.env. Shell globs: a renamed folder fails loudly (tsc: file not found).
+      # e2e/helpers/*.ts covers e2e/helpers/native.ts and e2e/helpers/reset.ts; e2e/native/*.ts
+      # are the step-9 push, Android and invite-link gate scripts (the XCUITest project under
+      # e2e/native/ios-uitest is Swift and is built by Xcode, not here). global-setup/teardown
+      # are the Playwright globalSetup/globalTeardown hooks referenced by playwright.config.ts.
       - name: Typecheck e2e
         run: >-
           pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
           --target es2022 --strict --types node
           e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts
-          e2e/search/*.ts e2e/chat/*.ts e2e/sharing/*.ts e2e/fixtures/*.ts
+          e2e/search/*.ts e2e/chat/*.ts e2e/sharing/*.ts e2e/fixtures/*.ts e2e/native/*.ts
           e2e/playwright.config.ts e2e/playwright.perf.config.ts
+          e2e/global-setup.ts e2e/global-teardown.ts
 
       - name: Unit tests
         run: pnpm test
@@ -217,14 +252,22 @@ jobs:
           # with testConfig(); the defaults are pinned here for any config read from process.env.
           SHARE_MEDIA_URL_TTL_SEC: "300"
           SHARE_RECONCILE_CRON: "41 * * * *"
+          # Step-9 push / native suites (docs/plans/step-9.md 2.15): the worker notify tests
+          # inject the fake sender and the api harness builds its config with testConfig();
+          # the dev defaults are pinned for any config read from process.env. No APNs/FCM
+          # credential exists in CI. REVIEW_ACCOUNT_* is deliberately unset (off by default);
+          # apps/api/src/auth/review.integration.test.ts sets and clears it itself.
+          PUSH_PROVIDER: fake
+          NATIVE_APP_ORIGINS: capacitor://localhost,https://localhost
           REPORT: ${{ runner.temp }}/integration-report.json
         run: |
           set -euo pipefail
           pnpm test:integration \
             --reporter=default --reporter=github-actions \
             --reporter=json --outputFile.json="$REPORT"
-          # Project dirs, plus the step-6 AI, step-7 search/chat and step-8 sharing suites by
-          # name so a rename cannot drop them silently.
+          # Project dirs, plus the step-6 AI, step-7 search/chat, step-8 sharing and step-9
+          # push / review-account / demo-media suites by name so a rename cannot drop them
+          # silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
@@ -238,7 +281,14 @@ jobs:
             packages/db/sharing.integration.test.ts \
             apps/api/src/sharing/admin.integration.test.ts \
             apps/api/src/sharing/viewer.integration.test.ts \
-            apps/worker/src/sharing/autoshare.integration.test.ts
+            apps/worker/src/sharing/autoshare.integration.test.ts \
+            packages/db/push.integration.test.ts \
+            packages/db/review-family.integration.test.ts \
+            apps/api/src/routes/push.integration.test.ts \
+            apps/api/src/auth/review.integration.test.ts \
+            apps/api/src/sharing/viewer.push.integration.test.ts \
+            apps/worker/src/push/notify.integration.test.ts \
+            apps/worker/src/demo/media.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -359,8 +409,8 @@ jobs:
     # Chromium download, e2e with one retry, five api restarts, upload gate (~3-4 min), perf
     # seed + perf run on two viewports (~2-4 min), AI gate (~1 min, capped at 10), search gate
     # (2,000-photo seed + 50 search and 50 chat queries, a few minutes, capped at 15), share gate
-    # + log scan (~1-2 min, capped at 15).
-    timeout-minutes: 110
+    # + log scan (~1-2 min, capped at 15), push gate + log scan (~3-5 min, capped at 15).
+    timeout-minutes: 130
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -649,6 +699,67 @@ jobs:
             *) echo "::error::grep failed (exit $rc)"; exit 1 ;;
           esac
 
+      # The push gate recreates api and worker (no push debounce / gap, fake AI) and restores
+      # them in its finally, so `docker compose logs` afterwards would only show the restored
+      # containers. The tap follows every api/worker container while it runs (raw logs in
+      # $RUNNER_TEMP, scanned below, never uploaded). No rate-limit restart is needed first: the
+      # gate's own recreate of api resets the in-memory sign-in counter.
+      - name: Start api/worker log tap (push gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/push-logs" api worker
+
+      # Step-9 push gate (docs/plans/step-9.md 2.15 "Push gate", e2e/native/push-gate.ts), keyless,
+      # no device: recreates api + worker with PUSH_PHOTOS_DEBOUNCE_SEC=0 PUSH_SHARE_DEBOUNCE_SEC=0
+      # PUSH_MIN_GAP_MIN=0 VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0 (compose interpolation;
+      # PUSH_PROVIDER stays the dev default `fake`), signs a fresh admin in as the native client
+      # (bearer tokens, no Set-Cookie), registers a fake APNs device, then: Plus baby + 3 photos
+      # => one `fake` photos_analyzed delivery with item_count 3; Free baby => none; native viewer
+      # exchange => one share_viewed, a reused session => none; unregister + sign-out => none;
+      # api/worker logs hold none of its random tokens. Restores api + worker to the stack
+      # default (the CI project .env: fake) in a finally and writes
+      # e2e/native-results/push-gate.json. ~3-5 min (two recreates, 12 s quiet windows).
+      - name: Push gate (step-9, fake push + AI providers)
+        timeout-minutes: 15
+        env:
+          PUSH_GATE_LOG: ${{ runner.temp }}/push-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PUSH_GATE_LOG")"
+          rc=0
+          pnpm e2e:push-gate 2>&1 | tee "$PUSH_GATE_LOG" || rc=$?
+          {
+            echo '### Push gate (fake push provider)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$PUSH_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |^push gate: |^restore failed' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Stop api/worker log tap
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/push-logs"
+
+      # docs/plans/step-9.md 9.16 / 2.15: nothing token-shaped in what api + worker printed during
+      # the push gate (every container, incl. the recreated ones): no JWT (eyJ...), presign
+      # part, Bearer value, 64-hex APNs-shaped or FCM-shaped device token, or a token field with
+      # a real value (pino's "[redacted]" is fine). Prints file:line + pattern name only.
+      # `--require push\.notify` fails the step if the tap captured no push job (vacuous scan).
+      - name: No push device tokens, JWTs or signatures in api/worker logs
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs --require 'push\.notify'
+          "$RUNNER_TEMP/push-logs"
+
+      - name: Upload push gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: push-gate
+          path: |
+            e2e/native-results/
+            ${{ runner.temp }}/push-gate
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload share gate output
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -722,3 +833,180 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.dev.yml down -v --remove-orphans
+
+  # docs/plans/step-9.md 2.14 "CI (9.16)": the Android debug build on every push/PR, the way
+  # apps/mobile-web/NATIVE.md builds it locally. JDK 21 and the Android SDK come from the runner
+  # image (JAVA_HOME_21_X64, ANDROID_HOME), so no extra action is needed. Debug key only: there is
+  # no google-services.json (the Gradle file skips the google-services plugin without it, so FCM
+  # stays off), no keystore.properties / signing secret, and no emulator (the Android gate,
+  # `pnpm e2e:native-android`, needs HVF/KVM and runs locally).
+  android-debug:
+    name: Android debug build
+    runs-on: ubuntu-24.04
+    # Cold: pnpm install + web build (~2 min), SDK check, Gradle + dependency download and
+    # assembleDebug (~5-8 min), lintDebug (~2-4 min). Warm Gradle cache roughly halves it.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (version from package.json "packageManager")
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # The pre-installed Temurin 21 (Capacitor 8 / AGP 8 need 17+; the project is built and
+      # tested with 21). Fails loudly if a runner image ever drops it.
+      - name: Use JDK 21 from the runner image
+        run: |
+          set -euo pipefail
+          test -n "${JAVA_HOME_21_X64:-}" || { echo "::error::JAVA_HOME_21_X64 is not set on this runner"; exit 1; }
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+          "$JAVA_HOME_21_X64/bin/java" -version 2>&1 | tee /dev/stderr | grep -q 'version "21' \
+            || { echo "::error::JAVA_HOME_21_X64 is not a JDK 21"; exit 1; }
+
+      # compileSdk/targetSdk 36 (apps/mobile-web/android/variables.gradle). Installing an
+      # already-present package is a no-op; the runner image has accepted the licences.
+      - name: Android SDK platform 36 + build-tools 36.0.0
+        run: |
+          set -euo pipefail
+          test -n "${ANDROID_HOME:-}" || { echo "::error::ANDROID_HOME is not set on this runner"; exit 1; }
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager" || { echo "::error::$sdkmanager not found"; exit 1; }
+          "$sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > "$RUNNER_TEMP/sdkmanager.log" 2>&1 \
+            || { tail -n 50 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
+          "$sdkmanager" --list_installed 2>/dev/null | grep -E 'platforms;android-36 |build-tools;36\.0\.0 '
+
+      # The debug build must not depend on, or pick up, any credential. These files are
+      # git-ignored (and the check job's native hygiene fails if one is ever tracked); this
+      # proves the build below runs without them.
+      - name: No Firebase config or signing material in the checkout
+        run: |
+          set -euo pipefail
+          for f in apps/mobile-web/android/app/google-services.json \
+                   apps/mobile-web/android/keystore.properties \
+                   apps/mobile-web/ios/App/App/GoogleService-Info.plist; do
+            test ! -e "$f" || { echo "::error::$f exists in the checkout"; exit 1; }
+          done
+          test -z "$(find apps/mobile-web -name '*.jks' -o -name '*.keystore' -o -name '*.p8' | head -n1)" \
+            || { echo "::error::signing material in the checkout"; exit 1; }
+
+      - name: Restore Gradle caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/mobile-web/android/**/*.gradle', 'apps/mobile-web/android/gradle/wrapper/gradle-wrapper.properties', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # `vite build` with the dev defaults (VITE_API_URL=http://localhost:8080, dev deep-link
+      # scheme on), then `cap sync android`, which regenerates capacitor.settings.gradle, the
+      # Cordova plugin project and the copied web assets (all git-ignored or generated).
+      - name: Sync the web build into the Android project
+        run: pnpm --filter @littlelight/mobile-web native:sync:android
+
+      - name: Build debug APK (assembleDebug)
+        run: pnpm --filter @littlelight/mobile-web android:build:debug
+
+      - name: Android lint (lintDebug)
+        working-directory: apps/mobile-web/android
+        run: ./gradlew lintDebug
+
+      # docs/plans/step-9.md 9.3: the merged manifest holds none of the media/storage/location/
+      # audio permissions (nor anything the source manifest removes with tools:node="remove"),
+      # and android:allowBackup="false".
+      - name: Merged manifest (forbidden permissions, allowBackup)
+        run: node .github/scripts/check-android-manifest.mjs debug
+
+      - name: APK built
+        run: |
+          set -euo pipefail
+          apk=apps/mobile-web/android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk" || { echo "::error::$apk was not produced"; exit 1; }
+          ls -l "$apk"
+          echo "Android debug APK: $(du -h "$apk" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Android lint report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-lint
+          path: apps/mobile-web/android/app/build/reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # docs/plans/step-9.md 2.14 "CI (9.16)": the iOS Simulator build, manual only (Actions ->
+  # CI -> Run workflow) because macOS minutes cost ~10x. `ios:build:sim` signs ad hoc
+  # (CODE_SIGN_IDENTITY="-"): no Apple team, certificate or provisioning profile, and the
+  # simulator app still carries its entitlements. Builds whatever Xcode/iOS SDK macos-latest
+  # ships (printed first). The iOS gate (`pnpm e2e:native-ios`) needs a booted simulator and a
+  # manual checklist, so it runs locally only (docs/plans/step-9.md 4.5).
+  ios-sim-build:
+    name: iOS Simulator build (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    # pnpm install + web build (~3 min), SPM resolution + xcodebuild (~10-20 min cold).
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (version from package.json "packageManager")
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Xcode and SDKs
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i simulator
+
+      - name: No Firebase config or signing material in the checkout
+        run: |
+          set -euo pipefail
+          test ! -e apps/mobile-web/ios/App/App/GoogleService-Info.plist
+          test -z "$(find apps/mobile-web -name '*.p8' -o -name '*.p12' -o -name '*.mobileprovision' | head -n1)"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync the web build into the iOS project
+        run: pnpm --filter @littlelight/mobile-web native:sync:ios
+
+      - name: Build for the iOS Simulator (ad-hoc signed)
+        run: pnpm --filter @littlelight/mobile-web ios:build:sim
+
+      # docs/plans/step-9.md 4.5: the built Info.plist, the privacy manifest and the
+      # entitlements parse; the entitlements embedded in the app list the associated domains.
+      - name: Plists and entitlements
+        run: |
+          set -euo pipefail
+          app="$(find apps/mobile-web/ios/DerivedData -name 'App.app' -path '*iphonesimulator*' | head -n1)"
+          test -n "$app" || { echo "::error::App.app not found under apps/mobile-web/ios/DerivedData"; exit 1; }
+          plutil -lint "$app/Info.plist" \
+            apps/mobile-web/ios/App/App/PrivacyInfo.xcprivacy \
+            apps/mobile-web/ios/App/App/App.entitlements
+          /usr/libexec/PlistBuddy -c 'Print :NSPhotoLibraryUsageDescription' "$app/Info.plist"
+          codesign -d --entitlements - "$app" 2>/dev/null | tee "$RUNNER_TEMP/entitlements.txt"
+          grep -q 'applinks:littlelight.tesarsoft.com' "$RUNNER_TEMP/entitlements.txt" \
+            || { echo "::error::associated domains entitlement missing from the built app"; exit 1; }

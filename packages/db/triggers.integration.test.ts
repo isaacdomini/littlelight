@@ -558,6 +558,117 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
       });
     });
 
+    // Migration 17: the only exempt UPDATE is "batch_id -> NULL, nothing else changed" (what the
+    // ai_batches ON DELETE SET NULL FK action issues).
+    describe("tripwire: detaching a row from a deleted batch", () => {
+      const mkBatch = async () =>
+        (await q("INSERT INTO ai_batches (provider, model) VALUES ('fake', 'm') RETURNING id"))
+          .rows[0].id as string;
+      const attach = async (photo: string, batch: string) => {
+        await aiRow(photo);
+        await q("UPDATE photo_ai SET batch_id = $2 WHERE photo_id = $1", [photo, batch]);
+      };
+      const batchOf = async (photo: string) =>
+        (
+          await one<{ batch_id: string | null }>(
+            "SELECT batch_id FROM photo_ai WHERE photo_id = $1",
+            [photo],
+          )
+        ).batch_id;
+
+      it("deleting a batch works after the baby is trashed; batch_id becomes NULL", async () => {
+        await sandbox(async () => {
+          const batch = await mkBatch();
+          await attach(P.approved2, batch);
+          await q("UPDATE babies SET deleted_at = now() WHERE id = $1", [BABY.A]);
+          expect(await err("DELETE FROM ai_batches WHERE id = $1", [batch])).toBeNull();
+          expect(await batchOf(P.approved2)).toBeNull();
+        });
+      });
+
+      it("a mixed batch (paid + trashed baby) can be deleted", async () => {
+        await sandbox(async () => {
+          await newBaby(PLUS, "plus");
+          const other = (await addPhoto(PLUS)).rows[0].id as string;
+          const batch = await mkBatch();
+          await attach(P.approved2, batch);
+          await attach(other, batch);
+          await q("UPDATE babies SET deleted_at = now() WHERE id = $1", [BABY.A]);
+          expect(await err("DELETE FROM ai_batches WHERE id = $1", [batch])).toBeNull();
+          expect(await batchOf(P.approved2)).toBeNull();
+          expect(await batchOf(other)).toBeNull();
+        });
+      });
+
+      it("deleting a batch works after a downgrade to free", async () => {
+        await sandbox(async () => {
+          const batch = await mkBatch();
+          await attach(P.approved2, batch);
+          await q("UPDATE babies SET plan = 'free' WHERE id = $1", [BABY.A]);
+          expect(await err("DELETE FROM ai_batches WHERE id = $1", [batch])).toBeNull();
+          expect(await batchOf(P.approved2)).toBeNull();
+        });
+      });
+
+      it("deleting a batch works after the entitlement expired", async () => {
+        await sandbox(async () => {
+          const batch = await mkBatch();
+          await attach(P.approved2, batch);
+          await q(
+            "UPDATE babies SET entitlement_expires_at = now() - interval '1 day' WHERE id = $1",
+            [BABY.A],
+          );
+          expect(await err("DELETE FROM ai_batches WHERE id = $1", [batch])).toBeNull();
+          expect(await batchOf(P.approved2)).toBeNull();
+        });
+      });
+
+      it("still refused: batch_id NULL plus any content change, re-pointing, or an upsert for a free baby", async () => {
+        const changes = [
+          'description = \'{"caption":"changed"}\'::jsonb',
+          "sensitive_flags = ARRAY['bath']",
+          "prompt_version = 'other'",
+        ];
+        for (const change of changes) {
+          await sandbox(async () => {
+            const batch = await mkBatch();
+            await attach(P.approved2, batch);
+            await q("UPDATE babies SET plan = 'free' WHERE id = $1", [BABY.A]);
+            const e = await err(
+              `UPDATE photo_ai SET batch_id = NULL, ${change} WHERE photo_id = $1`,
+              [P.approved2],
+            );
+            expect(e?.code, change).toBe("23514");
+            expect(e?.message, change).toMatch(/paid-tier/);
+          });
+        }
+        await sandbox(async () => {
+          const b1 = await mkBatch();
+          const b2 = await mkBatch();
+          await attach(P.approved2, b1);
+          await q("UPDATE babies SET plan = 'free' WHERE id = $1", [BABY.A]);
+          const e = await err("UPDATE photo_ai SET batch_id = $2 WHERE photo_id = $1", [
+            P.approved2,
+            b2,
+          ]);
+          expect(e?.code).toBe("23514");
+          expect(e?.message).toMatch(/paid-tier/);
+        });
+        await sandbox(async () => {
+          await newBaby(FREE, "free");
+          const { id } = (await addPhoto(FREE)).rows[0] as { id: string };
+          const e = await err(
+            `INSERT INTO photo_ai (photo_id, model, prompt_version, schema_version, description)
+             VALUES ($1, 'm', 'v', 'v', '{"caption":"c"}'::jsonb)
+             ON CONFLICT (photo_id) DO UPDATE SET batch_id = NULL`,
+            [id],
+          );
+          expect(e?.code).toBe("23514");
+          expect(e?.message).toMatch(/paid-tier/);
+        });
+      });
+    });
+
     it("sensitive flags raise photos.is_sensitive and never lower it", async () => {
       await sandbox(async () => {
         expect(

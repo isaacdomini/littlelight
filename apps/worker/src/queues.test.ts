@@ -128,9 +128,10 @@ describe("handleIngestJob", () => {
 });
 
 describe("queue definitions", () => {
-  it("every queue is exclusive and covers every job name", () => {
+  it("every queue is exclusive (except push.notify, short) and covers every job name", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(Object.values(JOBS).sort());
-    for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
+    for (const [name, q] of Object.entries(QUEUES))
+      expect(q.policy).toBe(name === JOBS.pushNotify ? "short" : "exclusive");
   });
 
   it("photo.ingest retries 3 times with backoff and wakes workers on send", () => {
@@ -181,7 +182,12 @@ describe("queue definitions", () => {
         createQueue: async (name: string) => void created.push(name),
         getQueue: async (name: string) => ({
           name,
-          policy: name === JOBS.purgeTrash ? "standard" : "exclusive",
+          policy:
+            name === JOBS.purgeTrash
+              ? "standard"
+              : name === JOBS.pushNotify
+                ? "short"
+                : "exclusive",
         }),
       } as never,
       log,

@@ -339,6 +339,49 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
         () => new ApiError(409, "conflict", "That photo can't be shared right now"),
       ] as const,
   ),
+  // Step 9 (packages/db/migrations/1792200000100_native-push.sql; docs/plans/step-9.md 2.8, 2.9).
+  // `register_push_device` re-checks what `pushDeviceRegisterRequestSchema` already validated,
+  // so these are tripwires. Fixed messages; the token is never echoed. Listed before the generic
+  // `<table>.<column>` rule so each names its field.
+  [
+    "push registration has an invalid platform or provider",
+    () =>
+      new ApiError(400, "validation_failed", "The device platform and provider don't match", {
+        fields: ["body.provider"],
+      }),
+  ],
+  [
+    "push_devices.token has an invalid shape",
+    () =>
+      new ApiError(400, "validation_failed", "The device token is invalid", {
+        fields: ["body.token"],
+      }),
+  ],
+  [
+    "push_devices.app_version has an invalid shape",
+    () =>
+      new ApiError(400, "validation_failed", "The app version is invalid", {
+        fields: ["body.appVersion"],
+      }),
+  ],
+];
+
+/**
+ * `insufficient_privilege` raised with a fixed message by a SECURITY DEFINER function (not a
+ * grant or RLS failure), mapped by prefix. Anything else with 42501 stays 403 `forbidden`.
+ */
+const PRIVILEGE_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
+  // Step 9 `register_push_device`: the claims' GoTrue session is gone or idle past 90 days
+  // (`withClaims` checked liveness a moment earlier, so this is a race or an idle session).
+  [
+    "push registration needs a session",
+    () => new ApiError(401, "session_revoked", "You were signed out on this device"),
+  ],
+  // The profile is missing or deleted (`requireConsent` ran first, so this is a race).
+  [
+    "push registration needs a profile",
+    () => new ApiError(403, "consent_required", "Accept the Terms and Privacy Policy to continue"),
+  ],
 ];
 
 /**
@@ -373,8 +416,8 @@ function isInputCheck(err: PgErrorLike): boolean {
 
 /**
  * Map a Postgres error to an `ApiError`. SQLSTATE `23514` by trigger message (then any
- * `<table>.<column> …` shape-trigger message → 400), `42501` → 403 `forbidden` (privilege or RLS
- * `WITH CHECK` failure), `23505` → 409 `conflict` (by constraint name when known), `23503` → 409
+ * `<table>.<column> …` shape-trigger message → 400), `42501` by function message, else 403
+ * `forbidden` (privilege or RLS `WITH CHECK` failure), `23505` → 409 `conflict` (by constraint name when known), `23503` → 409
  * (a referenced row vanished concurrently); anything else → 500 `internal`. The result never
  * carries the SQL, parameters or the original message.
  */
@@ -388,8 +431,10 @@ export function mapPgError(err: PgErrorLike): ApiError {
       }
       return internalError();
     }
-    case "42501":
-      return forbidden();
+    case "42501": {
+      const hit = PRIVILEGE_VIOLATIONS.find(([prefix]) => err.message.startsWith(prefix));
+      return hit ? hit[1]() : forbidden();
+    }
     case "23505": {
       const known = err.constraint ? UNIQUE_VIOLATIONS.get(err.constraint) : undefined;
       return known ? known() : new ApiError(409, "conflict", "That already exists");

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cache only: shared temp files (camera capture, downloaded photos handed to the share sheet).
+     No external-storage root is exposed. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="ll_cache" path="." />
+</paths>

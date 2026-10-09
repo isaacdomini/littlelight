@@ -17,6 +17,12 @@ export const profileSchema = z.object({
   termsVersion: z.string().nullable(),
   privacyVersion: z.string().nullable(),
   acceptedAt: isoDateTimeSchema.nullable(),
+  /**
+   * Push opt-outs per kind (step 9, `profiles.notify_*`, NOT NULL default true; the OS
+   * permission plus "Turn on notifications" is the opt-in).
+   */
+  notifyPhotosAnalyzed: z.boolean(),
+  notifyShareViewed: z.boolean(),
 });
 export type Profile = z.infer<typeof profileSchema>;
 
@@ -41,6 +47,10 @@ export const profileUpdateSchema = z
     relationshipLabel: z.string().trim().min(1).max(40),
     timezone: z.string().min(1).max(64),
     units: unitsSchema,
+    /** Step 9: push opt-out for "N new photos are ready to search". */
+    notifyPhotosAnalyzed: z.boolean(),
+    /** Step 9: push opt-out for "Someone opened your shared album". */
+    notifyShareViewed: z.boolean(),
   })
   .partial()
   .refine((v) => Object.values(v).some((x) => x !== undefined), {

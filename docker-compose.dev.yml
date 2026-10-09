@@ -59,6 +59,18 @@
 # proxy (apps/mobile-web/vite.config.ts, frontend-owned) streams proxied responses unbuffered by
 # default, so dev needs no proxy setting; production nginx disables buffering on that path only
 # (docker/nginx/default.conf).
+# Native apps (docs/plans/step-9.md 2.3, 2.8, 2.14): the api allows CORS (no credentials) from
+# NATIVE_APP_ORIGINS (.env.dev: capacitor://localhost,https://localhost). Push is FAKE in dev:
+# the worker alone gets PUSH_PROVIDER (default fake: one log line per delivery, nothing leaves
+# the machine) and the push timing knobs, all Compose INTERPOLATION variables; the api gets
+# PUSH_SHARE_DEBOUNCE_SEC only (it enqueues share_viewed). Push gate (no wait, no gap):
+#   PUSH_PHOTOS_DEBOUNCE_SEC=0 PUSH_SHARE_DEBOUNCE_SEC=0 PUSH_MIN_GAP_MIN=0 VISION_PROVIDER=fake \
+#     AI_BATCH_FLUSH_MINUTES=0 docker compose -f docker-compose.dev.yml up -d --no-deps api worker
+# APNs/FCM credentials (APNS_*, FCM_*) are worker-only and the store-review account
+# (REVIEW_ACCOUNT_*) is api-only: put either in .env.local and the blanks below strip them from
+# every other service that loads .env.local. Live push from a laptop additionally needs
+# PUSH_PROVIDER=live in the shell. The worker renders the demo family's images on start while
+# SEED_DEMO_FAMILY=true (.env.dev).
 name: littlelight-dev
 
 x-dev: &dev
@@ -148,6 +160,27 @@ x-dev-no-ai-keys: &dev-no-ai-keys
 x-dev-no-anthropic-key: &dev-no-anthropic-key
   ANTHROPIC_API_KEY: ""
 
+# Push credentials (docs/plans/step-9.md 2.8): worker only. Blanked on api, migrate and web so a
+# key put in .env.local reaches nothing else. PUSH_PROVIDER is not blanked: it is never in an
+# env_file here (worker `environment:` only), so the other services simply don't have it.
+x-dev-no-push-keys: &dev-no-push-keys
+  APNS_TEAM_ID: ""
+  APNS_KEY_ID: ""
+  APNS_PRIVATE_KEY_BASE64: ""
+  APNS_BUNDLE_ID: ""
+  APNS_ENVIRONMENT: ""
+  FCM_PROJECT_ID: ""
+  FCM_SERVICE_ACCOUNT_BASE64: ""
+  PUSH_APNS_BASE_URL: ""
+  PUSH_FCM_BASE_URL: ""
+  PUSH_OAUTH_TOKEN_URL: ""
+
+# Store-review sign-in (docs/plans/step-9.md 2.5, D4): api only, off unless both are set (in
+# .env.local for dev). Blanked on worker, migrate and web.
+x-dev-no-review-account: &dev-no-review-account
+  REVIEW_ACCOUNT_EMAIL: ""
+  REVIEW_ACCOUNT_CODE_HASH: ""
+
 services:
   db:
     image: pgvector/pgvector:0.8.7-pg17
@@ -191,7 +224,7 @@ services:
     <<: [*dev, *dev-db-tools]
     command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
     environment:
-      <<: [*dev-bootstrap-env, *dev-no-ai-keys]
+      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account]
       DATA_ENCRYPTION_KEY: *dev-data-encryption-key
     volumes:
       - ./packages/db/src:/repo/packages/db/src:ro
@@ -370,7 +403,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/api", "dev"]
     init: true
     environment:
-      <<: [*dev-app-env, *dev-no-anthropic-key]
+      <<: [*dev-app-env, *dev-no-anthropic-key, *dev-no-push-keys]
       DATABASE_URL: *dev-api-db-url
       # Bucket-scoped MinIO user (no delete, no versions, no admin); see storage-init.
       S3_ACCESS_KEY: *dev-s3-api-access-key
@@ -405,6 +438,13 @@ services:
       #   SHARE_MEDIA_URL_TTL_SEC=30 docker compose -f docker-compose.dev.yml up -d --no-deps api
       # The worker's SHARE_RECONCILE_CRON comes from .env.dev / .env.local.
       SHARE_MEDIA_URL_TTL_SEC: ${SHARE_MEDIA_URL_TTL_SEC:-300}
+      # Native apps (docs/plans/step-9.md 2.3, 2.8). NATIVE_APP_ORIGINS (CORS allow-list) comes
+      # from .env.dev / .env.local. The api enqueues share_viewed pushes with this delay (s);
+      # Compose INTERPOLATION, same value as the worker's (see the worker block). No other push
+      # setting and no APNs/FCM credential reaches the api (*dev-no-push-keys). The store-review
+      # account (REVIEW_ACCOUNT_EMAIL + REVIEW_ACCOUNT_CODE_HASH, off unless both set) is read
+      # from .env.local by this service only.
+      PUSH_SHARE_DEBOUNCE_SEC: ${PUSH_SHARE_DEBOUNCE_SEC:-60}
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -434,7 +474,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/worker", "dev"]
     init: true
     environment:
-      <<: *dev-app-env
+      <<: [*dev-app-env, *dev-no-review-account]
       DATABASE_URL: *dev-worker-db-url
       # Bucket-scoped MinIO user (api's rights + delete incl. object versions; no admin).
       S3_ACCESS_KEY: *dev-s3-worker-access-key
@@ -468,6 +508,23 @@ services:
       # Fake provider only: request lines minus image bytes (photo ids, context field lengths),
       # read by `pnpm e2e:ai-gate --provider fake` via `docker compose exec worker cat`.
       FAKE_VISION_DIR: /tmp/littlelight-fake-vision
+      # Push notifications (docs/plans/step-9.md 2.8), worker only. Compose INTERPOLATION
+      # variables (shell or the git-ignored project `.env`; .env.local cannot change them):
+      #   PUSH_PROVIDER             fake (default: logs {kind, provider}, sends nothing) | none |
+      #                             live (APNs/FCM; needs APNS_* / FCM_* in .env.local)
+      #   PUSH_PHOTOS_DEBOUNCE_SEC  delay before a photos_analyzed push (600)
+      #   PUSH_SHARE_DEBOUNCE_SEC   delay before a share_viewed push (60; the api uses it too)
+      #   PUSH_MIN_GAP_MIN          at most one push per baby + kind per user per this gap (60)
+      # The push gate recreates api + worker with all three at 0 (see the header); a plain `up`
+      # puts them back. APNS_* / FCM_* / PUSH_*_BASE_URL come from .env.local (empty = unset).
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-fake}
+      PUSH_PHOTOS_DEBOUNCE_SEC: ${PUSH_PHOTOS_DEBOUNCE_SEC:-600}
+      PUSH_SHARE_DEBOUNCE_SEC: ${PUSH_SHARE_DEBOUNCE_SEC:-60}
+      PUSH_MIN_GAP_MIN: ${PUSH_MIN_GAP_MIN:-60}
+      # Demo media (docs/plans/step-9.md 2.11): with SEED_DEMO_FAMILY=true (.env.dev) the worker
+      # renders the seeded demo photos' originals + derivatives into MinIO on start (dev only,
+      # idempotent, never blocks readiness). The store-review account is api-only
+      # (*dev-no-review-account).
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -503,7 +560,8 @@ services:
       target: dev
     command: ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
     init: true
-    environment: *dev-no-ai-keys
+    environment:
+      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account]
     volumes:
       - ./apps/mobile-web/src:/repo/apps/mobile-web/src
       - ./packages/shared/src:/repo/packages/shared/src

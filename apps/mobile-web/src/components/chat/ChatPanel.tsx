@@ -9,6 +9,7 @@ import { errorMessage } from "../../lib/api";
 import { FEATURES } from "../../lib/features";
 import { useChatThread, useClearChat, useSendChat } from "../../lib/queries/chat";
 import { useProfileTimeZone } from "../../lib/units";
+import { isNative } from "../../platform/platform";
 import { Button, EmptyState, Message, Skeleton, SkeletonRegion } from "../ui";
 import { PhotoViewer } from "../viewer/PhotoViewer";
 import { useViewerParam } from "../viewer/useViewerParam";
@@ -109,6 +110,15 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
       <div className="ll-card flex flex-col gap-1" data-testid="chat-contributor-notice">
         <p className="font-semibold">{t("chat.contributorNotice")}</p>
         <p className="text-sm text-muted">{t("chat.contributorBody")}</p>
+      </div>,
+      "chat-gated",
+    );
+  }
+  if (!paid && isNative()) {
+    // Purchases happen on the web only: no upsell, price or link to one in the app.
+    return shell(
+      <div className="ll-card" data-testid="chat-unavailable">
+        <p className="text-muted">{t("native.chat.unavailable")}</p>
       </div>,
       "chat-gated",
     );

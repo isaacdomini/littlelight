@@ -1,7 +1,6 @@
 import { type ChatEvent, chatTurnResponseSchema, decodeChatEventFrame } from "@littlelight/shared";
+import { apiUrl } from "../platform/apiBase";
 import { ApiError, headers, parseError, refreshSession } from "./api";
-
-const API_PREFIX = "/api";
 
 /** Splits buffered SSE text into complete frames; returns the frames and the unfinished rest. */
 export function splitFrames(buffer: string): { frames: string[]; rest: string } {
@@ -24,7 +23,7 @@ async function open(path: string, body: unknown, signal: AbortSignal): Promise<R
     };
   };
   try {
-    return await fetch(`${API_PREFIX}${path}`, await init());
+    return await fetch(apiUrl(path), await init());
   } catch (e) {
     if (signal.aborted) throw e;
     throw new ApiError(0, "network", "Can't reach Littlelight. Check your connection.");
