@@ -56,3 +56,27 @@ describe("loggerOptions", () => {
     });
   });
 });
+
+describe("loggerOptions (step 6): AI override bodies are parent content", () => {
+  const opts = loggerOptions({ LOG_LEVEL: "info", NODE_ENV: "production" });
+
+  it("redacts the three override fields", () => {
+    for (const path of [
+      "req.body.caption",
+      "req.body.detailed_description",
+      "req.body.search_tags",
+    ]) {
+      expect(opts.redact.paths).toContain(path);
+    }
+  });
+
+  it("the request serializer never carries a body or query values on AI routes", () => {
+    const logged = opts.serializers.req({
+      method: "PATCH",
+      url: "/photos/11111111-1111-4111-8111-111111111111/ai?x=secret",
+      routeOptions: { url: "/photos/:id/ai" },
+    });
+    expect(JSON.stringify(logged)).not.toContain("secret");
+    expect(Object.keys(logged).sort()).toEqual(["method", "route", "url"]);
+  });
+});

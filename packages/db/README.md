@@ -37,7 +37,7 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link, the allow-listed columns of `photos`, `photo_derivatives` (thumb/display), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Nothing else, no writes, and nothing once the link is expired/revoked or the baby is deleted. |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `upload_files` state, read-only `profiles`/`babies`/`milestones`/`share_rules`, liveness columns of `upload_sessions`). Never invites, tokens, chat, members, viewer sessions, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`/`share_rules`, liveness columns of `upload_sessions`). Never invites, tokens, chat, members, viewer sessions, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
 | `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
@@ -395,6 +395,116 @@ with that name already exists" (covers the preset clash); any other 23514 from a
 (`<table>.<column> …` messages) ⇒ 400 `validation_failed` (the API's zod limits normally stop
 these first).
 
+## AI pipeline (step 6)
+
+Migration `1791900000100_ai-pipeline.sql` (docs/plans/step-6.md 2.3). The rule above every
+other one: **a photo of a free-tier baby never reaches a model**, and that is a database rule in
+three places, not a worker promise: `photos_status_guard` (step 2; `queued`/`analyzing` only for
+an approved, live photo of a paid baby), the new `ai_batch_items_guard` (no ledger row for
+anything else) and `photo_ai_paid_tier_tripwire` (step 2; no result row either). All three call
+`baby_ai_enabled()` (plan `plus`, entitlement not expired, baby not deleted), the same predicate
+the API and `ai_eligible_photos` use, so a downgrade, an expired entitlement or a paying admin
+leaving (step 3 trigger) stops the pipeline at once.
+
+**Eligibility (`ai_eligible_photos(p_limit, p_prompt_version, p_schema_version, p_baby_id DEFAULT
+NULL, p_reprocess DEFAULT false, p_max_attempts DEFAULT 2) RETURNS SETOF uuid`).** The one
+definition of "may be claimed into a batch", used by the worker's flush, the upgrade/version
+backfill and the tests; oldest `photos.created_at` first, `p_limit NULL` = no limit:
+
+- `approval = 'approved'`, `deleted_at IS NULL`, `quarantined_at IS NULL` (contributors' pending
+  uploads, trash and quarantine are out; a restored photo re-enters naturally);
+- `status = 'ingested'` (regular) or `'ingested' | 'ready'` (`p_reprocess`, FR-5.7 backfill of a
+  new prompt/schema version — a described photo is `ready`);
+- the baby is in `SELECT id FROM babies WHERE baby_ai_enabled(id)` (evaluated once per baby, not
+  per photo; the perf baby "Pixel" is free and never appears);
+- an `analysis` derivative exists (the only copy that may reach a model; the demo seed has none,
+  so the seeded photos are not eligible until real derivatives exist);
+- regular: no `photo_ai` row; reprocess: a `photo_ai` row whose `(prompt_version,
+  schema_version)` differs from the requested pair;
+- no `ai_batch_items` row in `pending`/`submitted` (in flight);
+- fewer than `p_max_attempts` (`AI_MAX_ATTEMPTS`, default 2) items in `failed` for the requested
+  versions created after `COALESCE(photos.ai_retry_requested_at, -infinity)`.
+
+SECURITY INVOKER (runs with the caller's grants; selects no GPS column), executable by `pipeline`
+and `service_role` only. The worker re-checks each photo at submit time; the triggers re-check
+on every write regardless.
+
+**State machine.** `photos.status`: `ingested → queued` (claimed into a `building` batch) `→
+analyzing` (submitted) `→ ready` (`photo_ai` written). A failed attempt goes **back to
+`ingested`**, never to `failed`: step 4 uses `failed` for ingest failures and hides those rows
+from every album view, and an AI failure must not hide a good photo (plan D4). The API derives
+`aiStatus = failed` from the items instead. `ai_batch_items.state`: `pending → submitted →
+succeeded | failed (failure_kind: refusal, invalid_output, expired, rate_limited, provider_error,
+budget)`; `dropped` = removed before submission (re-check failed, e.g. the baby went free).
+`ai_batches.status` is unchanged (`building, submitted, in_progress, completed, failed, expired,
+cancelled`); new columns record the provider's input/output/error file ids, `files_deleted_at`
+(the PRD's "input files deleted after retrieval"; NULL on a terminal batch = retry), the
+prompt/schema versions, `reasoning_tokens`/`image_tokens`, `request_counts` (provider counts
+only), `last_polled_at`, `expires_at`, `submitted_bytes`. `ai_batches.error`, `failure_kind` and
+`request_counts` hold categories/counts only — never a prompt, a note, a provider message or an
+image.
+
+**Retry.** `photos.ai_retry_requested_at` is the admin "Retry" after the attempts are used up:
+`authenticated` has `UPDATE (ai_retry_requested_at)` and the step-2/4 `photos_authenticated_update`
+policy limits it to admins (and the uploader of a pending photo, which is never eligible); the
+pipeline cannot write it. Attempts before the timestamp stop counting.
+
+**Who may write what.**
+
+| Table | `pipeline` | `service_role` | `authenticated` | `viewer` |
+| --- | --- | --- | --- | --- |
+| `ai_batches` | ALL | ALL | nothing | nothing |
+| `ai_batch_items` | ALL | ALL | SELECT `(batch_id, photo_id, baby_id, attempt, prompt_version, schema_version, state, failure_kind, cost_usd, created_at, updated_at)` of items for photos they can see (`photo_visible`; token columns hidden) | nothing |
+| `photo_ai` | ALL (tripwire applies) | ALL | SELECT (`photo_visible`) | nothing |
+| `photo_ai_overrides` | SELECT | ALL | INSERT/UPDATE/DELETE via `photo_editable` (admins) | nothing |
+
+`ai_batch_items_guard` (BEFORE INSERT OR UPDATE OF `photo_id, baby_id`, SECURITY DEFINER): the
+photo exists, `baby_id` is the photo's own, the photo is approved and live and the baby is
+`baby_ai_enabled` (`check_violation`, fixed message). A later downgrade leaves the historical
+ledger alone. A `failed` item must carry a `failure_kind`; nothing but `failed`/`dropped` may.
+Budget-skipped photos get no item at all (the worker writes one `audit_log` `ai.budget_exceeded`
+per baby per month instead).
+
+**Budget helper.** `ai_baby_month_cost_usd(baby_id, month date) RETURNS numeric` = `SUM(cost_usd)`
+of the baby's items whose `created_at` (claim time, when the worker checks the budget) falls in
+the UTC calendar month containing `month`; 0 when none. SECURITY INVOKER: `pipeline` and
+`service_role` see everything, `authenticated` only items of photos they can see (a stranger gets
+0); `viewer` cannot call it. The worker compares it with `AI_BABY_MONTHLY_BUDGET_USD` before
+claiming; the admin usage endpoint shows it.
+
+**Overrides (FR-5.6).** `photo_ai_overrides_shape` now pins `field_path` to `caption`,
+`detailed_description`, `search_tags` (`photo_ai_overrides.field_path is not an overridable
+field`) and `value` to a JSON string of 1..200 / 1..1200 characters or an array of 1..20 strings
+of ≤ 60 characters (`photo_ai_overrides.value must be …`, fixed messages). A trigger, not a CHECK:
+the row holds parent text.
+
+**Plan setter (dev/operator; plan D7).** Until billing webhooks exist (they will write the same
+columns under `service_role`), `pnpm db:plan` is the only path that changes `babies.plan`:
+
+```sh
+pnpm db:plan <babyId> plus|free [--owner <userId>] [--expires <iso>] [--i-know-this-is-production]
+docker compose -f docker-compose.dev.yml run --rm migrate pnpm db:plan <babyId> plus   # dev stack
+```
+
+Superuser `DATABASE_URL`, one transaction: refuses a missing or trashed baby, an `--owner` who is
+not an admin of the baby, and `NODE_ENV=production` without the flag; sets `plan`,
+`plan_owner_user_id` (NULL unless `--owner`: a plus plan with no owner is the manual grant the
+step-3 `babies_plan_follows_owner` trigger leaves alone — the script first releases the old owner
+on a free row so that trigger cannot turn the new grant back into `free`) and
+`entitlement_expires_at`; appends `audit_log` `baby.plan_changed` (`actor_user_id` NULL, metadata
+`{plan}` + `target_user_id` when an owner was named); prints ids and the plan only, plus the
+backfill hint `pnpm --filter @littlelight/worker run-job --enqueue ai.backfill
+'{"babyId":"…","reason":"upgrade"}'`. Exit 0 done, 1 refused/failed, 2 usage. `src/tools/set-plan.ts`
+imports only `pg` and this package's `env`/`redact` helpers (the migrate image holds nothing
+else); `setPlan` / `parseSetPlanArgs` are exported for tests.
+
+**Seed.** The bath photo's `photo_ai.description` is a full v1 `aiDescriptionV1Schema` object
+(`prompt_version = schema_version = 'v1'`, `sensitive_content = ['bath']`), linked to a completed
+demo `ai_batches` row (`…-000000000500`: 1,400/700/400 tokens, `cost_usd 0.00017`,
+`files_deleted_at` set) with one `succeeded` `ai_batch_items` row, so the API's `ai` block and the
+usage endpoint have data; that photo is seeded with `status = 'ready'` (the other eleven stay
+`ingested`). Still idempotent.
+
 ## Environment
 
 | Variable | Used by | Notes |
@@ -419,6 +529,7 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 | `pnpm db:migrate` | Bootstrap, then apply all pending migrations (`up`) |
 | `pnpm db:migrate:down [n\|all]` | Revert the last `n` migrations (default 1); `all` reverts everything |
 | `pnpm db:seed` | Demo family (needs `SEED_DEMO_FAMILY=true`, `DATA_ENCRYPTION_KEY`; refuses in production) |
+| `pnpm db:plan <babyId> plus\|free [--owner <userId>] [--expires <iso>]` | Dev/operator plan switch, audited (`baby.plan_changed`); refuses in production without `--i-know-this-is-production` (see "AI pipeline") |
 | `pnpm --filter @littlelight/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
 | `pnpm --filter @littlelight/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` |
 
@@ -522,4 +633,5 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `littlelight_worker` | revert |
 | `1791600000100_auth-sessions-and-plan.sql` | guard (`auth.sessions`); session functions `auth_session_info`, `list_user_sessions`, `delete_user_session`, `count_user_sessions` (SECURITY DEFINER, `authenticated` only, no grants on `auth.*`); `baby_members.removal_requested_by/_at` (service_role-written); `babies_plan_follows_owner` + `baby_members_release_plan` triggers | drop triggers, functions, columns |
 | `1791700000100_uploads-and-ingest.sql` | `photos.status` gains `duplicate`, `photos.quarantined_at` (pipeline-only UPDATE), `quarantined_at IS NULL` on the user SELECT/UPDATE policies and in `photo_editable` / `babies_avatar_guard`, `photos_pipeline_delete` = trash > 30 d and not quarantined OR `status = 'duplicate'`; `free_tier_photo_count` helper + `photos_free_tier_cap` no longer counts failed/duplicate/quarantined rows; `baby_has_quarantined_photos` helper + `babies_pipeline_delete` refuses a baby holding a quarantined photo; `upload_sessions`, `upload_files` (+ `upload_session_visible`, `upload_files_session_owner` trigger, RLS, column grants); `home_place_label` (×2, pipeline/service_role) | drop functions, trigger, tables; restore `babies_pipeline_delete` and the step-2 cap trigger body, drop the two helpers; restore the four photos policies and two functions; drop column; `DELETE … WHERE status = 'duplicate'` then restore the old CHECK |
+| `1791900000100_ai-pipeline.sql` | `photos.ai_retry_requested_at` (+ `UPDATE` grant to `authenticated`); `ai_batches` provider file ids, `files_deleted_at`, versions, `reasoning_tokens`/`image_tokens`, `request_counts`, `last_polled_at`, `expires_at`, `submitted_bytes`, `ai_batches_open_idx`; `ai_batch_items` (ENABLE+FORCE RLS, pipeline/service_role ALL, authenticated column-limited SELECT via `photo_visible`, `ai_batch_items_guard`, 3 indexes); `ai_eligible_photos(...)` (pipeline/service_role); `ai_baby_month_cost_usd(...)` (authenticated/pipeline/service_role); `record_ai_budget_exceeded(uuid, text)` (SECURITY DEFINER, pipeline/service_role; inserts the `ai.budget_exceeded` audit row for a baby + `YYYY-MM` once, advisory-locked per (baby, month), returns whether it inserted; `pipeline` still has no SELECT on `audit_log`); `photo_ai_overrides_shape` extended to field/value shape (trigger now also `UPDATE OF value`) | restore the step-5 shape function/trigger verbatim; drop the three helpers, the table + guard, the index and columns; revoke + drop `ai_retry_requested_at` |
 | `1791800000100_timeline-and-details.sql` | `photos_baby_id_sort_idx` (replaces `photos_baby_id_taken_at_idx`) + `photos_baby_id_age_days_idx`; `age_group(integer)` (IMMUTABLE; authenticated/viewer/pipeline/service_role); `milestones.updated_at` + trigger, `UPDATE (updated_at)` grant, `milestones_cap` (200 custom per baby), `milestones_name_guard` (1..80 chars, no preset names ⇒ 23505); `photo_details_milestone_id_photo_id_idx` (replaces `photo_details_milestone_id_idx`); `measurements_photo_same_baby` trigger, `measurements_photo_id_idx`; 14 CHECK constraints on parent-entered text dropped and re-stated as shape triggers (`photo_details_shape`, `measurements_shape`, `babies_shape`, `upload_sessions_shape`, `share_links_shape`, `chat_threads_shape`, `invites_shape`, `photo_ai_overrides_shape`; see "Shape triggers") | drop the new indexes/triggers/functions/column, recreate the two step-2 indexes and every dropped CHECK verbatim |

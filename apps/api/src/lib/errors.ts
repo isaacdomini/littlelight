@@ -156,6 +156,25 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
         fields: ["body.people"],
       }),
   ],
+  // Step 6 (packages/db/migrations/1791900000100_ai-pipeline.sql; docs/plans/step-6.md 2.8).
+  // The API validates override fields and values with the same rules first, so these are
+  // tripwires; a non-overridable field is an input error, the AI-queue/results guards are state
+  // conflicts that should never surface to users.
+  [
+    "photo_ai_overrides.field_path is not an overridable field",
+    () =>
+      new ApiError(400, "validation_failed", "That AI field can't be edited", {
+        fields: ["body"],
+      }),
+  ],
+  [
+    "photo cannot enter the AI queue",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
+  [
+    "AI results can only be stored",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
   [
     "photo_details.location_label is longer than 120 characters",
     () =>

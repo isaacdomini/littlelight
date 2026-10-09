@@ -1,9 +1,13 @@
-import type { Milestone, Photo } from "@littlelight/shared";
+import { IonIcon } from "@ionic/react";
+import type { AiDescriptionV1, Milestone, Photo } from "@littlelight/shared";
+import { eyeOffOutline } from "ionicons/icons";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { t } from "../../i18n";
 import { ageText } from "../../lib/age";
+import { FEATURES } from "../../lib/features";
 import { measurementText, useProfileTimeZone, useProfileUnits } from "../../lib/units";
+import { Button } from "../ui";
 
 function Row({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
   return (
@@ -31,17 +35,217 @@ function formatTaken(iso: string | null, timeZone: string, estimated: boolean): 
   return estimated ? `${text} (${t("details.dateEstimated").toLowerCase()})` : text;
 }
 
+function summaryLine(d: AiDescriptionV1): string {
+  const parts = [
+    ...d.activities,
+    ...d.mood,
+    d.setting.place_type,
+    d.setting.indoor_outdoor === "unknown" ? null : d.setting.indoor_outdoor,
+    d.setting.time_of_day,
+  ].filter((x): x is string => !!x);
+  return [...new Set(parts)].join(" · ");
+}
+
+function EditedMark({ show }: { show: boolean }) {
+  return show ? (
+    <span
+      data-testid="details-ai-edited"
+      className="ml-2 rounded bg-gray-500/20 px-1.5 py-0.5 text-xs font-medium"
+    >
+      {t("ai.edited")}
+    </span>
+  ) : null;
+}
+
+/** Finds the preset milestone a suggestion's name refers to (case-insensitive), else null. */
+function presetFor(name: string, milestones: readonly Milestone[]): Milestone | null {
+  const n = name.trim().toLowerCase();
+  return milestones.find((m) => m.isPreset && m.name.trim().toLowerCase() === n) ?? null;
+}
+
+function AiSection({
+  photo,
+  milestones,
+  paid,
+  onEditAi,
+  onRetry,
+  retrying,
+  retryError,
+  onSuggestMilestone,
+}: {
+  photo: Photo;
+  milestones: readonly Milestone[];
+  paid: boolean;
+  onEditAi?: () => void;
+  onRetry?: () => void;
+  retrying?: boolean;
+  retryError?: boolean;
+  onSuggestMilestone?: (milestoneId: string) => void;
+}) {
+  const ai = photo.ai;
+  const d = ai.description;
+  const edited = (f: "caption" | "detailed_description" | "search_tags") =>
+    ai.overrides[f] !== undefined;
+  let content: ReactNode;
+  if (ai.status === "not_available") {
+    content = paid ? (
+      <span className="opacity-70" data-testid="details-ai-unavailable">
+        {t("details.captionPending")}
+      </span>
+    ) : (
+      <span data-testid="details-ai-upgrade">
+        <Link to="/settings" className="underline">
+          {t("ai.upgrade")}
+        </Link>
+        <span className="mt-1 block text-sm opacity-70">{t("ai.upgradeBody")}</span>
+      </span>
+    );
+  } else if (ai.status === "pending") {
+    content = (
+      <span className="opacity-70" data-testid="details-ai-pending">
+        {t("ai.pending")}
+      </span>
+    );
+  } else if (ai.status === "queued" || ai.status === "analyzing") {
+    content = (
+      <span className="flex items-center gap-2" role="status" data-testid="details-ai-analyzing">
+        <span
+          aria-hidden
+          className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+        />
+        {t("ai.analyzing")}
+      </span>
+    );
+  } else if (ai.status === "failed") {
+    content = (
+      <span className="flex flex-col items-start gap-2" data-testid="details-ai-failed">
+        <span>{t("ai.failed")}</span>
+        {ai.canRetry && onRetry ? (
+          <Button
+            variant="secondary"
+            data-testid="details-ai-retry"
+            disabled={retrying}
+            onClick={onRetry}
+          >
+            {t("ai.retry")}
+          </Button>
+        ) : null}
+        {retryError ? (
+          <span role="alert" className="text-sm text-red-600 dark:text-red-400">
+            {t("ai.retryError")}
+          </span>
+        ) : null}
+      </span>
+    );
+  } else if (!d) {
+    content = (
+      <span className="opacity-70" data-testid="details-ai-reanalysing">
+        {t("ai.reanalysing")}
+      </span>
+    );
+  } else {
+    const line = summaryLine(d);
+    content = (
+      <div className="flex flex-col gap-3">
+        <p>
+          <span data-testid="details-ai-caption-text">{d.caption}</span>
+          <EditedMark show={edited("caption")} />
+        </p>
+        <p className="whitespace-pre-wrap break-words text-sm" data-testid="details-ai-description">
+          {d.detailed_description}
+          <EditedMark show={edited("detailed_description")} />
+        </p>
+        {line ? (
+          <p className="text-sm opacity-70" data-testid="details-ai-summary">
+            {line}
+          </p>
+        ) : null}
+        <div>
+          <p className="sr-only">{t("ai.tagsList")}</p>
+          <ul className="flex flex-wrap gap-2" data-testid="details-ai-tags">
+            {d.search_tags.map((tag) => (
+              <li key={tag} className="rounded-full border border-gray-500/50 px-3 py-0.5 text-sm">
+                {tag}
+              </li>
+            ))}
+          </ul>
+          <EditedMark show={edited("search_tags")} />
+        </div>
+        {d.possible_milestones.length > 0 ? (
+          <ul className="flex flex-col gap-1" data-testid="details-ai-milestones">
+            {d.possible_milestones.map((m, n) => {
+              const preset = presetFor(m.name, milestones);
+              const pct = Math.round(m.confidence * 100);
+              return (
+                <li key={m.name} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span>{t("ai.lookLike", { name: m.name, pct })}</span>
+                  {photo.canEdit && preset && onSuggestMilestone ? (
+                    <Button
+                      variant="secondary"
+                      className="!px-3 text-sm"
+                      data-testid={`details-ai-milestone-suggest-${n}`}
+                      aria-label={t("ai.tagItLabel", { name: preset.name })}
+                      onClick={() => onSuggestMilestone(preset.id)}
+                    >
+                      {t("ai.tagIt")}
+                    </Button>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+        {FEATURES.aiEdits && photo.canEdit && onEditAi ? (
+          <Button
+            variant="secondary"
+            className="self-start"
+            data-testid="details-ai-edit"
+            onClick={onEditAi}
+          >
+            {t("ai.edit")}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2" data-testid="details-ai">
+      {photo.isSensitive ? (
+        <span
+          data-testid="details-sensitive-badge"
+          className="inline-flex items-center gap-1.5 self-start rounded-full bg-black/70 px-3 py-1 text-sm text-white"
+        >
+          <IonIcon icon={eyeOffOutline} aria-hidden className="h-4 w-4" />
+          {t("ai.sensitiveBadge")}
+        </span>
+      ) : null}
+      <span data-testid="details-caption">{content}</span>
+    </div>
+  );
+}
+
 /** Read-only details: caption slot, age, date, place, camera and the parent's details. */
 export function DetailsPanel({
   photo,
   milestones,
   isAdmin,
   paid,
+  onEditAi,
+  onRetry,
+  retrying,
+  retryError,
+  onSuggestMilestone,
 }: {
   photo: Photo;
   milestones: readonly Milestone[];
   isAdmin: boolean;
   paid: boolean;
+  onEditAi?: () => void;
+  onRetry?: () => void;
+  retrying?: boolean;
+  retryError?: boolean;
+  /** Opens the details form with this preset milestone preselected; nothing is saved yet. */
+  onSuggestMilestone?: (milestoneId: string) => void;
 }) {
   const units = useProfileUnits();
   const timeZone = useProfileTimeZone();
@@ -52,16 +256,17 @@ export function DetailsPanel({
 
   return (
     <dl data-testid="viewer-details" className="flex flex-col gap-3">
-      <Row label={t("details.caption")} testId="details-caption">
-        {photo.caption ? (
-          <span>{photo.caption}</span>
-        ) : paid ? (
-          <span className="opacity-70">{t("details.captionPending")}</span>
-        ) : (
-          <Link to="/settings" className="underline">
-            {t("details.captionUpgrade")}
-          </Link>
-        )}
+      <Row label={t("ai.sectionTitle")}>
+        <AiSection
+          photo={photo}
+          milestones={milestones}
+          paid={paid}
+          onEditAi={onEditAi}
+          onRetry={onRetry}
+          retrying={retrying}
+          retryError={retryError}
+          onSuggestMilestone={onSuggestMilestone}
+        />
       </Row>
       <Row label={t("details.age")} testId="details-age">
         {ageText(photo.ageDays)}

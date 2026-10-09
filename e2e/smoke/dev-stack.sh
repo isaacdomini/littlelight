@@ -92,9 +92,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 12 migrations applied"
+step "3a. database: all 13 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "12" ] || fail "expected 12 applied migrations, found $MIGS"
+[ "$MIGS" = "13" ] || fail "expected 13 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -202,6 +202,55 @@ grep -q 'diskUsedPct' <<<"$WLOG" || fail "worker log has no diskUsedPct (disk ga
 LEAK="$("${DC[@]}" logs api worker 2>&1 | grep -Eci 'X-Amz-Signature|GPSLatitude|"latitude"' || true)"
 [ "$LEAK" = "0" ] || fail "$LEAK api/worker log line(s) mention signed-URL signatures or GPS"
 echo "api/worker use their own MinIO service accounts; worker queues ready; logs clean"
+
+
+step "5e. step 6: AI wiring (8 queues, provider line), seeded bath description, paid-tier gate, no keys in clients"
+grep -Eq 'queues: 8' <<<"$WLOG" || fail "worker log does not show 8 queues"
+W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
+W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
+if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
+  grep -q 'AI disabled: OPENAI_API_KEY not set' <<<"$WLOG" || fail "worker log has no 'AI disabled: OPENAI_API_KEY not set' (no key configured)"
+else
+  grep -Eq 'AI enabled: provider=(openai|anthropic|fake)' <<<"$WLOG" || fail "a provider is configured but the worker log has no 'AI enabled' line"
+fi
+for name in api web migrate; do
+  K="$("${DC[@]}" exec -T "$name" printenv OPENAI_API_KEY 2>/dev/null | tr -d '\r' || true)"
+  [ -z "$K" ] || fail "$name has OPENAI_API_KEY set (only the worker may hold a provider key)"
+done
+[ "$("${PSQL[@]}" -c "select count(*) from ai_batch_items i join babies b on b.id=i.baby_id where b.plan='free'")" = "0" ] \
+  || fail "a free-tier baby has ai_batch_items"
+[ "$("${PSQL[@]}" -c "select count(*) from photo_ai a join photos p on p.id=a.photo_id join babies b on b.id=p.baby_id where b.plan='free'")" = "0" ] \
+  || fail "photo_ai rows exist for a free-tier baby"
+# demo-mom reads the seeded bath photo: ready, flagged, raw output for the admin, nothing private
+MOM_EMAIL="demo-mom@littlelight.local"
+MOM_JAR="$TMP/mom.jar"
+curl -fsS -o /dev/null -X POST "$BASE/api/auth/otp" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"email\":\"$MOM_EMAIL\"}" || fail "demo-mom OTP request failed"
+MOM_CODE=""
+for _ in $(seq 1 30); do
+  MID="$(curl -fsS "$MAIL/api/v1/search?query=to:$MOM_EMAIL" | json 'j.messages?.[0]?.ID')" || true
+  if [ -n "$MID" ]; then
+    MOM_CODE="$(curl -fsS "$MAIL/api/v1/message/$MID" | json 'j.HTML' | grep -Eo '>[0-9]{6}<' | sed -n '1{s/[<>]//g;p;}' || true)"
+    [ -n "$MOM_CODE" ] && break
+  fi
+  sleep 1
+done
+[ -n "$MOM_CODE" ] || fail "no sign-in code for demo-mom"
+curl -fsS -o /dev/null -c "$MOM_JAR" -X POST "$BASE/api/auth/verify" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+  -d "{\"email\":\"$MOM_EMAIL\",\"code\":\"$MOM_CODE\"}" || fail "demo-mom verify failed"
+# a freshly seeded family has not accepted the current Terms yet: accept them like the app would
+MOM_ME="$(curl -fsS -b "$MOM_JAR" "$BASE/api/me")" || fail "GET /api/me as demo-mom failed"
+if [ "$(printf '%s' "$MOM_ME" | json 'j.consent.ok')" != "true" ]; then
+  curl -fsS -o /dev/null -b "$MOM_JAR" -X POST "$BASE/api/me/consent" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+    -d "{\"termsVersion\":\"$(printf '%s' "$MOM_ME" | json 'j.consent.requiredTermsVersion')\",\"privacyVersion\":\"$(printf '%s' "$MOM_ME" | json 'j.consent.requiredPrivacyVersion')\",\"isAdult\":true}" \
+    || fail "demo-mom consent failed"
+fi
+BATH="$(curl -fsS -b "$MOM_JAR" "$BASE/api/photos/00000000-0000-4000-8000-000000000304")" || fail "GET bath photo failed"
+[ "$(printf '%s' "$BATH" | json 'j.ai.status')" = "ready" ] || fail "bath photo ai.status is not ready: $BATH"
+[ "$(printf '%s' "$BATH" | json 'j.isSensitive')" = "true" ] || fail "bath photo is not sensitive"
+[ "$(printf '%s' "$BATH" | json 'j.ai.description.sensitive_content.includes("bath")')" = "true" ] || fail "bath flag missing from the description"
+[ "$(printf '%s' "$BATH" | json 'j.ai.raw!==null')" = "true" ] || fail "admin does not get ai.raw"
+grep -Eqi 'latitude|longitude|raw_json|analysis\.jpg' <<<"$BATH" && fail "bath photo response leaks GPS/raw_json/analysis key"
+echo "AI wiring and seeded description ok"
 
 if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   step "5c. stopping storage degrades the api (503) and the worker (unhealthy)"

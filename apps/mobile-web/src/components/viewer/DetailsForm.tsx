@@ -20,6 +20,7 @@ export function DetailsForm({
   onSubmit,
   onCancel,
   onAddMeasurement,
+  initialMilestoneId,
 }: {
   photo: Photo;
   babyId: string;
@@ -27,10 +28,14 @@ export function DetailsForm({
   onSubmit: (patch: PhotoDetailsPatch) => Promise<void>;
   onCancel: () => void;
   onAddMeasurement?: () => void;
+  /** Preselected milestone (an AI suggestion the parent chose to tag); unsaved until Save. */
+  initialMilestoneId?: string | null;
 }) {
   const milestones = useMilestones(babyId);
   const createMilestone = useCreateMilestone(babyId);
-  const [milestoneId, setMilestoneId] = useState(photo.details?.milestoneId ?? "");
+  const [milestoneId, setMilestoneId] = useState(
+    initialMilestoneId ?? photo.details?.milestoneId ?? "",
+  );
   const [custom, setCustom] = useState("");
   const [people, setPeople] = useState<string[]>(photo.details?.people ?? []);
   const draft = useRef("");

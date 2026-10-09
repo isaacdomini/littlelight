@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { photoApprovalSchema, photoMimeSchema, photoStatusSchema } from "../db-enums";
+import { aiStatusSchema, photoAiSchema } from "./ai";
 import { isoDateTimeSchema } from "./common";
 import { measurementSchema } from "./measurements";
 
@@ -10,6 +11,8 @@ import { measurementSchema } from "./measurements";
 // Step 5 (docs/plans/step-5.md 2.4, 2.6; PRD "FR-3", "FR-8") adds the milestone and the
 // override-aware AI caption to every summary, the timeline summary (age groups + jump cursors),
 // bidirectional keyset paging, batch URL refresh and parent-details editing (one or many photos).
+// Step 6 (docs/plans/step-6.md 2.4) adds `aiStatus` to every summary and the `ai` block to the
+// single-photo response.
 
 /** Limits of parent-supplied details (`photo_details`), trimmed; the DB enforces the caps too. */
 export const PHOTO_DETAILS_LIMITS = {
@@ -61,6 +64,8 @@ export const photoSummarySchema = z.object({
    * panel; render as text, never HTML.
    */
   caption: z.string().nullable(),
+  /** Derived AI state (step 6): the timeline's "analyzing" badge. See `aiStatusSchema`. */
+  aiStatus: aiStatusSchema,
 });
 export type PhotoSummary = z.infer<typeof photoSummarySchema>;
 
@@ -96,6 +101,8 @@ export const photoSchema = photoSummarySchema.extend({
    * `pending` (the DB's `photo_editable` rule; RLS enforces it, this only drives the UI).
    */
   canEdit: z.boolean(),
+  /** AI description state, override-merged description and retry flag (step 6, FR-5). */
+  ai: photoAiSchema,
 });
 export type Photo = z.infer<typeof photoSchema>;
 

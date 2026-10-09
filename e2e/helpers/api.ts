@@ -26,10 +26,14 @@ export class ApiClient {
     readonly email: string,
   ) {}
 
-  static async create(email: string): Promise<ApiClient> {
+  static async create(
+    email: string,
+    storageState?: Awaited<ReturnType<APIRequestContext["storageState"]>>,
+  ): Promise<ApiClient> {
     const ctx = await request.newContext({
       baseURL: BASE,
       extraHTTPHeaders: { "X-Littlelight-Client": "web" },
+      ...(storageState ? { storageState } : {}),
     });
     return new ApiClient(ctx, email);
   }

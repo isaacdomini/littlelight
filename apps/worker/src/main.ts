@@ -1,20 +1,30 @@
 import os from "node:os";
-import { aiEnvSchema, isAiConfigured } from "@littlelight/ai";
 import { PgBoss } from "pg-boss";
+import { createAiPipeline } from "./ai";
+import { aiPipelineConfig, createAiRuntime } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig } from "./config";
 import { createDiskMonitor } from "./disk";
-import { startHeartbeat, workerId } from "./heartbeat";
+import { createAiQueueAgeSampler, startHeartbeat, workerId } from "./heartbeat";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
-import { ensureQueues, ensureSchedules, QUEUES, SCHEDULES, startWorkers } from "./queues";
+import {
+  ensureQueues,
+  ensureSchedules,
+  QUEUES,
+  schedules,
+  sendReindex,
+  startWorkers,
+} from "./queues";
 import { createStorage } from "./storage";
 import { WORKER_VERSION } from "./version";
 
 // Worker entry (docs/plans/step-1.md 2.9, docs/plans/step-4.md 2.5–2.9). pg-boss runs as
 // `littlelight_worker` (owns the pgboss schema: migrations, maintenance, cron); every app-table
 // query runs as `pipeline` through `runAsPipeline`. Job payloads carry ids and a time zone name
-// only, never photo bytes, GPS, notes or keys with signatures.
+// only, never photo bytes, GPS, notes or keys with signatures. Step 6 (docs/plans/step-6.md 2.7):
+// the vision describer is created once here (null without a key: AI flush/poll then skip with one
+// log line and the worker stays healthy), the AI queues are always created and registered.
 
 function readConfig() {
   try {
@@ -32,15 +42,7 @@ const config = readConfig();
 const log = createLogger(config);
 const id = workerId();
 
-const ai = aiEnvSchema.safeParse(process.env);
-if (isAiConfigured(process.env) && ai.success) {
-  log.info(`AI enabled: provider=${ai.data.VISION_PROVIDER} model=${ai.data.VISION_MODEL}`);
-} else if (ai.success) {
-  const keyVar = ai.data.VISION_PROVIDER === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
-  log.info(`AI disabled: ${keyVar} not set`);
-} else {
-  log.warn("AI disabled: invalid AI configuration");
-}
+const ai = createAiRuntime(process.env, log);
 
 let matcher: ReturnType<typeof createCsamMatcher>;
 try {
@@ -50,9 +52,9 @@ try {
   process.exit(1);
 }
 
-// Room for INGEST_CONCURRENCY handlers (a few short transactions each) plus the heartbeat and
-// the cron jobs.
-const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 4);
+// Room for INGEST_CONCURRENCY handlers (a few short transactions each) plus the heartbeat, the
+// cron jobs and the AI flush/poll/backfill handlers (+2, docs/plans/step-6.md 2.7).
+const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 6);
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
 const s3 = createS3Client(config);
 const storage = createStorage(s3, config.S3_BUCKET);
@@ -70,6 +72,16 @@ const boss = new PgBoss({
 boss.on("error", (err) => log.error({ err: errorCategory(err) }, "pg-boss error"));
 boss.on("warning", (w) => log.warn({ warning: errorCategory(w) }, "pg-boss warning"));
 
+const aiPipeline = createAiPipeline({
+  pool,
+  storage,
+  describer: ai.describer,
+  ...(ai.disabledReason ? { disabledReason: ai.disabledReason } : {}),
+  config: aiPipelineConfig(config, process.env),
+  sendReindex: (job) => sendReindex(boss, job),
+  log,
+});
+
 const heartbeat = startHeartbeat(
   {
     db: pool,
@@ -81,6 +93,16 @@ const heartbeat = startHeartbeat(
     version: WORKER_VERSION,
     startedAt: new Date(),
     diskUsedPct: () => disk.sample(),
+    // Only with a provider: without one, eligible photos wait by design (no alert).
+    ...(ai.describer
+      ? {
+          aiQueueAge: createAiQueueAgeSampler({
+            queueAge: () => aiPipeline.queueAge(),
+            alertMinutes: config.AI_QUEUE_AGE_ALERT_MINUTES,
+            log,
+          }),
+        }
+      : {}),
   },
   config.HEARTBEAT_INTERVAL_MS,
   log,
@@ -108,12 +130,16 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 try {
   await boss.start();
   await ensureQueues(boss, log);
-  await ensureSchedules(boss);
-  log.info({ queues: Object.keys(QUEUES).length, schedules: SCHEDULES.length }, "queues ready");
+  await ensureSchedules(boss, config);
+  log.info(
+    { queues: Object.keys(QUEUES).length, schedules: schedules(config).length },
+    "queues ready",
+  );
   await startWorkers(boss, {
     ingest: { pool, storage, matcher, dataKey: config.DATA_ENCRYPTION_KEY, log },
     purge: { pool, storage, log },
     sweep: { pool, storage, log },
+    ai: aiPipeline,
     log,
     ingestConcurrency: config.INGEST_CONCURRENCY,
   });

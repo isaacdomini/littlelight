@@ -38,6 +38,8 @@ export const DEMO = {
   },
   baby: "00000000-0000-4000-8000-000000000100",
   shareLink: "00000000-0000-4000-8000-000000000200",
+  /** The completed demo `ai_batches` row behind the bath photo's `photo_ai` (step 6). */
+  aiBatch: "00000000-0000-4000-8000-000000000500",
   /** Plaintext dev token; only its sha256 is stored. */
   shareToken: "demo-grandparents-share-token",
   /** Photo ids are `00000000-0000-4000-8000-0000000003NN`, NN = 01..12. */
@@ -206,6 +208,8 @@ const COUNT_TABLES = [
   "photo_exif",
   "photo_derivatives",
   "photo_details",
+  "ai_batches",
+  "ai_batch_items",
   "photo_ai",
   "measurements",
   "share_links",
@@ -245,6 +249,63 @@ function ageLabel(days: number): string {
   const m = months === 1 ? "1 month" : `${months} months`;
   if (weeks === 0) return m;
   return `${m} ${weeks === 1 ? "1 week" : `${weeks} weeks`}`;
+}
+
+/**
+ * Demo price-table numbers for the one described photo (docs/plans/step-6.md 2.3.9, 4.1):
+ * 1,400 input tokens of which 700 cached, 400 output, gpt-6-luna batch tier; the per-photo
+ * `cost_usd` is the PRD's ~$0.00017 estimate (`AI_COST_PER_PHOTO_ESTIMATE_USD`).
+ */
+const DEMO_AI = {
+  provider: "openai",
+  model: "gpt-6-luna",
+  promptVersion: "v1",
+  schemaVersion: "v1",
+  providerBatchId: "batch_demo_littlelight_seed",
+  inputTokens: 1400,
+  cachedInputTokens: 700,
+  outputTokens: 400,
+  imageTokens: 519,
+  costUsd: "0.00017",
+} as const;
+
+/**
+ * The bath photo's structured description in the exact v1 shape (`aiDescriptionV1Schema` in
+ * `@littlelight/shared`; a test parses this). Every key present, "absent" = null / [], closed
+ * sets only, `sensitive_content` carries the flag that makes the photo sensitive.
+ */
+function bathDescriptionV1(p: DemoPhoto): Record<string, unknown> {
+  return {
+    caption: p.caption,
+    detailed_description:
+      "A baby sits in a small plastic baby tub with shallow water, splashing with both hands so that droplets are caught mid-air. A yellow rubber duck floats beside the baby and a folded towel lies within reach on the edge of the tub. The room is bright and warm-toned.",
+    subjects: [{ who: "baby", relation_hint: null, is_target_baby: true }],
+    baby_present: true,
+    baby_state: { pose: "sitting", expression: "smiling", activity: "splashing in the bath" },
+    setting: { indoor_outdoor: "indoor", place_type: "bathroom", weather: null, time_of_day: null },
+    objects: ["baby tub", "rubber duck", "towel"],
+    clothing: [],
+    activities: ["bathing", "splashing"],
+    possible_milestones: [{ name: "Sat up", confidence: 0.92 }],
+    occasion: null,
+    mood: ["playful", "happy"],
+    colors: ["white", "yellow", "blue"],
+    text_in_image: null,
+    photo_quality: { blurry: false, is_screenshot: false, is_duplicate_like: false },
+    sensitive_content: ["bath"],
+    search_tags: [
+      "bath",
+      "bath time",
+      "baby tub",
+      "splashing",
+      "rubber duck",
+      "bathroom",
+      "indoor",
+      "sitting",
+      "smiling",
+      "water",
+    ],
+  };
 }
 
 function searchText(p: DemoPhoto, milestoneName: string | undefined, relationship: string): string {
@@ -357,6 +418,39 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
     const relationshipOf = (key: UserKey) =>
       users.find((u) => u.key === key)?.relationship ?? "Parent";
 
+    // The completed batch the bath photo's description came from (step 6): provider files
+    // deleted, cost recorded. Inserted before the photos so photo_ai.batch_id can reference it.
+    await q(
+      `INSERT INTO public.ai_batches (id, provider, model, provider_batch_id, provider_input_file_id, provider_output_file_id,
+         status, photo_count, submitted_at, completed_at, expires_at, last_polled_at, files_deleted_at,
+         input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, image_tokens, cost_usd,
+         prompt_version, schema_version, request_counts, submitted_bytes)
+       VALUES ($1, $2, $3, $4, 'file-demo-input', 'file-demo-output',
+         'completed', 1, now() - interval '2 hours', now() - interval '1 hour', now() + interval '22 hours',
+         now() - interval '1 hour', now() - interval '1 hour',
+         $5, $6, $7, 0, $8, $9::numeric, $10, $11, '{"total":1,"completed":1,"failed":0}'::jsonb, 92000)
+       ON CONFLICT (id) DO UPDATE SET provider = EXCLUDED.provider, model = EXCLUDED.model,
+         provider_batch_id = EXCLUDED.provider_batch_id, status = EXCLUDED.status, photo_count = EXCLUDED.photo_count,
+         files_deleted_at = EXCLUDED.files_deleted_at, input_tokens = EXCLUDED.input_tokens,
+         cached_input_tokens = EXCLUDED.cached_input_tokens, output_tokens = EXCLUDED.output_tokens,
+         reasoning_tokens = EXCLUDED.reasoning_tokens, image_tokens = EXCLUDED.image_tokens, cost_usd = EXCLUDED.cost_usd,
+         prompt_version = EXCLUDED.prompt_version, schema_version = EXCLUDED.schema_version,
+         request_counts = EXCLUDED.request_counts, error = NULL`,
+      [
+        DEMO.aiBatch,
+        DEMO_AI.provider,
+        DEMO_AI.model,
+        DEMO_AI.providerBatchId,
+        DEMO_AI.inputTokens,
+        DEMO_AI.cachedInputTokens,
+        DEMO_AI.outputTokens,
+        DEMO_AI.imageTokens,
+        DEMO_AI.costUsd,
+        DEMO_AI.promptVersion,
+        DEMO_AI.schemaVersion,
+      ],
+    );
+
     for (const p of PHOTOS) {
       const id = DEMO.photo(p.nn);
       const key = `babies/${DEMO.baby}/originals/${id}.${p.mime === "image/heic" ? "heic" : "jpg"}`;
@@ -365,7 +459,7 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
         `INSERT INTO public.photos (id, baby_id, uploaded_by, storage_key_original, sha256, width, height, bytes, mime,
            status, approval, approved_by, approved_at, taken_at, age_days, is_sensitive, deleted_at)
          VALUES ($1, $2, $3, $4, $5, 3024, 4032, 2480000, $6,
-           'ingested', $7, $8, $9, $10::timestamptz, $11, $12, $13)
+           $14, $7, $8, $9, $10::timestamptz, $11, $12, $13)
          ON CONFLICT (id) DO UPDATE SET uploaded_by = EXCLUDED.uploaded_by, storage_key_original = EXCLUDED.storage_key_original,
            sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, status = EXCLUDED.status, approval = EXCLUDED.approval,
            approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at, taken_at = EXCLUDED.taken_at,
@@ -384,6 +478,8 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
           ageDays(p.takenAt),
           p.sensitive === true,
           p.deleted ? new Date(Date.now() - 3 * 86_400_000) : null,
+          // The described photo is `ready` (its photo_ai row below); every other one is ingested.
+          p.sensitive ? "ready" : "ingested",
         ],
       );
       await q(
@@ -436,20 +532,46 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
         );
       }
       if (p.sensitive) {
+        // The description row; the photo itself was inserted as `ready` above.
         await q(
-          `INSERT INTO public.photo_ai (photo_id, model, prompt_version, schema_version, description, sensitive_flags, confidence)
-           VALUES ($1, 'gpt-6-luna', 'v1', 'v1', $2::jsonb, '{bath}'::text[], 0.92)
-           ON CONFLICT (photo_id) DO UPDATE SET description = EXCLUDED.description, sensitive_flags = EXCLUDED.sensitive_flags`,
+          `INSERT INTO public.photo_ai (photo_id, model, prompt_version, schema_version, description, sensitive_flags, confidence,
+             batch_id, input_tokens, output_tokens)
+           VALUES ($1, $2, $3, $4, $5::jsonb, '{bath}'::text[], 0.92, $6, $7, $8)
+           ON CONFLICT (photo_id) DO UPDATE SET model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,
+             schema_version = EXCLUDED.schema_version, description = EXCLUDED.description,
+             sensitive_flags = EXCLUDED.sensitive_flags, confidence = EXCLUDED.confidence, batch_id = EXCLUDED.batch_id,
+             input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens`,
           [
             id,
-            JSON.stringify({
-              caption: p.caption,
-              tags: p.tags,
-              setting: "indoor",
-              activity: "bath",
-              sensitive_content: ["bath"],
-              text_in_image: "",
-            }),
+            DEMO_AI.model,
+            DEMO_AI.promptVersion,
+            DEMO_AI.schemaVersion,
+            JSON.stringify(bathDescriptionV1(p)),
+            DEMO.aiBatch,
+            DEMO_AI.inputTokens,
+            DEMO_AI.outputTokens,
+          ],
+        );
+        await q(
+          `INSERT INTO public.ai_batch_items (batch_id, photo_id, baby_id, attempt, prompt_version, schema_version, state,
+             input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, image_tokens, cost_usd, created_at)
+           VALUES ($1, $2, $3, 1, $4, $5, 'succeeded', $6, $7, $8, 0, $9, $10::numeric, now() - interval '2 hours')
+           ON CONFLICT (batch_id, photo_id) DO UPDATE SET state = EXCLUDED.state, failure_kind = NULL,
+             attempt = EXCLUDED.attempt, prompt_version = EXCLUDED.prompt_version, schema_version = EXCLUDED.schema_version,
+             input_tokens = EXCLUDED.input_tokens, cached_input_tokens = EXCLUDED.cached_input_tokens,
+             output_tokens = EXCLUDED.output_tokens, reasoning_tokens = EXCLUDED.reasoning_tokens,
+             image_tokens = EXCLUDED.image_tokens, cost_usd = EXCLUDED.cost_usd`,
+          [
+            DEMO.aiBatch,
+            id,
+            DEMO.baby,
+            DEMO_AI.promptVersion,
+            DEMO_AI.schemaVersion,
+            DEMO_AI.inputTokens,
+            DEMO_AI.cachedInputTokens,
+            DEMO_AI.outputTokens,
+            DEMO_AI.imageTokens,
+            DEMO_AI.costUsd,
           ],
         );
       }

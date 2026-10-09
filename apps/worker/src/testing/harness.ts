@@ -88,6 +88,8 @@ export interface Baby {
 
 export interface SeedOptions {
   baby: Baby;
+  /** Fixed photo id (default random); the fake AI provider flags ids starting with `0` as `bath`. */
+  id?: string;
   bytes: Buffer;
   approval?: "approved" | "pending";
   /** Skip putting the object (simulates a lost upload). */
@@ -175,6 +177,7 @@ export async function createHarness(): Promise<Harness> {
   const storage = createStorage(s3, env.bucket);
   const log = recordingLog();
 
+  const startedAt = new Date(Date.now() - 1_000);
   const users: string[] = [];
   const babies: string[] = [];
   const sessions: string[] = [];
@@ -239,7 +242,7 @@ export async function createHarness(): Promise<Harness> {
     },
 
     async seedUpload(o) {
-      const id = randomUUID();
+      const id = o.id ?? randomUUID();
       const key = originalKey(o.baby.id, id);
       const sessionId = randomUUID();
       sessions.push(sessionId);
@@ -348,6 +351,15 @@ export async function createHarness(): Promise<Harness> {
         for (const b of babies) {
           await storage.deleteAllVersions(babyPrefix(b)).catch(() => undefined);
         }
+        // `ai_batches` are not baby-scoped (items cascade from the batch, not the baby): remove the
+        // batches this run's babies had items in, plus any empty fake-provider batch it created.
+        await admin.query(
+          `DELETE FROM public.ai_batches
+            WHERE id IN (SELECT batch_id FROM public.ai_batch_items WHERE baby_id = ANY($1::uuid[]))
+               OR (provider = 'fake' AND created_at >= $2
+                   AND NOT EXISTS (SELECT 1 FROM public.ai_batch_items i WHERE i.batch_id = ai_batches.id))`,
+          [babies, startedAt],
+        );
         await admin.query("DELETE FROM public.audit_log WHERE baby_id = ANY($1::uuid[])", [babies]);
         await admin.query("DELETE FROM public.babies WHERE id = ANY($1::uuid[])", [babies]);
         await admin.query("DELETE FROM public.upload_sessions WHERE id = ANY($1::uuid[])", [

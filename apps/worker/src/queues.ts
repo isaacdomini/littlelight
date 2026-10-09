@@ -1,4 +1,9 @@
 import {
+  type AiBackfillJob,
+  type AiFlushJob,
+  aiBackfillJobSchema,
+  aiFlushJobSchema,
+  aiPollJobSchema,
   type IngestJob,
   ingestJobSchema,
   JOBS,
@@ -7,7 +12,9 @@ import {
   reindexJobSchema,
 } from "@littlelight/shared";
 import type { JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
+import type { AiPipeline, FlushResult, PollResult } from "./ai";
 import { errorCategory } from "./clients";
+import type { WorkerConfig } from "./config";
 import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
@@ -26,6 +33,11 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // processes a photo twice concurrently. The cron queues are sent without a key, so each runs as
 // a cluster-wide singleton. `photo.reindex` (step 5 2.5) is keyed by photoId too: one queued
 // re-index per photo however many edits land before it runs (step 7 re-reads at run time).
+//
+// Step 6 (docs/plans/step-6.md 2.7): `ai.flush` and `ai.poll` are cron singletons (no key, no
+// retry: the next tick is the retry; expiry just under the 30-minute flush window), scheduled
+// from config (`AI_FLUSH_INTERVAL_CRON`, `AI_POLL_INTERVAL_CRON`). `ai.backfill` is sent on
+// demand with `singletonKey = babyId ?? "all"`, so one backfill per baby (or one global) at a time.
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -48,16 +60,36 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     retryBackoff: true,
     expireInSeconds: 300,
   },
+  [JOBS.aiFlush]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 1700 },
+  [JOBS.aiPoll]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 1700 },
+  [JOBS.aiBackfill]: {
+    policy: "exclusive",
+    retryLimit: 2,
+    retryDelay: 60,
+    expireInSeconds: 3600,
+  },
 });
 
 /** Handlers per worker process for `photo.reindex` (docs/plans/step-5.md 2.5). */
 export const REINDEX_CONCURRENCY = 4;
 
+/** Fixed crons. The AI crons come from config: see `schedules(config)`. */
 export const SCHEDULES: ReadonlyArray<readonly [JobName, string]> = Object.freeze([
   [JOBS.ingestReconcile, "*/5 * * * *"],
   [JOBS.purgeTrash, "7 * * * *"],
   [JOBS.uploadsSweep, "23,53 * * * *"],
 ] as const);
+
+export type ScheduleConfig = Pick<WorkerConfig, "AI_FLUSH_INTERVAL_CRON" | "AI_POLL_INTERVAL_CRON">;
+
+/** Every cron this worker schedules: `SCHEDULES` plus `ai.flush` / `ai.poll` from config. */
+export function schedules(config: ScheduleConfig): ReadonlyArray<readonly [JobName, string]> {
+  return [
+    ...SCHEDULES,
+    [JOBS.aiFlush, config.AI_FLUSH_INTERVAL_CRON],
+    [JOBS.aiPoll, config.AI_POLL_INTERVAL_CRON],
+  ];
+}
 
 /** Same options the API sends with (apps/api/src/plugins/jobs.ts `INGEST_SEND_OPTIONS`). */
 export function ingestSendOptions(photoId: string): SendOptions {
@@ -99,10 +131,46 @@ export async function sendReindex(
   return boss.send(JOBS.reindex, data, reindexSendOptions(data.photoId));
 }
 
+/** Same options as the `ai.flush` queue (run-job `--enqueue`; cron ticks send no data). */
+export const AI_FLUSH_SEND_OPTIONS: SendOptions = Object.freeze({
+  retryLimit: 0,
+  expireInSeconds: 1700,
+});
+
+/** Validate and enqueue one `ai.flush`. Resolves null when one is already queued or active. */
+export async function sendAiFlush(
+  boss: Pick<PgBoss, "send">,
+  job: AiFlushJob = {},
+): Promise<string | null> {
+  const data = aiFlushJobSchema.parse(job);
+  return boss.send(JOBS.aiFlush, data, { ...AI_FLUSH_SEND_OPTIONS });
+}
+
+/** `ai.backfill` send options: one queued/active backfill per baby, or one global (`"all"`). */
+export function aiBackfillSendOptions(job: Pick<AiBackfillJob, "babyId">): SendOptions {
+  return {
+    singletonKey: job.babyId ?? "all",
+    retryLimit: 2,
+    retryDelay: 60,
+    expireInSeconds: 3600,
+  };
+}
+
+/** Validate and enqueue one `ai.backfill`. Resolves null when one is already queued for the key. */
+export async function sendAiBackfill(
+  boss: Pick<PgBoss, "send">,
+  job: AiBackfillJob,
+): Promise<string | null> {
+  const data = aiBackfillJobSchema.parse(job);
+  return boss.send(JOBS.aiBackfill, data, aiBackfillSendOptions(data));
+}
+
 export interface QueueDeps {
   ingest: IngestDeps;
   purge: PurgeDeps;
   sweep: SweepDeps;
+  /** Always present: without a provider the pipeline's flush/poll skip with one log line. */
+  ai: AiPipeline;
   log: WorkerLog;
   ingestConcurrency: number;
 }
@@ -124,10 +192,60 @@ export async function ensureQueues(
   }
 }
 
-export async function ensureSchedules(boss: Pick<PgBoss, "schedule">): Promise<void> {
-  for (const [name, cron] of SCHEDULES) {
+export async function ensureSchedules(
+  boss: Pick<PgBoss, "schedule">,
+  config: ScheduleConfig,
+): Promise<void> {
+  for (const [name, cron] of schedules(config)) {
     await boss.schedule(name, cron, {}, { tz: "UTC" });
   }
+}
+
+type AiJob = Pick<JobWithMetadata<unknown>, "id" | "data">;
+type AiHandlerDeps = Pick<QueueDeps, "ai" | "log">;
+
+/**
+ * `ai.flush` handler (cron tick, or run-job `--enqueue` with `{force, babyId}`). A malformed
+ * payload can never succeed: logged (job id only) and dropped. Pipeline errors propagate so
+ * pg-boss records the failure; the next cron tick is the retry (`retryLimit 0`).
+ */
+export async function handleAiFlushJob(
+  deps: AiHandlerDeps,
+  job: AiJob,
+): Promise<FlushResult | null> {
+  const parsed = aiFlushJobSchema.safeParse(job.data ?? {});
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "ai.flush: invalid job payload, dropped");
+    return null;
+  }
+  const { force, babyId } = parsed.data;
+  return deps.ai.flush({
+    ...(force !== undefined ? { force } : {}),
+    ...(babyId !== undefined ? { babyId } : {}),
+  });
+}
+
+/** `ai.poll` handler (cron tick; no payload). */
+export async function handleAiPollJob(deps: AiHandlerDeps, job: AiJob): Promise<PollResult | null> {
+  const parsed = aiPollJobSchema.safeParse(job.data ?? {});
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "ai.poll: invalid job payload, dropped");
+    return null;
+  }
+  return deps.ai.poll();
+}
+
+/** `ai.backfill` handler (upgrade, version or manual backfill; `aiBackfillJobSchema`). */
+export async function handleAiBackfillJob(
+  deps: AiHandlerDeps,
+  job: AiJob,
+): Promise<FlushResult | null> {
+  const parsed = aiBackfillJobSchema.safeParse(job.data);
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "ai.backfill: invalid job payload, dropped");
+    return null;
+  }
+  return deps.ai.backfill(parsed.data);
 }
 
 /** The `photo.ingest` handler for one job (exported for run-job and tests). */
@@ -214,4 +332,16 @@ export async function startWorkers(
       for (const job of jobs) await handleReindexJob({ log: deps.log }, job);
     },
   );
+  // Step 6 AI batch pipeline (docs/plans/step-6.md 2.6, 2.7). One job at a time per process;
+  // the exclusive policy makes flush/poll cluster-wide singletons, and the pipeline itself
+  // claims batches with SKIP LOCKED, so `--scale worker=3` stays safe.
+  await boss.work(JOBS.aiFlush, { pollingIntervalSeconds: 10 }, async (jobs) => {
+    for (const job of jobs) await handleAiFlushJob(deps, job);
+  });
+  await boss.work(JOBS.aiPoll, { pollingIntervalSeconds: 10 }, async (jobs) => {
+    for (const job of jobs) await handleAiPollJob(deps, job);
+  });
+  await boss.work(JOBS.aiBackfill, { pollingIntervalSeconds: 10 }, async (jobs) => {
+    for (const job of jobs) await handleAiBackfillJob(deps, job);
+  });
 }

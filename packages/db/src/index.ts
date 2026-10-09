@@ -34,3 +34,16 @@ export { describeError, redactSecrets } from "./redact.js";
 export { DEMO, type SeedOptions, type SeedResult, seed, seedFromEnv } from "./seed.js";
 // Test/CI only (docs/plans/step-2.md 2.1): never used by the running stack.
 export { AUTH_USERS_STUB_SQL, appRoleUrl, ensureAuthSchemaStub } from "./test-support.js";
+// Dev/operator plan setter (docs/plans/step-6.md D7): `pnpm db:plan`.
+export {
+  backfillHint,
+  PLANS,
+  type Plan,
+  PRODUCTION_FLAG,
+  parseSetPlanArgs,
+  type SetPlanArgs,
+  type SetPlanOptions,
+  type SetPlanResult,
+  setPlan,
+  UsageError,
+} from "./tools/set-plan.js";

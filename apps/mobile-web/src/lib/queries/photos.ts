@@ -132,14 +132,37 @@ export function useTimelineSummary(babyId: string | undefined, view: PhotosView 
   });
 }
 
-/** Full photo (display URL, EXIF, details, measurements, `canEdit`). */
+/** AI states in which the analysis result is expected soon: the detail refetches every 30 s. */
+const AI_POLL_MS = 30_000;
+const isAiInFlight = (status: string | undefined) => status === "queued" || status === "analyzing";
+
+/**
+ * Full photo (display URL, EXIF, details, measurements, `canEdit`, `ai`). Polls every 30 s only
+ * while `ai.status` is queued/analyzing, and mirrors a changed `aiStatus` into the cached lists.
+ */
 export function usePhoto(photoId: string | null | undefined) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: photoKey(photoId ?? "none"),
     enabled: !!photoId,
     staleTime: PHOTOS_STALE_MS,
     gcTime: DAY_MS,
-    queryFn: () => apiFetch(`/photos/${photoId}`, { schema: photoSchema }),
+    refetchInterval: (query) => (isAiInFlight(query.state.data?.ai.status) ? AI_POLL_MS : false),
+    queryFn: async () => {
+      const photo = await apiFetch(`/photos/${photoId}`, { schema: photoSchema });
+      queryClient.setQueriesData(
+        {
+          predicate: (q) => q.queryKey[0] === "babies" && q.queryKey[2] === "photos",
+        },
+        (old: unknown) =>
+          patchPages(old, (p) =>
+            p.id === photo.id && (p.aiStatus !== photo.aiStatus || p.caption !== photo.caption)
+              ? { ...p, aiStatus: photo.aiStatus, caption: photo.caption }
+              : undefined,
+          ),
+      );
+      return photo;
+    },
   });
 }
 

@@ -71,8 +71,10 @@ export function scriptedPool(
         released: null,
         async query(sql, params) {
           log.push([sql, params]);
-          if (PLUMBING.test(sql)) return { rows: [], command: sql.split(" ")[0] };
           const h = map.get(sql);
+          // Plumbing is answered generically unless a test scripted that exact statement
+          // (e.g. `ROLLBACK TO SAVEPOINT x`).
+          if (!h && PLUMBING.test(sql)) return { rows: [], command: sql.split(" ")[0] };
           const res = h ? await h(params ?? []) : {};
           return { rows: res.rows ?? [], rowCount: res.rowCount ?? res.rows?.length ?? 0, ...res };
         },

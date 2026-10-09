@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { babyRoleSchema, measurementKindSchema } from "./db-enums";
+import { aiOverrideFieldSchema } from "./ai-description";
+import { aiUsageMonthSchema } from "./api/ai";
+import { babyRoleSchema, measurementKindSchema, planSchema } from "./db-enums";
 import { uploadFileErrorSchema } from "./upload";
 
 // Auth constants and helpers shared by the API and the SPA (docs/plans/step-3.md 2.2, 2.6, 2.9).
@@ -132,8 +134,8 @@ export function userAgentLabel(ua: string | null | undefined): string {
 
 /**
  * `audit_log.event` values: step 3 (auth, invites, members, babies, account), step 4 (uploads,
- * photo moderation, purge, safety) and step 5 (details, milestones, measurements). Step 8
- * appends share-link events.
+ * photo moderation, purge, safety), step 5 (details, milestones, measurements) and step 6 (AI
+ * overrides, AI retry, plan changes, AI budget). Step 8 appends share-link events.
  */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
@@ -167,6 +169,16 @@ export const AUDIT_EVENTS = [
   "measurement.created",
   "measurement.updated",
   "measurement.deleted",
+  /** Metadata `{photo_id, field}`: never the value. */
+  "ai.override_updated",
+  /** Metadata `{photo_id, field}`. */
+  "ai.override_cleared",
+  /** Metadata `{photo_id}`. */
+  "ai.retry_requested",
+  /** `pnpm db:plan` (operator) or billing; metadata `{plan}`. */
+  "baby.plan_changed",
+  /** Once per baby per UTC month; metadata `{month}` (the row's `baby_id` names the baby). */
+  "ai.budget_exceeded",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -200,5 +212,11 @@ export const auditMetadataSchema = z.strictObject({
   measurement_id: z.uuid().optional(),
   /** Measurement kind (`weight`/`height`/`head`), never the value. */
   kind: measurementKindSchema.optional(),
+  /** `baby.plan_changed`: the new plan. */
+  plan: planSchema.optional(),
+  /** `ai.override_*`: which AI field, never its value. */
+  field: aiOverrideFieldSchema.optional(),
+  /** `ai.budget_exceeded`: UTC month `YYYY-MM`. */
+  month: aiUsageMonthSchema.optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

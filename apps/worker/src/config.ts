@@ -1,4 +1,5 @@
 import {
+  aiPipelineEnvSchema,
   databaseEnvSchema,
   encryptionEnvSchema,
   ingestEnvSchema,
@@ -13,7 +14,11 @@ import { z } from "zod";
 // (DATABASE_URL, S3 keys, DATA_ENCRYPTION_KEY). From step 2, DATABASE_URL is the
 // `littlelight_worker` role: pg-boss and the heartbeat use it directly; job queries will run
 // inside `runAsPipeline` (`db.ts`: BEGIN; SET LOCAL ROLE pipeline; ...). Step 4 adds the ingest
-// settings (`INGEST_CONCURRENCY`, disk alert, CSAM matcher; docs/plans/step-4.md 2.6).
+// settings (`INGEST_CONCURRENCY`, disk alert, CSAM matcher; docs/plans/step-4.md 2.6). Step 6
+// adds the AI batch pipeline settings (`aiPipelineEnvSchema`: batch size/age, crons, attempts,
+// budget, queue-age alert; docs/plans/step-6.md 2.7). Provider/model/keys (`aiEnvSchema` from
+// `@littlelight/ai`) are NOT part of this config: `main.ts` reads them through `getAiStatus` /
+// `createVisionDescriber` so a missing key never fails worker boot.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -26,6 +31,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof jwtEnvSchema> &
   z.output<typeof encryptionEnvSchema> &
   z.output<typeof ingestEnvSchema> &
+  z.output<typeof aiPipelineEnvSchema> &
   z.output<typeof logEnvSchema>;
 
 /** Env needed by `healthcheck.ts` only (no S3/JWT/encryption key: it reads the heartbeat row). */
@@ -81,6 +87,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     jwtEnvSchema,
     encryptionEnvSchema,
     ingestEnvSchema,
+    aiPipelineEnvSchema,
     logEnvSchema,
   ]) as WorkerConfig;
 }

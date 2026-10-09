@@ -21,6 +21,16 @@ export const JOBS = {
   uploadsSweep: "uploads.sweep",
   /** Per photo, sent after commit of any edit that changes its search document (`reindexJobSchema`). */
   reindex: "photo.reindex",
+  /**
+   * Cron `AI_FLUSH_INTERVAL_CRON` (default `*\/5 * * * *`), singleton: claims eligible photos of
+   * paid babies into the `building` batch and submits it at `AI_BATCH_MAX_PHOTOS` photos or
+   * `AI_BATCH_FLUSH_MINUTES` age (`aiFlushJobSchema`; docs/plans/step-6.md 2.6).
+   */
+  aiFlush: "ai.flush",
+  /** Cron `AI_POLL_INTERVAL_CRON` (default `*\/5 * * * *`), singleton: polls submitted batches (`aiPollJobSchema`). */
+  aiPoll: "ai.poll",
+  /** On demand: upgrade backfill, prompt/schema version backfill or a manual forced flush (`aiBackfillJobSchema`). */
+  aiBackfill: "ai.backfill",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -50,7 +60,8 @@ export type IngestJob = z.infer<typeof ingestJobSchema>;
 
 /**
  * Why a photo's search document is stale: parent details, a milestone rename/delete, a linked
- * measurement, an AI field override (step 6), or a backfill/reconcile (step 7).
+ * measurement, an AI field override (step 6), a backfill/reconcile (step 7), or a fresh
+ * `photo_ai` row written by the AI poller (step 6).
  */
 export const REINDEX_REASONS = [
   "details",
@@ -58,6 +69,7 @@ export const REINDEX_REASONS = [
   "measurement",
   "ai_override",
   "backfill",
+  "ai",
 ] as const;
 export const reindexReasonSchema = z.enum(REINDEX_REASONS);
 export type ReindexReason = z.infer<typeof reindexReasonSchema>;
@@ -82,3 +94,51 @@ export const reindexJobSchema = z.strictObject({
   reason: reindexReasonSchema,
 });
 export type ReindexJob = z.infer<typeof reindexJobSchema>;
+
+/**
+ * `ai.flush` payload. Cron ticks send no data (handlers parse `job.data ?? {}`); `run-job` may
+ * force an immediate submit, optionally for one baby. Strict: ids and a flag only.
+ */
+export const aiFlushJobSchema = z.strictObject({
+  force: z.boolean().optional(),
+  babyId: z.uuid().optional(),
+});
+export type AiFlushJob = z.infer<typeof aiFlushJobSchema>;
+
+/** `ai.poll` payload: none (cron ticks send no data; handlers parse `job.data ?? {}`). */
+export const aiPollJobSchema = z.strictObject({});
+export type AiPollJob = z.infer<typeof aiPollJobSchema>;
+
+/**
+ * `ai.backfill` reasons: `upgrade` (FR-5.8: one backfill for a baby that just became paid),
+ * `version` (FR-5.7: re-describe rows whose `(prompt_version, schema_version)` differ from the
+ * current ones), `manual` (operator/gate: a forced flush).
+ */
+export const AI_BACKFILL_REASONS = ["upgrade", "version", "manual"] as const;
+export const aiBackfillReasonSchema = z.enum(AI_BACKFILL_REASONS);
+export type AiBackfillReason = z.infer<typeof aiBackfillReasonSchema>;
+
+const versionTagSchema = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(/^[A-Za-z0-9._-]+$/);
+
+/**
+ * `ai.backfill` payload (singleton key `babyId ?? "all"`). `promptVersion`/`schemaVersion`
+ * narrow a `version` backfill to rows with those old versions. An `upgrade` names the baby.
+ * The worker still applies the paid-tier eligibility check per photo; this payload can never
+ * make a free-tier photo eligible.
+ */
+export const aiBackfillJobSchema = z
+  .strictObject({
+    babyId: z.uuid().optional(),
+    reason: aiBackfillReasonSchema,
+    promptVersion: versionTagSchema.optional(),
+    schemaVersion: versionTagSchema.optional(),
+  })
+  .refine((job) => job.reason !== "upgrade" || job.babyId !== undefined, {
+    path: ["babyId"],
+    message: "required for an upgrade backfill",
+  });
+export type AiBackfillJob = z.infer<typeof aiBackfillJobSchema>;

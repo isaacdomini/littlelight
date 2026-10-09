@@ -22,6 +22,7 @@ import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
 import { FEATURES } from "../../lib/features";
 import { cachePhotoImage } from "../../lib/imageCache";
+import { useRetryAi, useUpdateAiOverrides } from "../../lib/queries/ai";
 import { useMilestones } from "../../lib/queries/milestones";
 import {
   fetchOriginalUrl,
@@ -34,6 +35,7 @@ import { useProfileTimeZone } from "../../lib/units";
 import { MeasurementSheet } from "../measurements/MeasurementSheet";
 import { PhotoImage } from "../PhotoImage";
 import { Message } from "../ui";
+import { AiEditForm } from "./AiEditForm";
 import { DetailsForm } from "./DetailsForm";
 import { DetailsPanel } from "./DetailsPanel";
 import { useOptimisticDetails } from "./useOptimisticDetails";
@@ -167,9 +169,13 @@ function ViewerBody({
   const saveDetails = useOptimisticDetails(babyId);
   const remove = useDeletePhoto(babyId);
   const restore = useRestorePhoto(babyId);
+  const updateAi = useUpdateAiOverrides(babyId);
+  const retryAi = useRetryAi(babyId);
 
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [aiEditing, setAiEditing] = useState(false);
+  const [suggested, setSuggested] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [measureOpen, setMeasureOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,10 +205,18 @@ function ViewerBody({
     if (listed && index >= slides.length - 3) onEndReached?.();
   }, [listed, index, slides.length, onEndReached]);
 
-  // Neighbours: prefetch their detail and cache their thumbs for offline viewing.
+  // Reset edit state only when the viewed photo changes, never when `slides` merely changes
+  // identity (e.g. a cache patch of aiStatus/caption), which would close an open form mid-edit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: photoId is the intentional trigger
   useEffect(() => {
     setEditing(false);
+    setAiEditing(false);
+    setSuggested(null);
     setError(null);
+  }, [photoId]);
+
+  // Neighbours: prefetch their detail and cache their thumbs for offline viewing.
+  useEffect(() => {
     for (const n of [slides[index - 1], slides[index + 1]]) {
       if (!n) continue;
       void queryClient.prefetchQuery({ queryKey: photoKey(n.id), staleTime: 45 * 60_000 });
@@ -249,6 +263,7 @@ function ViewerBody({
           testId="viewer-edit"
           onClick={() => {
             setDetailsOpen(true);
+            setSuggested(null);
             setEditing(true);
           }}
         />
@@ -373,11 +388,26 @@ function ViewerBody({
               photo={photo}
               babyId={babyId}
               isAdmin={isAdmin}
-              onCancel={() => setEditing(false)}
+              initialMilestoneId={suggested}
+              onCancel={() => {
+                setEditing(false);
+                setSuggested(null);
+              }}
               onAddMeasurement={() => setMeasureOpen(true)}
               onSubmit={async (patch) => {
                 await saveDetails(photo.id, patch);
                 setEditing(false);
+                setSuggested(null);
+              }}
+            />
+          ) : aiEditing && FEATURES.aiEdits && photo.canEdit && photo.ai.status === "ready" ? (
+            <AiEditForm
+              key={photo.id}
+              photo={photo}
+              onCancel={() => setAiEditing(false)}
+              onSubmit={async (patch) => {
+                await updateAi.mutateAsync({ id: photo.id, ...patch });
+                setAiEditing(false);
               }}
             />
           ) : (
@@ -387,6 +417,14 @@ function ViewerBody({
                 milestones={milestoneList}
                 isAdmin={isAdmin}
                 paid={paid}
+                onEditAi={() => setAiEditing(true)}
+                onRetry={() => retryAi.mutate(photo.id)}
+                retrying={retryAi.isPending}
+                retryError={retryAi.isError}
+                onSuggestMilestone={(id) => {
+                  setSuggested(id);
+                  setEditing(true);
+                }}
               />
               {!photo.canEdit ? (
                 <p className="mt-3 text-sm opacity-70">{t("details.readOnly")}</p>

@@ -21,14 +21,27 @@ import type { ReasoningEffort, VisionProvider } from "./defaults";
 
 /** Token usage and cost as billed by the provider. Recorded per photo and per `ai_batches` row. */
 export interface ModelUsage {
+  /** All prompt tokens, including cached reads and cache writes (normalised across providers). */
   inputTokens: number;
-  /** Prompt-cache hits (system prompt + schema are marked cacheable). */
+  /** Prompt-cache hits (system prompt + schema are marked cacheable). Subset of `inputTokens`. */
   cachedInputTokens: number;
+  /** Prompt tokens written to the cache (billed at the cache-write rate). Subset of `inputTokens`. */
+  cacheWriteTokens?: number;
+  /** All billed output tokens, including reasoning/thinking tokens. */
   outputTokens: number;
+  /** Reasoning tokens (subset of `outputTokens`); should be 0 with effort `none` (cost tripwire). */
+  reasoningTokens?: number;
   /** Billed image tokens when the provider reports them separately (bake-off metric). */
   imageTokens?: number;
-  /** Computed from the provider's price table, batch discount applied where relevant. */
+  /** Computed from the pinned price table (`pricing.ts`), batch discount applied where relevant. */
   costUsd: number;
+}
+
+/** Minimal pino-compatible logger. Adapters log ids, counts, statuses, durations and codes only. */
+export interface AiLogger {
+  debug?(obj: Record<string, unknown>, msg: string): void;
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -82,7 +95,11 @@ export interface VisionRequest {
   schemaVersion: string;
 }
 
-/** Opaque reference to a submitted provider batch; persisted on `ai_batches`. */
+/**
+ * Reference to a submitted provider batch; every field is persisted on `ai_batches`
+ * (`provider`, `provider_batch_id`, `model`, `submitted_at`, `photo_count`,
+ * `provider_input_file_id`, `prompt_version`, `schema_version`) so the poller can rebuild it.
+ */
 export interface VisionBatchHandle {
   provider: VisionProvider;
   /** Provider-side batch id. */
@@ -91,6 +108,10 @@ export interface VisionBatchHandle {
   /** ISO 8601. */
   submittedAt: string;
   requestCount: number;
+  /** OpenAI: the uploaded JSONL input file (deleted by `deleteBatchArtifacts`). */
+  inputFileId?: string;
+  promptVersion: string;
+  schemaVersion: string;
 }
 
 export type VisionFailureKind =
@@ -118,9 +139,15 @@ export type VisionResult =
       photoId: string;
       ok: false;
       failure: VisionFailureKind;
-      /** Provider error code/message. Must not contain prompt text or parent notes. */
+      /**
+       * Short code only (`refusal`, `max_output_tokens`, `content_filter`, `json_parse`,
+       * `batch_expired`, `rate_limit_exceeded`, ...). Never message text, prompts or notes.
+       */
       detail: string;
+      /** Present when the provider billed the attempt (refusals, truncated output). */
       usage?: ModelUsage;
+      /** Adapters never return the text of an invalid or refused output. */
+      attemptedRaw?: never;
     };
 
 export type VisionBatchState =
@@ -130,25 +157,56 @@ export type VisionBatchState =
   | "completed"
   | "failed"
   | "expired"
+  | "cancelling"
   | "cancelled";
 
 export interface VisionBatchStatus {
   handle: VisionBatchHandle;
+  /** Terminal states: `completed`, `failed`, `expired`, `cancelled` (`isTerminalBatchState`). */
   state: VisionBatchState;
-  /** Present once results are available (completed, or partial results on expired/cancelled). */
+  /** Raw provider status string (`in_progress`, `ended`, ...) for logs; never a message. */
+  providerStatus: string;
+  /**
+   * Present once the batch is terminal. Photos of the batch that have no entry here got no
+   * result: on `expired`/`cancelled` treat them as `expired`, on `failed` as `provider_error`.
+   */
   results?: VisionResult[];
-  /** Aggregate usage for the whole batch, written to `ai_batches`. */
+  /** Aggregate usage over `results`, written to `ai_batches`. */
   usage?: ModelUsage;
+  /** OpenAI: output/error JSONL files (persist them; `deleteBatchArtifacts` removes them). */
+  outputFileId?: string;
+  errorFileId?: string;
+  requestCounts?: { total: number; completed: number; failed: number };
+  /** ISO 8601, when the provider expires the batch (24 h after creation). */
+  expiresAt?: string;
+  /** `failed` batches: the provider's validation error code (e.g. `invalid_json_line`). */
+  failureCode?: string;
 }
 
 export interface VisionDescriber {
   readonly provider: VisionProvider;
   readonly model: string;
-  /** Describe stage: submit one Batch API job (PRD FR-5.2). The default path. */
+  /**
+   * Describe stage: submit one Batch API job (PRD FR-5.2). The default path. Throws
+   * `AiRequestError` before any network call when a request is not paid, an image is not a
+   * valid analysis copy, a context is invalid, or the batch exceeds the byte cap.
+   */
   describeBatch(requests: VisionRequest[]): Promise<VisionBatchHandle>;
-  /** Poller (every 5 min): current batch state, plus results once finished. */
+  /** Poller (every 5 min): current batch state, plus results once terminal. Idempotent. */
   pollBatch(handle: VisionBatchHandle): Promise<VisionBatchStatus>;
-  /** Priority path only (PRD FR-5.5): real-time call for milestone/actively-waiting uploads. */
+  /**
+   * Delete everything the provider keeps for a terminal batch (PRD "Privacy and child safety":
+   * batch input files are deleted after results are retrieved). OpenAI: input, output and error
+   * files; Anthropic: the batch; fake: records the call. Already-gone artifacts count as deleted.
+   * `status` supplies the output/error file ids; without them the batch is retrieved first.
+   */
+  deleteBatchArtifacts(
+    handle: VisionBatchHandle,
+    status?: Pick<VisionBatchStatus, "outputFileId" | "errorFileId">,
+  ): Promise<{ deleted: string[] }>;
+  /** Cancel a non-terminal batch (operator use; never called automatically). */
+  cancelBatch(handle: VisionBatchHandle): Promise<void>;
+  /** Priority path only (PRD FR-5.5): real-time call; implemented, not wired in step 6 (D8). */
   describeOne(request: VisionRequest): Promise<VisionResult>;
 }
 

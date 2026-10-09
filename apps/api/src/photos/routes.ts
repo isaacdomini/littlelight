@@ -26,6 +26,7 @@ import { photoMeasurements } from "../measurements/queries";
 import { enqueueReindexAll } from "../plugins/jobs";
 import { objectExists } from "../storage/multipart";
 import type { UrlSigner } from "../storage/sign";
+import { loadPhotoAi } from "./ai-queries";
 import {
   assertMilestoneUsable,
   babyAccess,
@@ -68,9 +69,11 @@ import {
 // people, notes and location labels are never logged or audited (audit rows carry ids/counts).
 // `photo.reindex` is sent after commit, outside `runAs`, through `app.jobs`.
 
-const photoNotFound = () => notFound("That photo doesn't exist or you don't have access to it");
-const babyNotFound = () => notFound("That album doesn't exist or you don't have access to it");
-const adminOnly = () => forbidden("Only an admin of this album can do that");
+export const photoNotFound = () =>
+  notFound("That photo doesn't exist or you don't have access to it");
+export const babyNotFound = () =>
+  notFound("That album doesn't exist or you don't have access to it");
+export const adminOnly = () => forbidden("Only an admin of this album can do that");
 
 /** Explain a guarded UPDATE that matched no row. */
 async function explainNoRow(
@@ -94,27 +97,34 @@ const RETURNING_SUMMARY = `
             ${PHOTO_SUMMARY_EXTRA_COLUMNS}`;
 
 /** Everything `GET /photos/:id` returns, read in one claims transaction (signing happens after). */
-interface LoadedPhoto {
+export interface LoadedPhoto {
   photo: NonNullable<Awaited<ReturnType<typeof photoWithRole>>>;
   exif: Photo["exif"];
   details: Photo["details"];
   measurements: Photo["measurements"];
   canEdit: boolean;
+  ai: Photo["ai"];
 }
 
 /** Load a photo the caller may see, or throw 404. */
-async function loadPhoto(client: Tx, uid: string, id: string): Promise<LoadedPhoto> {
+export async function loadPhoto(client: Tx, uid: string, id: string): Promise<LoadedPhoto> {
   const photo = await photoWithRole(client, uid, id);
   if (!visibleToCaller(photo)) throw photoNotFound();
   const exif = await photoExif(client, id);
   const details = await photoDetails(client, id);
   const measurements = await photoMeasurements(client, id);
   const canEdit = await photoEditable(client, id);
-  return { photo, exif, details, measurements, canEdit };
+  // Step 6: status, override-merged description, raw output for admins only (plan 2.8).
+  const ai = await loadPhotoAi(client, {
+    photoId: id,
+    aiStatus: photo.ai_status,
+    isAdmin: photo.role === "admin",
+  });
+  return { photo, exif, details, measurements, canEdit, ai };
 }
 
 /** `photoSchema` body: sign thumb + display after the transaction. */
-async function toPhotoResponse(signer: UrlSigner, loaded: LoadedPhoto): Promise<Photo> {
+export async function toPhotoResponse(signer: UrlSigner, loaded: LoadedPhoto): Promise<Photo> {
   const { photo } = loaded;
   const [summary, display] = await Promise.all([
     toPhotoSummary(signer, photo),
@@ -129,11 +139,15 @@ async function toPhotoResponse(signer: UrlSigner, loaded: LoadedPhoto): Promise<
     details: loaded.details,
     measurements: loaded.measurements,
     canEdit: loaded.canEdit,
+    ai: loaded.ai,
   };
 }
 
 /** 403 for a visible photo whose details the caller may not edit (RLS refused the write). */
-function detailsForbidden(photo: { role: string | null; deleted_at: Date | null }): ApiError {
+export function detailsForbidden(photo: {
+  role: string | null;
+  deleted_at: Date | null;
+}): ApiError {
   if (photo.role === "admin") {
     return forbidden(
       photo.deleted_at

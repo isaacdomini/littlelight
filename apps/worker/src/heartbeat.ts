@@ -10,6 +10,9 @@ import { errorCategory } from "./clients";
 // - `updated_at` advances on EVERY successful write, storage up or down. Pruning keys off it, so
 //   a live worker whose storage is down (last_seen_at stale or epoch) is never pruned by a peer.
 // Runs directly as `littlelight_worker` (direct grant + policy on this table; no SET ROLE).
+// Step 6 (docs/plans/step-6.md 2.6, 2.7): `details.aiQueueAgeMin` from an optional sampler
+// (`createAiQueueAgeSampler`, at most one query per minute) that also raises the PRD's
+// "queue age > 2 h" alert as a `warn` once, and an `info` when it clears.
 
 /** Unique per container (`--scale worker=3` gives each replica its own hostname). */
 export function workerId(): string {
@@ -39,6 +42,12 @@ export interface HeartbeatDeps {
    * disabled or failed. Reported as `details.diskUsedPct`.
    */
   diskUsedPct?: () => Promise<number | undefined>;
+  /**
+   * Age in minutes of the AI queue (oldest eligible-but-unclaimed photo or oldest open batch,
+   * whichever is older; 0 when empty); undefined = AI disabled or the sample failed. Reported as
+   * `details.aiQueueAgeMin` (docs/plans/step-6.md 2.7).
+   */
+  aiQueueAge?: () => Promise<number | undefined>;
 }
 
 export interface HeartbeatResult {
@@ -47,6 +56,7 @@ export interface HeartbeatResult {
   storageError?: string;
   storageLatencyMs: number;
   diskUsedPct?: number;
+  aiQueueAgeMin?: number;
 }
 
 /** Storage reachable: refresh `last_seen_at`. */
@@ -120,10 +130,15 @@ export async function beatOnce(deps: HeartbeatDeps): Promise<HeartbeatResult> {
     ? await deps.diskUsedPct().catch(() => undefined)
     : undefined;
   if (diskUsedPct !== undefined) result.diskUsedPct = diskUsedPct;
+  const aiQueueAgeMin = deps.aiQueueAge
+    ? await deps.aiQueueAge().catch(() => undefined)
+    : undefined;
+  if (aiQueueAgeMin !== undefined) result.aiQueueAgeMin = aiQueueAgeMin;
   const details = {
     storageLatencyMs: result.storageLatencyMs,
     ...(result.storageOk ? {} : { storageError: result.storageError }),
     ...(diskUsedPct !== undefined ? { diskUsedPct } : {}),
+    ...(aiQueueAgeMin !== undefined ? { aiQueueAgeMin } : {}),
   };
   await deps.db.query(result.storageOk ? UPSERT_OK_SQL : UPSERT_STORAGE_DOWN_SQL, [
     deps.workerId,
@@ -183,5 +198,73 @@ export function startHeartbeat(
       clearTimeout(timer);
       await inFlight;
     },
+  };
+}
+
+/** `createAiPipeline(...).queueAge()` (docs/plans/step-6.md 2.6). */
+export type AiQueueAgeSource = () => Promise<{
+  oldestEligibleMinutes: number | null;
+  oldestOpenBatchMinutes: number | null;
+}>;
+
+export interface AiQueueAgeSamplerOptions {
+  queueAge: AiQueueAgeSource;
+  /** `AI_QUEUE_AGE_ALERT_MINUTES` (PRD: alert when queue age > 2 h). */
+  alertMinutes: number;
+  log: Pick<HeartbeatLogger, "warn" | "info" | "debug">;
+  /** Minimum time between two queries; the cached value is returned in between. */
+  minIntervalMs?: number;
+  now?: () => number;
+}
+
+/**
+ * Heartbeat dep for `details.aiQueueAgeMin`: samples `queueAge()` at most once per
+ * `minIntervalMs` (default 60 s; the heartbeat beats every 10 s), reports the older of the two
+ * ages rounded to whole minutes (0 when nothing is waiting), and logs `warn` once when it passes
+ * `alertMinutes` and `info` once when it is back under. Logs ages and the threshold only. A failed
+ * sample resolves undefined (logged at debug) until the next sample a minute later.
+ */
+export function createAiQueueAgeSampler(
+  opts: AiQueueAgeSamplerOptions,
+): () => Promise<number | undefined> {
+  const minIntervalMs = opts.minIntervalMs ?? 60_000;
+  const now = opts.now ?? Date.now;
+  let sampledAt = Number.NEGATIVE_INFINITY;
+  let cached: number | undefined;
+  let alerting = false;
+
+  return async () => {
+    if (now() - sampledAt < minIntervalMs) return cached;
+    sampledAt = now();
+    try {
+      const age = await opts.queueAge();
+      const ages = [age.oldestEligibleMinutes, age.oldestOpenBatchMinutes].filter(
+        (m): m is number => typeof m === "number" && Number.isFinite(m),
+      );
+      cached = Math.max(0, Math.round(Math.max(0, ...ages)));
+      const over = cached > opts.alertMinutes;
+      if (over && !alerting) {
+        opts.log.warn(
+          {
+            aiQueueAgeMin: cached,
+            oldestEligibleMinutes: age.oldestEligibleMinutes,
+            oldestOpenBatchMinutes: age.oldestOpenBatchMinutes,
+            alertMinutes: opts.alertMinutes,
+          },
+          "ai: queue age over threshold",
+        );
+      } else if (!over && alerting) {
+        opts.log.info(
+          { aiQueueAgeMin: cached, alertMinutes: opts.alertMinutes },
+          "ai: queue age back under threshold",
+        );
+      }
+      alerting = over;
+      return cached;
+    } catch (err) {
+      opts.log.debug({ db: errorCategory(err) }, "ai: queue age sample failed");
+      cached = undefined;
+      return undefined;
+    }
   };
 }

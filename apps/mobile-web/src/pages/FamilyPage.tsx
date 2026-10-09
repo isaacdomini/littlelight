@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { ME_KEY, useAuth, useCurrentBaby } from "../auth/AuthProvider";
 import { useFreshSignIn } from "../auth/FreshSignInGate";
+import { AiUsage } from "../components/AiUsage";
 import { AppHeader } from "../components/AppHeader";
 import { Button, Card, Message, TextField } from "../components/ui";
 import { t } from "../i18n";
@@ -287,6 +288,7 @@ export function FamilyPage() {
               ) : null}
             </section>
           ) : null}
+          {isAdmin && baby ? <AiUsage babyId={baby.id} paid={baby.plan !== "free"} /> : null}
         </div>
       </IonContent>
     </IonPage>

@@ -1,12 +1,22 @@
-import { ingestJobSchema, JOBS, type JobName, reindexJobSchema } from "@littlelight/shared";
+import {
+  aiBackfillJobSchema,
+  aiFlushJobSchema,
+  aiPollJobSchema,
+  ingestJobSchema,
+  JOBS,
+  type JobName,
+  reindexJobSchema,
+} from "@littlelight/shared";
 import { PgBoss } from "pg-boss";
+import { createAiPipeline } from "./ai";
+import { aiPipelineConfig, createAiRuntime } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig } from "./config";
 import { ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
 import { purgeTrash } from "./purge";
-import { sendIngest, sendReindex } from "./queues";
+import { sendAiBackfill, sendAiFlush, sendIngest, sendReindex } from "./queues";
 import { reconcileIngest } from "./reconcile";
 import { handleReindexJob } from "./reindex";
 import { createStorage } from "./storage";
@@ -19,7 +29,16 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job ingest.reconcile
 //   pnpm --filter @littlelight/worker run-job photo.ingest '{"photoId":"…","babyId":"…"}'
 //   pnpm --filter @littlelight/worker run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"details"}'
+//   pnpm --filter @littlelight/worker run-job ai.flush ['{"force":true,"babyId":"…"}']
+//   pnpm --filter @littlelight/worker run-job ai.poll
+//   pnpm --filter @littlelight/worker run-job ai.backfill '{"babyId":"…","reason":"upgrade"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
+//   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
+//
+// The AI jobs run in-process with this process's AI env (`VISION_PROVIDER`, keys): without a
+// provider, flush/poll print `{skipped: true}`. Run them inside the worker container
+// (`docker compose exec -T worker pnpm --silent --filter @littlelight/worker run-job ai.poll`) to
+// share its env, e.g. the fake provider's `FAKE_VISION_DIR` state across processes.
 //
 // In the production image: `node apps/worker/dist/run-job.js <job> [json]`. Uses the worker's
 // own env (same roles and keys as the running worker). Prints the handler's result (counts and
@@ -87,12 +106,25 @@ async function main(argv: string[]): Promise<number> {
     let result: unknown;
     if (enqueue) {
       const b = await getBoss();
-      result =
-        name === JOBS.ingest
-          ? { jobId: await sendIngest(b, ingestJobSchema.parse(payload)) }
-          : name === JOBS.reindex
-            ? { jobId: await sendReindex(b, reindexJobSchema.parse(payload)) }
-            : { jobId: await b.send(name, {}) };
+      switch (name) {
+        case JOBS.ingest:
+          result = { jobId: await sendIngest(b, ingestJobSchema.parse(payload)) };
+          break;
+        case JOBS.reindex:
+          result = { jobId: await sendReindex(b, reindexJobSchema.parse(payload)) };
+          break;
+        case JOBS.aiFlush:
+          result = { jobId: await sendAiFlush(b, aiFlushJobSchema.parse(payload)) };
+          break;
+        case JOBS.aiBackfill:
+          result = { jobId: await sendAiBackfill(b, aiBackfillJobSchema.parse(payload)) };
+          break;
+        case JOBS.aiPoll:
+          result = { jobId: await b.send(name, aiPollJobSchema.parse(payload)) };
+          break;
+        default:
+          result = { jobId: await b.send(name, {}) };
+      }
     } else {
       switch (name) {
         case JOBS.purgeTrash:
@@ -119,6 +151,31 @@ async function main(argv: string[]): Promise<number> {
           // Strict parse first so a bad payload is a usage error (exit 1), not a silent drop.
           const job = reindexJobSchema.parse(payload);
           result = await handleReindexJob({ log }, { id: "run-job", data: job });
+          break;
+        }
+        case JOBS.aiFlush:
+        case JOBS.aiPoll:
+        case JOBS.aiBackfill: {
+          // Strict parse first: a bad payload is an error (exit 1), not a silent drop.
+          const flushJob = name === JOBS.aiFlush ? aiFlushJobSchema.parse(payload) : undefined;
+          const backfillJob =
+            name === JOBS.aiBackfill ? aiBackfillJobSchema.parse(payload) : undefined;
+          if (name === JOBS.aiPoll) aiPollJobSchema.parse(payload);
+          const ai = createAiRuntime(process.env, log);
+          const pipeline = createAiPipeline({
+            pool,
+            storage,
+            describer: ai.describer,
+            ...(ai.disabledReason ? { disabledReason: ai.disabledReason } : {}),
+            config: aiPipelineConfig(config, process.env),
+            sendReindex: async (job) => sendReindex(await getBoss(), job),
+            log,
+          });
+          result = flushJob
+            ? await pipeline.flush(flushJob)
+            : backfillJob
+              ? await pipeline.backfill(backfillJob)
+              : await pipeline.poll();
           break;
         }
       }

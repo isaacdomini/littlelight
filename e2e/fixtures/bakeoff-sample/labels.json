@@ -1,0 +1,15 @@
+{
+  "sample-1-gradient.jpg": {
+    "sensitive": [],
+    "context": {
+      "babyAgeDays": 120,
+      "takenAt": "2026-06-14",
+      "placeLabel": "Riverside Park",
+      "people": [],
+      "milestone": null,
+      "parentNotes": null
+    }
+  },
+  "sample-2-blocks.jpg": { "sensitive": ["bath"], "milestone": "sitting up" },
+  "sample-3-stripes.jpg": { "sensitive": [] }
+}

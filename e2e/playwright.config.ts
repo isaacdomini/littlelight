@@ -5,6 +5,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
+  // The perf spec needs the 10,000-photo perf baby and has its own config (playwright.perf.config.ts).
+  testIgnore: "**/perf/**",
   outputDir: "./test-results",
   reporter: process.env.CI
     ? [["list"], ["html", { outputFolder: "./report", open: "never" }]]

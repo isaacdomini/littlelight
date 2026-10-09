@@ -291,3 +291,57 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Still open from earlier steps: production credentials (tunnel config, SMTP, B2, storage keys),
     Apple/Google IDs, Turnstile, legal text, CSAM provider.
 - **Commit**: step 5: timeline and viewer
+
+## Step 6: AI batch pipeline
+
+- **Built**: Shared `aiDescriptionV1Schema` (zod) + strict JSON Schema for structured output, prompt/schema
+  versions v1, AI job payloads (`ai.flush`, `ai.poll`, `ai.backfill`), `applyAiOverrides`, coordinate
+  tripwire for model context. `packages/ai`: OpenAI Batch adapter (plain fetch: Files upload, batch
+  create/poll/stream, `/v1/responses` with `reasoning.effort: "none"`, strict `text.format`, base64 768 px
+  analysis copy, `store:false`, `prompt_cache_key`; deletes input/output/error files), Anthropic Message
+  Batches adapter for `claude-haiku-5-5`, deterministic `fake` provider (refused in production), pinned
+  price table + cost math, prompt v1, validation, mock HTTP servers, embedder (no caller yet), bake-off
+  skeleton. Every adapter refuses non-paid requests, >768 px / >400 KB images and coordinate-like
+  context before any network call. Migration 13: `ai_batch_items` ledger (RLS), `ai_batches` provider
+  file/version columns, `photos.ai_retry_requested_at`, `ai_eligible_photos()`, `ai_baby_month_cost_usd()`,
+  `record_ai_budget_exceeded()` (insert-if-absent), insert-time guard so items exist only for paid,
+  approved, live photos, override shape trigger. `pnpm db:plan <babyId> plus|free` (superuser,
+  audited) until billing exists. Worker: flush (claim → budget $3/baby/month, alert 80 % → re-check →
+  submit), poll (validate → `photo_ai` → sensitive triggers → cost → delete provider files →
+  `photo.reindex`), retry once then failed (AI failure never sets `photos.status='failed'`), upgrade and
+  version backfill, AI queue-age heartbeat alert (> 2 h). API: `ai` block on photo detail (raw admin-only),
+  `aiStatus` on lists, override PATCH/clear, retry, monthly usage. Web: analyzing/pending/failed states,
+  AI panel with tags + milestone suggestions ("Tag it?" pre-fills, nothing auto-saved), sensitive badge,
+  admin override form, usage line, Plus upsell. Provider keys reach the worker only.
+  Tests: 1,214 unit, 796 integration (db 416, api 319, worker 61), 26 Playwright e2e,
+  `pnpm e2e:ai-gate` (fake + real modes); CI runs the fake AI gate and an AI hygiene step.
+- **Gate**: orchestrator ran lint, typecheck (incl. e2e), AI hygiene greps, unit (1,214), integration
+  (796, none skipped) on fresh pgvector + MinIO; from a clean copy: smoke passed, `pnpm e2e` 26/26, upload
+  gate passed, AI gate (fake) PASSED: 50/50 ready, 50/50 schema-valid in API and DB, 1 completed batch,
+  `cost_usd` $0.006925 = items sum, provider files deleted, 50 reindex jobs, free baby 0 items / 0 photo_ai,
+  request dump 50 paid ids / 0 free ids / 0 GPS, no log leaks. Perf spec: phone passed every run; desktop
+  passed 2 of 3 runs (one at 5.25 % jank / p95 33.3 ms, one API p95 305 ms under load).
+- **Decisions**:
+  - **User decision (2026-10-08):** skip the real-key gate run; the fake-provider gate counts for step 6
+    and real-model validation happens in the pre-launch bake-off. No `.env.local` key exists.
+  - No provider SDKs (plain fetch with configurable base URLs). AI failures never mark photos failed.
+    FR-5.5 real-time priority path deferred (`describeOne` exists, not wired). Near-duplicates are
+    described; no local screenshot heuristic yet. Budget hard stop $3/baby/month, alert at 80 %.
+  - Budget-exceeded audit is written once per baby/month via a DB helper (pipeline has no audit SELECT).
+  - Forced flush never re-claims a photo it released in the same call (byte-cap deferrals excepted);
+    one artifact-delete attempt per poll; unsupported prompt version disables flush without spending
+    attempts.
+  - Viewer edit forms reset only when the photo id changes (fixed forms closing on background refresh).
+- **Open issues**:
+  - Real-model quality unmeasured (fake provider only): GPT-6 Luna wire details flagged unverified in the
+    plan (`store:false` in Batch, usage field names, image-token reporting, cache minimum) surface as a
+    failed batch with the provider's code on first real use.
+  - Desktop perf margin is thin (jank 3.4–5.3 %, occasional p95 33 ms); API p95 load-sensitive.
+  - For the final review: API's AI "failed" threshold uses the constant 2 while the worker reads
+    `AI_MAX_ATTEMPTS`; screenshots aren't skipped before batching (PRD cost control); seeded demo photos
+    have no analysis copies (never described); `ai.backfill {reason:'version'}` can't narrow to a source
+    version.
+  - Step 7: chat/search run in the API, so `OPENAI_API_KEY` must be re-added to the api service then.
+  - Still open: production credentials, Apple/Google IDs, Turnstile, legal text, CSAM provider; ~1.1 GB
+    unused Docker volumes (`docker volume prune -f` with the user's OK).
+- **Commit**: step 6: AI batch pipeline

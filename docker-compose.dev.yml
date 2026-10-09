@@ -45,6 +45,10 @@
 #   GOTRUE_EXTERNAL_GOOGLE_ENABLED=true GOOGLE_CLIENT_ID=<web client id> \
 #   GOOGLE_CLIENT_SECRET=<secret> docker compose -f docker-compose.dev.yml up
 # (register http://localhost:${WEB_PORT:-8080}/auth/callback as the client's redirect URI).
+# AI (docs/plans/step-6.md 2.10): paid tier only. Put OPENAI_API_KEY (and optionally
+# ANTHROPIC_API_KEY) in the git-ignored .env.local; only the worker receives them (blanked on
+# migrate, api and web). No key => the worker logs "AI disabled: OPENAI_API_KEY not set" and
+# stays healthy. Keyless full pipeline: VISION_PROVIDER=fake, see the worker service.
 name: littlelight-dev
 
 x-dev: &dev
@@ -120,6 +124,14 @@ x-dev-app-env: &dev-app-env
   S3_PUBLIC_ENDPOINT: *dev-s3-public-endpoint
   DATA_ENCRYPTION_KEY: *dev-data-encryption-key
 
+# AI provider keys (docs/plans/step-6.md 2.1, 2.10): only the worker may hold them. .env.local is
+# an env_file of migrate, api, worker and web, so a key put there would reach all four; these
+# blanks (`environment:` beats env_file) strip it from every service except the worker. The apps
+# treat "" as unset.
+x-dev-no-ai-keys: &dev-no-ai-keys
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+
 services:
   db:
     image: pgvector/pgvector:0.8.7-pg17
@@ -157,11 +169,13 @@ services:
   # One-shot: app migrations + idempotent demo-family seed. Runs after GoTrue is healthy, i.e.
   # after GoTrue's own migrations created auth.users (the app tables reference it).
   # Set SEED_DEMO_FAMILY=false in .env.local to skip the seed.
+  # Operator tools run in this image too, e.g. the paid-tier switch (docs/plans/step-6.md D7):
+  #   docker compose -f docker-compose.dev.yml run --rm migrate pnpm db:plan <babyId> plus|free
   migrate:
     <<: [*dev, *dev-db-tools]
     command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
     environment:
-      <<: *dev-bootstrap-env
+      <<: [*dev-bootstrap-env, *dev-no-ai-keys]
       DATA_ENCRYPTION_KEY: *dev-data-encryption-key
     volumes:
       - ./packages/db/src:/repo/packages/db/src:ro
@@ -340,7 +354,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/api", "dev"]
     init: true
     environment:
-      <<: *dev-app-env
+      <<: [*dev-app-env, *dev-no-ai-keys]
       DATABASE_URL: *dev-api-db-url
       # Bucket-scoped MinIO user (no delete, no versions, no admin); see storage-init.
       S3_ACCESS_KEY: *dev-s3-api-access-key
@@ -407,6 +421,21 @@ services:
       # tsx, so only the imported source graph is polled. Override from the shell if needed.
       CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-1}
       CHOKIDAR_INTERVAL: ${CHOKIDAR_INTERVAL:-500}
+      # AI batch pipeline (docs/plans/step-6.md 2.10, D6). The worker is the only service that
+      # gets OPENAI_API_KEY / ANTHROPIC_API_KEY (from .env.local; without one AI is skipped with a
+      # log line and nothing fails). The other AI_* settings come from .env.dev / .env.local.
+      # These two are Compose INTERPOLATION variables (like INGEST_CONCURRENCY): export them in
+      # the shell or put them in the git-ignored project `.env`; .env.local cannot change them,
+      # because `environment:` beats env_file even when the value is empty. Keyless full run
+      # (fake provider, flush on every 5-minute tick), restarting only the worker:
+      #   VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0 \
+      #     docker compose -f docker-compose.dev.yml up -d --no-deps worker
+      # A plain `up` afterwards puts the worker back on openai / 30 minutes.
+      VISION_PROVIDER: ${VISION_PROVIDER:-openai}
+      AI_BATCH_FLUSH_MINUTES: ${AI_BATCH_FLUSH_MINUTES:-30}
+      # Fake provider only: request lines minus image bytes (photo ids, context field lengths),
+      # read by `pnpm e2e:ai-gate --provider fake` via `docker compose exec worker cat`.
+      FAKE_VISION_DIR: /tmp/littlelight-fake-vision
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -442,6 +471,7 @@ services:
       target: dev
     command: ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
     init: true
+    environment: *dev-no-ai-keys
     volumes:
       - ./apps/mobile-web/src:/repo/apps/mobile-web/src
       - ./packages/shared/src:/repo/packages/shared/src

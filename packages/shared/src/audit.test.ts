@@ -50,3 +50,35 @@ describe("audit metadata (strict allow-list)", () => {
     expect(auditMetadataSchema.safeParse(md).success).toBe(false);
   });
 });
+
+describe("audit additions (step 6)", () => {
+  it("lists the AI events", () => {
+    for (const e of [
+      "ai.override_updated",
+      "ai.override_cleared",
+      "ai.retry_requested",
+      "baby.plan_changed",
+      "ai.budget_exceeded",
+    ]) {
+      expect(auditEventSchema.safeParse(e).success, e).toBe(true);
+    }
+  });
+
+  it("metadata accepts field, plan and month but never a value", () => {
+    expect(auditMetadataSchema.parse({ photo_id: UUID, field: "caption" })).toEqual({
+      photo_id: UUID,
+      field: "caption",
+    });
+    expect(auditMetadataSchema.parse({ plan: "plus" })).toEqual({ plan: "plus" });
+    expect(auditMetadataSchema.parse({ month: "2026-10" })).toEqual({ month: "2026-10" });
+  });
+
+  it.each([
+    ["an unknown field", { field: "objects" }],
+    ["a value", { field: "caption", value: "Mia's first bath" }],
+    ["an unknown plan", { plan: "gold" }],
+    ["a bad month", { month: "2026-13" }],
+  ])("rejects %s", (_n, md) => {
+    expect(auditMetadataSchema.safeParse(md).success).toBe(false);
+  });
+});

@@ -1,9 +1,14 @@
 import {
+  AI_PIPELINE_DEFAULTS,
+  AI_PROMPT_VERSION,
+  AI_SCHEMA_VERSION,
   ageGroupSortValue,
+  aiStatusSchema,
   type BabyRole,
   type DerivativeKind,
   derivativeKey,
   PHOTO_DETAILS_LIMITS,
+  type PhotoAiStatus,
   type PhotoApproval,
   type PhotoDetails,
   type PhotoDetailsPatch,
@@ -35,9 +40,64 @@ import type { UrlSigner } from "../storage/sign";
 // are correlated subqueries evaluated only for returned rows, so the timeline's keyset scan on
 // `photos_baby_id_sort_idx` is unaffected. This is a read path only: no model, no AI write.
 
+// ---- AI status (docs/plans/step-6.md 2.4, 2.8) ------------------------------------------------
+
 /**
- * `milestone_id` and `caption` of photo `p` (correlated subqueries). Usable in a SELECT list and
- * in `UPDATE … RETURNING`. Non-string JSON in an override or AI caption reads as NULL.
+ * Failed attempts (current prompt/schema versions, since the last admin retry request) after
+ * which a photo's `aiStatus` is `failed`. Mirrors the worker's `AI_MAX_ATTEMPTS` default (plan
+ * 2.8: "constant 2 mirrored from shared"); the API does not read the env var.
+ */
+export const AI_STATUS_MAX_ATTEMPTS: number = AI_PIPELINE_DEFAULTS.AI_MAX_ATTEMPTS;
+
+/** A version tag as a SQL literal. Only our own constants reach this; anything else throws. */
+function versionLiteral(v: string): string {
+  if (!/^[A-Za-z0-9._-]{1,32}$/.test(v)) throw new Error("invalid AI version tag");
+  return `'${v}'`;
+}
+
+/**
+ * Derived AI state of photo `p` (alias `p`), the single SQL definition behind `aiStatus` in every
+ * summary, `ai.status` of `GET /photos/:id`, the retry guard and the usage counts. Evaluated under
+ * the caller's claims, so `photo_ai`, `photo_derivatives` and `ai_batch_items` are RLS-filtered
+ * exactly like the photo (`photo_visible`). Order matters:
+ * 1. `not_available`: the baby has no AI entitlement (`baby_ai_enabled`, free tier / expired).
+ * 2. `ready`: a `photo_ai` row exists (also during a version backfill: the old row still shows).
+ * 3. `queued` / `analyzing`: from `photos.status` (claimed / submitted by the worker).
+ * 4. `not_available`: no `analysis` derivative (ingest not finished): never sent to a model.
+ * 5. `failed`: >= `AI_STATUS_MAX_ATTEMPTS` failed items for the current versions created after
+ *    `ai_retry_requested_at`; only counted while `photos.status = 'ingested'`.
+ * 6. `pending`: everything else (eligible, or waiting for approval).
+ * Every branch is a primary-key / `(photo_id, …)` index probe evaluated only for returned rows,
+ * so the timeline's keyset scan on `photos_baby_id_sort_idx` is unaffected.
+ */
+export const AI_STATUS_SQL = `
+  CASE
+    WHEN NOT public.baby_ai_enabled(p.baby_id) THEN 'not_available'
+    WHEN EXISTS (SELECT 1 FROM public.photo_ai a WHERE a.photo_id = p.id) THEN 'ready'
+    WHEN p.status = 'queued' THEN 'queued'
+    WHEN p.status = 'analyzing' THEN 'analyzing'
+    WHEN NOT EXISTS (SELECT 1 FROM public.photo_derivatives an
+                      WHERE an.photo_id = p.id AND an.kind = 'analysis') THEN 'not_available'
+    WHEN p.status = 'ingested' AND (
+      SELECT count(*) FROM public.ai_batch_items fi
+       WHERE fi.photo_id = p.id AND fi.state = 'failed'
+         AND fi.prompt_version = ${versionLiteral(AI_PROMPT_VERSION)}
+         AND fi.schema_version = ${versionLiteral(AI_SCHEMA_VERSION)}
+         AND fi.created_at > COALESCE(p.ai_retry_requested_at, '-infinity'::timestamptz)
+    ) >= ${Number(AI_STATUS_MAX_ATTEMPTS)} THEN 'failed'
+    ELSE 'pending'
+  END`;
+
+/** `ai_status` text from SQL → `PhotoAiStatus` (anything unexpected reads as `not_available`). */
+export function toAiStatus(v: unknown): PhotoAiStatus {
+  const parsed = aiStatusSchema.safeParse(v);
+  return parsed.success ? parsed.data : "not_available";
+}
+
+/**
+ * `milestone_id`, `caption` and `ai_status` of photo `p` (correlated subqueries). Usable in a
+ * SELECT list and in `UPDATE … RETURNING`. Non-string JSON in an override or AI caption reads as
+ * NULL.
  */
 export const PHOTO_SUMMARY_EXTRA_COLUMNS = `
   (SELECT pd.milestone_id FROM public.photo_details pd WHERE pd.photo_id = p.id) AS milestone_id,
@@ -48,7 +108,8 @@ export const PHOTO_SUMMARY_EXTRA_COLUMNS = `
     (SELECT CASE WHEN jsonb_typeof(ai.description -> 'caption') = 'string'
                  THEN ai.description ->> 'caption' END
        FROM public.photo_ai ai WHERE ai.photo_id = p.id)
-  ) AS caption`;
+  ) AS caption,
+  ${AI_STATUS_SQL} AS ai_status`;
 
 /** Columns of `photoSummarySchema` plus whether a thumb exists (alias `p`, join alias `t`). */
 export const PHOTO_SUMMARY_COLUMNS = `
@@ -82,6 +143,8 @@ export interface PhotoSummaryRow {
   milestone_id?: string | null;
   /** Override-aware caption (2.4a). */
   caption?: string | null;
+  /** `AI_STATUS_SQL` (step 6). */
+  ai_status?: string | null;
 }
 
 /** User-facing derivative kinds. `analysis` is deliberately not assignable here. */
@@ -121,6 +184,7 @@ export async function toPhotoSummary(signer: UrlSigner, r: PhotoSummaryRow): Pro
     urlExpiresAt: thumb?.expiresAt.toISOString() ?? null,
     milestoneId: r.milestone_id ?? null,
     caption: r.caption ?? null,
+    aiStatus: toAiStatus(r.ai_status),
   };
 }
 

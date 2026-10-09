@@ -12,6 +12,7 @@ import { createSmtpMailer, type Mailer } from "./email/mailer";
 import { registerErrorHandling } from "./lib/errors";
 import { measurementsRoutes } from "./measurements/routes";
 import { milestonesRoutes } from "./milestones/routes";
+import { aiRoutes } from "./photos/ai-routes";
 import { photosRoutes } from "./photos/routes";
 import { createPool, type DbClient, registerDb } from "./plugins/db";
 import { createJobQueue, type JobQueue, registerJobs, sendOnlyBoss } from "./plugins/jobs";
@@ -97,6 +98,10 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         "req.body.captchaToken",
         // Upload registrations: 100 entries of hashes and hints are noise, not request context.
         "req.body.files",
+        // Step 6: AI field overrides are parent content (PATCH /photos/:id/ai).
+        "req.body.caption",
+        "req.body.detailed_description",
+        "req.body.search_tags",
       ],
       censor: "[redacted]",
     },
@@ -135,6 +140,8 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
   // Step 5: milestones, measurements (docs/plans/step-5.md 2.4).
   milestonesRoutes(app);
   measurementsRoutes(app);
+  // Step 6: AI overrides, retry, usage (docs/plans/step-6.md 2.8).
+  aiRoutes(app);
 }
 
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */

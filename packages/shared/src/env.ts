@@ -117,3 +117,88 @@ export const ingestEnvSchema = z.object({
   PHOTODNA_ENDPOINT: z.preprocess(emptyAsUndefined, z.url().optional()),
 });
 export type IngestEnv = z.infer<typeof ingestEnvSchema>;
+
+/**
+ * Defaults of the AI batch pipeline (docs/plans/step-6.md 2.4, 2.6; PRD FR-5.2 "flushed every 30
+ * minutes or at 1,000 photos", "Cost controls", "Reliability and operations": alert when queue
+ * age > 2 h; plan D12: $3 per baby per month hard stop, alert at 80 %). The API mirrors
+ * `AI_MAX_ATTEMPTS` and the budget for `aiStatus`/usage, so both read them from here.
+ */
+export const AI_PIPELINE_DEFAULTS = {
+  AI_BATCH_MAX_PHOTOS: 1000,
+  AI_BATCH_FLUSH_MINUTES: 30,
+  /** Bytes of one provider batch input (OpenAI's file limit is 200 MB; Anthropic's 256 MB). */
+  AI_BATCH_MAX_BYTES: 150_000_000,
+  AI_POLL_INTERVAL_CRON: "*/5 * * * *",
+  AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
+  /** FR-5.3: one retry, then `aiStatus = failed` until an admin requests a retry. */
+  AI_MAX_ATTEMPTS: 2,
+  AI_BABY_MONTHLY_BUDGET_USD: 3,
+  AI_BUDGET_ALERT_PCT: 80,
+  AI_QUEUE_AGE_ALERT_MINUTES: 120,
+  AI_MAX_OUTPUT_TOKENS: 1200,
+  AI_IMAGE_DETAIL: "auto",
+} as const;
+
+export const AI_IMAGE_DETAILS = ["auto", "low", "high"] as const;
+
+/** Five-field cron expression (pg-boss `schedule`); syntax only, pg-boss validates the rest. */
+const cronSchema = z
+  .string()
+  .trim()
+  .regex(/^\S+(\s+\S+){4}$/, "must be a five-field cron expression");
+
+const D = AI_PIPELINE_DEFAULTS;
+
+/**
+ * AI batch pipeline settings, read by the worker (all) and the API (`AI_MAX_ATTEMPTS`,
+ * `AI_BABY_MONTHLY_BUDGET_USD`). `AI_BATCH_FLUSH_MINUTES=0` submits on every flush tick (dev and
+ * the gate). Model/provider/keys stay in `aiEnvSchema` (`@littlelight/ai`).
+ */
+export const aiPipelineEnvSchema = z.object({
+  AI_BATCH_MAX_PHOTOS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(5000).default(D.AI_BATCH_MAX_PHOTOS),
+  ),
+  AI_BATCH_FLUSH_MINUTES: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(0).max(1440).default(D.AI_BATCH_FLUSH_MINUTES),
+  ),
+  AI_BATCH_MAX_BYTES: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1_000_000).max(200_000_000).default(D.AI_BATCH_MAX_BYTES),
+  ),
+  AI_POLL_INTERVAL_CRON: z.preprocess(
+    emptyAsUndefined,
+    cronSchema.default(D.AI_POLL_INTERVAL_CRON),
+  ),
+  AI_FLUSH_INTERVAL_CRON: z.preprocess(
+    emptyAsUndefined,
+    cronSchema.default(D.AI_FLUSH_INTERVAL_CRON),
+  ),
+  AI_MAX_ATTEMPTS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(5).default(D.AI_MAX_ATTEMPTS),
+  ),
+  AI_BABY_MONTHLY_BUDGET_USD: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().min(0).max(1000).default(D.AI_BABY_MONTHLY_BUDGET_USD),
+  ),
+  AI_BUDGET_ALERT_PCT: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(50).max(100).default(D.AI_BUDGET_ALERT_PCT),
+  ),
+  AI_QUEUE_AGE_ALERT_MINUTES: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(10_080).default(D.AI_QUEUE_AGE_ALERT_MINUTES),
+  ),
+  AI_MAX_OUTPUT_TOKENS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(256).max(16_384).default(D.AI_MAX_OUTPUT_TOKENS),
+  ),
+  AI_IMAGE_DETAIL: z.preprocess(
+    emptyAsUndefined,
+    z.enum(AI_IMAGE_DETAILS).default(D.AI_IMAGE_DETAIL),
+  ),
+});
+export type AiPipelineEnv = z.infer<typeof aiPipelineEnvSchema>;

@@ -6,11 +6,15 @@
 // Vitest's JSON report and fails unless, for each expected project, at least one test actually
 // ran and no test file was skipped in its entirety.
 //
-//   node .github/scripts/check-integration-report.mjs <report.json> <project-dir>...
-//   e.g.  ... integration.json packages/db apps/api apps/worker
+//   node .github/scripts/check-integration-report.mjs <report.json> <project-dir|test-file>...
+//   e.g.  ... integration.json packages/db apps/api apps/worker \
+//             apps/worker/src/ai/pipeline.integration.test.ts
 //
 // <project-dir> is a repo-relative directory; a test file belongs to it when its path contains
-// `/<project-dir>/`. Only Node built-ins are used, so it runs before or without `pnpm install`.
+// `/<project-dir>/`. An argument ending in `.test.ts` names one required test file (matched on
+// the path suffix), so a renamed or deleted suite that must run in CI (e.g. the step-6 AI
+// pipeline tests) fails the job instead of silently dropping out of the report. Only Node
+// built-ins are used, so it runs before or without `pnpm install`.
 import { readFileSync } from "node:fs";
 
 const [reportPath, ...projects] = process.argv.slice(2);
@@ -31,8 +35,13 @@ const files = Array.isArray(report.testResults) ? report.testResults : [];
 const errors = [];
 
 for (const dir of projects) {
-  const needle = `/${dir.replace(/^\/+|\/+$/g, "")}/`;
-  const mine = files.filter((f) => typeof f.name === "string" && f.name.includes(needle));
+  const clean = dir.replace(/^\/+|\/+$/g, "");
+  const isFile = clean.endsWith(".test.ts");
+  const needle = isFile ? `/${clean}` : `/${clean}/`;
+  const mine = files.filter(
+    (f) =>
+      typeof f.name === "string" && (isFile ? f.name.endsWith(needle) : f.name.includes(needle)),
+  );
   let ran = 0;
   let skipped = 0;
   for (const f of mine) {
@@ -45,8 +54,13 @@ for (const dir of projects) {
     }
   }
   console.log(`${dir}: ${mine.length} files, ${ran} tests executed, ${skipped} skipped`);
-  if (mine.length === 0) errors.push(`${dir}: no integration test files in the report`);
-  else if (ran === 0) {
+  if (mine.length === 0) {
+    errors.push(
+      isFile
+        ? `${dir}: required integration test file is not in the report`
+        : `${dir}: no integration test files in the report`,
+    );
+  } else if (ran === 0) {
     errors.push(
       `${dir}: 0 tests executed (are DATABASE_URL and, for apps/worker, S3_ENDPOINT set?)`,
     );

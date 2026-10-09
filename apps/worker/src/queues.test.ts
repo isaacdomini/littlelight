@@ -194,8 +194,13 @@ describe("queue definitions", () => {
 
   it("ensureSchedules schedules every cron in UTC", async () => {
     const calls: unknown[][] = [];
-    await ensureSchedules({ schedule: async (...a: unknown[]) => void calls.push(a) } as never);
-    expect(calls).toHaveLength(3);
+    await ensureSchedules({ schedule: async (...a: unknown[]) => void calls.push(a) } as never, {
+      AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
+      AI_POLL_INTERVAL_CRON: "*/10 * * * *",
+    });
+    expect(calls).toHaveLength(5);
     for (const c of calls) expect(c[3]).toEqual({ tz: "UTC" });
+    expect(calls.map((c) => [c[0], c[1]])).toContainEqual([JOBS.aiFlush, "*/5 * * * *"]);
+    expect(calls.map((c) => [c[0], c[1]])).toContainEqual([JOBS.aiPoll, "*/10 * * * *"]);
   });
 });

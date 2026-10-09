@@ -71,6 +71,15 @@ export const Thumb = memo(function Thumb({
             <IonIcon icon={flag} aria-hidden className="h-4 w-4" />
           </span>
         ) : null}
+        {p.aiStatus === "queued" || p.aiStatus === "analyzing" ? (
+          <span
+            data-testid={`photo-analyzing-${p.id}`}
+            role="img"
+            aria-label={t("ai.analyzingBadge")}
+            title={t("ai.analyzingBadge")}
+            className="absolute right-1 top-1 h-2.5 w-2.5 animate-pulse rounded-full bg-sky-400 ring-2 ring-black/40"
+          />
+        ) : null}
         {p.isSensitive ? (
           <span
             data-testid={`photo-sensitive-${p.id}`}

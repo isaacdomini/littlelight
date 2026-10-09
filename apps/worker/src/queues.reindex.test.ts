@@ -14,10 +14,19 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("five queues (step 5)", () => {
-  it("QUEUES has exactly the five jobs, all exclusive", () => {
+describe("reindex queue (step 5) in the eight-queue set", () => {
+  it("QUEUES has exactly the eight jobs, all exclusive", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
-      ["photo.ingest", "ingest.reconcile", "purge.trash", "uploads.sweep", "photo.reindex"].sort(),
+      [
+        "photo.ingest",
+        "ingest.reconcile",
+        "purge.trash",
+        "uploads.sweep",
+        "photo.reindex",
+        "ai.flush",
+        "ai.poll",
+        "ai.backfill",
+      ].sort(),
     );
     for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
   });
@@ -32,7 +41,7 @@ describe("five queues (step 5)", () => {
     });
   });
 
-  it("reindex is not scheduled (only the three crons are)", () => {
+  it("reindex is not scheduled (only the three fixed crons are; AI crons come from config)", () => {
     expect(SCHEDULES.map(([n]) => n)).not.toContain(JOBS.reindex);
     expect(SCHEDULES).toHaveLength(3);
   });
@@ -60,7 +69,7 @@ describe("five queues (step 5)", () => {
     );
   });
 
-  it("startWorkers registers five handlers; reindex runs at the plan's concurrency without any database call", async () => {
+  it("startWorkers registers eight handlers; reindex runs at the plan's concurrency without any database call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;
@@ -85,6 +94,7 @@ describe("five queues (step 5)", () => {
       } as never,
       purge: {} as never,
       sweep: {} as never,
+      ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
       log,
       ingestConcurrency: 2,
     });

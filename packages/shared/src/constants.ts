@@ -20,6 +20,14 @@ export const DEFAULT_CHAT_MODEL = "gpt-6-luna";
 export const DEFAULT_CHAT_REASONING_EFFORT = "low";
 export const DEFAULT_EMBED_MODEL = "text-embedding-3-small";
 
+/**
+ * Estimated cost of describing one photo on the default model (gpt-6-luna, Batch API: ~1,400
+ * input tokens with the cached prefix, ~400 output). UI copy, the usage endpoint and the flush's
+ * per-photo budget check use it; recorded costs always come from the price table in
+ * `packages/ai`. Budgets and flush thresholds are env settings (`AI_PIPELINE_DEFAULTS`).
+ */
+export const AI_COST_PER_PHOTO_ESTIMATE_USD = 0.00017;
+
 /** Share links expire after 24 hours by default. */
 export const SHARE_LINK_DEFAULT_TTL_HOURS = 24;
 

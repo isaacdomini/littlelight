@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { ingestJobSchema, JOBS, REINDEX_REASONS, reindexJobSchema } from "./jobs";
+import {
+  AI_BACKFILL_REASONS,
+  aiBackfillJobSchema,
+  aiFlushJobSchema,
+  aiPollJobSchema,
+  ingestJobSchema,
+  JOBS,
+  REINDEX_REASONS,
+  reindexJobSchema,
+} from "./jobs";
 
 const ids = {
   photoId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -14,8 +23,11 @@ describe("JOBS", () => {
       purgeTrash: "purge.trash",
       uploadsSweep: "uploads.sweep",
       reindex: "photo.reindex",
+      aiFlush: "ai.flush",
+      aiPoll: "ai.poll",
+      aiBackfill: "ai.backfill",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(5);
+    expect(new Set(Object.values(JOBS)).size).toBe(8);
   });
 });
 
@@ -48,13 +60,14 @@ describe("reindexJobSchema (strict: ids and a reason only)", () => {
     expect(reindexJobSchema.parse(p)).toEqual(p);
   });
 
-  it("lists the five documented reasons", () => {
+  it("lists the six documented reasons", () => {
     expect([...REINDEX_REASONS]).toEqual([
       "details",
       "milestone",
       "measurement",
       "ai_override",
       "backfill",
+      "ai",
     ]);
   });
 
@@ -69,5 +82,73 @@ describe("reindexJobSchema (strict: ids and a reason only)", () => {
     ["null", null],
   ])("rejects %s", (_n, data) => {
     expect(reindexJobSchema.safeParse(data).success).toBe(false);
+  });
+});
+
+describe("aiFlushJobSchema (ids and a flag only)", () => {
+  it("accepts empty, force and babyId", () => {
+    expect(aiFlushJobSchema.parse({})).toEqual({});
+    expect(aiFlushJobSchema.parse({ force: true, babyId: ids.babyId })).toEqual({
+      force: true,
+      babyId: ids.babyId,
+    });
+  });
+  it.each([
+    ["an extra key", { force: true, note: "x" }],
+    ["a non-uuid baby", { babyId: "b" }],
+    ["a string force", { force: "yes" }],
+    ["null", null],
+  ])("rejects %s", (_n, data) => {
+    expect(aiFlushJobSchema.safeParse(data).success).toBe(false);
+  });
+});
+
+describe("aiPollJobSchema", () => {
+  it("accepts only an empty object", () => {
+    expect(aiPollJobSchema.safeParse({}).success).toBe(true);
+    expect(aiPollJobSchema.safeParse({ force: true }).success).toBe(false);
+  });
+});
+
+describe("aiBackfillJobSchema", () => {
+  it("lists the reasons", () => {
+    expect([...AI_BACKFILL_REASONS]).toEqual(["upgrade", "version", "manual"]);
+  });
+
+  it("an upgrade needs a babyId; version and manual do not", () => {
+    expect(aiBackfillJobSchema.safeParse({ reason: "upgrade" }).success).toBe(false);
+    expect(aiBackfillJobSchema.safeParse({ reason: "upgrade", babyId: ids.babyId }).success).toBe(
+      true,
+    );
+    expect(aiBackfillJobSchema.safeParse({ reason: "version" }).success).toBe(true);
+    expect(aiBackfillJobSchema.safeParse({ reason: "manual" }).success).toBe(true);
+  });
+
+  it("accepts version tags and rejects odd ones", () => {
+    expect(
+      aiBackfillJobSchema.safeParse({
+        reason: "version",
+        promptVersion: "v1",
+        schemaVersion: "v2.1-a",
+      }).success,
+    ).toBe(true);
+    expect(aiBackfillJobSchema.safeParse({ reason: "version", promptVersion: "v 1" }).success).toBe(
+      false,
+    );
+    expect(aiBackfillJobSchema.safeParse({ reason: "version", promptVersion: "" }).success).toBe(
+      false,
+    );
+    expect(
+      aiBackfillJobSchema.safeParse({ reason: "version", schemaVersion: "x".repeat(33) }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["an unknown reason", { reason: "because" }],
+    ["a missing reason", {}],
+    ["an extra key", { reason: "manual", note: "x" }],
+    ["a non-uuid baby", { reason: "manual", babyId: "b" }],
+  ])("rejects %s", (_n, data) => {
+    expect(aiBackfillJobSchema.safeParse(data).success).toBe(false);
   });
 });

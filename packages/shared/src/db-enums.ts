@@ -90,6 +90,35 @@ export const aiBatchStatusSchema = z.enum([
 ]);
 export type AiBatchStatus = z.infer<typeof aiBatchStatusSchema>;
 
+/**
+ * `ai_batch_items.state` (one row per photo per attempt, docs/plans/step-6.md 2.3): `pending`
+ * (claimed into a `building` batch), `submitted`, `succeeded` (`photo_ai` written), `failed`
+ * (counts toward `AI_MAX_ATTEMPTS`), `dropped` (removed before submit: the baby is no longer paid
+ * or the photo is no longer live; not an attempt).
+ */
+export const aiBatchItemStateSchema = z.enum([
+  "pending",
+  "submitted",
+  "succeeded",
+  "failed",
+  "dropped",
+]);
+export type AiBatchItemState = z.infer<typeof aiBatchItemStateSchema>;
+
+/**
+ * `ai_batch_items.failure_kind`: an error category only, never prompt text, notes or provider
+ * messages. `budget` = skipped by the per-baby monthly budget.
+ */
+export const aiFailureKindSchema = z.enum([
+  "refusal",
+  "invalid_output",
+  "expired",
+  "rate_limited",
+  "provider_error",
+  "budget",
+]);
+export type AiFailureKind = z.infer<typeof aiFailureKindSchema>;
+
 /** `share_rules.mode`. No `share_rules` row means manual sharing only. */
 export const shareRuleModeSchema = z.enum(["all", "milestones", "tags"]);
 export type ShareRuleMode = z.infer<typeof shareRuleModeSchema>;

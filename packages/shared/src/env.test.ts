@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { databaseEnvSchema, jwtEnvSchema, logEnvSchema, s3EnvSchema } from "./env";
+import {
+  AI_PIPELINE_DEFAULTS,
+  aiPipelineEnvSchema,
+  databaseEnvSchema,
+  jwtEnvSchema,
+  logEnvSchema,
+  s3EnvSchema,
+} from "./env";
 
 const SECRET = "dev-only-jwt-secret-at-least-32-characters";
 
@@ -69,5 +76,79 @@ describe("databaseEnvSchema / logEnvSchema", () => {
   it("defaults log settings and rejects bad levels", () => {
     expect(logEnvSchema.parse({}).LOG_LEVEL).toBe("info");
     expect(logEnvSchema.safeParse({ LOG_LEVEL: "loud" }).success).toBe(false);
+  });
+});
+
+describe("aiPipelineEnvSchema (step 6)", () => {
+  it("defaults match AI_PIPELINE_DEFAULTS and the PRD (30 min / 1,000 photos / 2 attempts / $3 / 80 % / 2 h)", () => {
+    const e = aiPipelineEnvSchema.parse({});
+    expect(e).toMatchObject({
+      AI_BATCH_MAX_PHOTOS: 1000,
+      AI_BATCH_FLUSH_MINUTES: 30,
+      AI_MAX_ATTEMPTS: 2,
+      AI_BABY_MONTHLY_BUDGET_USD: 3,
+      AI_BUDGET_ALERT_PCT: 80,
+      AI_QUEUE_AGE_ALERT_MINUTES: 120,
+      AI_POLL_INTERVAL_CRON: "*/5 * * * *",
+      AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
+      AI_IMAGE_DETAIL: "auto",
+    });
+    expect(e.AI_BATCH_MAX_BYTES).toBe(AI_PIPELINE_DEFAULTS.AI_BATCH_MAX_BYTES);
+  });
+
+  it("treats empty strings (compose passes FOO=) as unset", () => {
+    expect(
+      aiPipelineEnvSchema.parse({ AI_BATCH_MAX_PHOTOS: "", AI_IMAGE_DETAIL: "" })
+        .AI_BATCH_MAX_PHOTOS,
+    ).toBe(1000);
+  });
+
+  it("allows AI_BATCH_FLUSH_MINUTES=0 (flush on every tick) and coerces strings", () => {
+    expect(aiPipelineEnvSchema.parse({ AI_BATCH_FLUSH_MINUTES: "0" }).AI_BATCH_FLUSH_MINUTES).toBe(
+      0,
+    );
+    expect(
+      aiPipelineEnvSchema.parse({ AI_BABY_MONTHLY_BUDGET_USD: "0.0001" })
+        .AI_BABY_MONTHLY_BUDGET_USD,
+    ).toBe(0.0001);
+    expect(
+      aiPipelineEnvSchema.parse({ AI_BABY_MONTHLY_BUDGET_USD: "0" }).AI_BABY_MONTHLY_BUDGET_USD,
+    ).toBe(0);
+  });
+
+  it.each([
+    ["AI_BATCH_MAX_PHOTOS", "0"],
+    ["AI_BATCH_MAX_PHOTOS", "5001"],
+    ["AI_BATCH_FLUSH_MINUTES", "-1"],
+    ["AI_BATCH_FLUSH_MINUTES", "1441"],
+    ["AI_BATCH_MAX_BYTES", "999999"],
+    ["AI_BATCH_MAX_BYTES", "200000001"],
+    ["AI_MAX_ATTEMPTS", "0"],
+    ["AI_MAX_ATTEMPTS", "6"],
+    ["AI_BABY_MONTHLY_BUDGET_USD", "-1"],
+    ["AI_BABY_MONTHLY_BUDGET_USD", "1001"],
+    ["AI_BUDGET_ALERT_PCT", "49"],
+    ["AI_BUDGET_ALERT_PCT", "101"],
+    ["AI_QUEUE_AGE_ALERT_MINUTES", "0"],
+    ["AI_MAX_OUTPUT_TOKENS", "255"],
+    ["AI_MAX_OUTPUT_TOKENS", "16385"],
+    ["AI_IMAGE_DETAIL", "ultra"],
+    ["AI_POLL_INTERVAL_CRON", "every day"],
+    ["AI_FLUSH_INTERVAL_CRON", "* * * *"],
+  ])("rejects %s=%s", (k, v) => {
+    expect(aiPipelineEnvSchema.safeParse({ [k]: v }).success).toBe(false);
+  });
+
+  it("accepts the bounds", () => {
+    expect(
+      aiPipelineEnvSchema.safeParse({
+        AI_BATCH_MAX_PHOTOS: "5000",
+        AI_BATCH_MAX_BYTES: "200000000",
+        AI_BUDGET_ALERT_PCT: "50",
+        AI_MAX_ATTEMPTS: "5",
+        AI_IMAGE_DETAIL: "low",
+        AI_FLUSH_INTERVAL_CRON: "*/1 * * * *",
+      }).success,
+    ).toBe(true);
   });
 });

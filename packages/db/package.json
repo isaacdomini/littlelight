@@ -15,6 +15,7 @@
     "db:migrate": "tsx src/migrate.ts up",
     "db:migrate:down": "tsx src/migrate.ts down",
     "db:seed": "tsx src/seed.ts",
+    "db:plan": "tsx src/tools/set-plan.ts",
     "db:types": "tsx src/gen-types.ts",
     "db:migrate:create": "node-pg-migrate create --migrations-dir migrations --migration-file-language sql"
   },

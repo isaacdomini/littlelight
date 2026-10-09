@@ -1,4 +1,5 @@
 import {
+  aiPipelineEnvSchema,
   authEnvSchema,
   databaseEnvSchema,
   encryptionEnvSchema,
@@ -22,6 +23,13 @@ const serverEnvSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
 });
 
+/**
+ * Step 6 (docs/plans/step-6.md 2.8): the per-baby monthly AI budget shown by
+ * `GET /babies/:id/ai/usage`, read from the same env var as the worker (same default). The API
+ * reads no provider key and no other AI setting.
+ */
+const aiApiEnvSchema = aiPipelineEnvSchema.pick({ AI_BABY_MONTHLY_BUDGET_USD: true });
+
 export type ApiConfig = z.output<typeof serverEnvSchema> &
   z.output<typeof databaseEnvSchema> &
   z.output<typeof s3EnvSchema> &
@@ -29,7 +37,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   z.output<typeof encryptionEnvSchema> &
   z.output<typeof logEnvSchema> &
   z.output<typeof authEnvSchema> &
-  z.output<typeof mailEnvSchema>;
+  z.output<typeof mailEnvSchema> &
+  // Optional in the type (always set by `loadConfig`); readers fall back to the shared default.
+  Partial<z.output<typeof aiApiEnvSchema>>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -67,6 +77,7 @@ export function loadConfig(
     logEnvSchema,
     authEnvSchema,
     mailEnvSchema,
+    aiApiEnvSchema,
   ];
   const fields: string[] = [];
   const merged: Record<string, unknown> = {};

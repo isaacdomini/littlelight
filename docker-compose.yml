@@ -29,7 +29,8 @@
 # service gets the whole file (no env_file): each one receives exactly the variables listed in
 # its `environment:` block, so e.g. api/worker never see POSTGRES_PASSWORD, the other services'
 # role passwords or tunnel credentials. SMTP goes to auth (sign-in codes) and api (invites,
-# new-device alerts) only; the worker gets none, and auth gets no API secrets. A new app
+# new-device alerts) only; the worker gets none, and auth gets no API secrets. AI provider keys
+# (OPENAI_API_KEY, ANTHROPIC_API_KEY) go to the worker only. A new app
 # variable must be added to .env.example AND to the x-app-env anchor (or the service's own
 # block) below.
 #
@@ -94,8 +95,14 @@ x-app-env: &app-env
   CHAT_REASONING_EFFORT: ${CHAT_REASONING_EFFORT:-low}
   EMBED_MODEL: ${EMBED_MODEL:-text-embedding-3-small}
   EMBED_DIMS: ${EMBED_DIMS:-1024}
-  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # AI batch pipeline (docs/plans/step-6.md 2.10): the worker runs it, the api reports usage
+  # against the same budget/attempt limits. Provider keys are NOT here: worker only.
+  AI_BATCH_FLUSH_MINUTES: ${AI_BATCH_FLUSH_MINUTES:-30}
+  AI_BATCH_MAX_PHOTOS: ${AI_BATCH_MAX_PHOTOS:-1000}
+  AI_BABY_MONTHLY_BUDGET_USD: ${AI_BABY_MONTHLY_BUDGET_USD:-3}
+  AI_BUDGET_ALERT_PCT: ${AI_BUDGET_ALERT_PCT:-80}
+  AI_QUEUE_AGE_ALERT_MINUTES: ${AI_QUEUE_AGE_ALERT_MINUTES:-120}
+  AI_MAX_ATTEMPTS: ${AI_MAX_ATTEMPTS:-2}
   SENTRY_DSN: ${SENTRY_DSN:-}
 
 # Node services: non-root image user, no capabilities, read-only root filesystem.
@@ -145,6 +152,8 @@ services:
 
   # One-shot: app migrations (no seed in production). Runs after GoTrue is healthy, i.e. after
   # GoTrue's own migrations created auth.users, which the app tables reference.
+  # Operator paid-tier switch until billing webhooks exist (docs/plans/step-6.md D7; audited):
+  #   docker compose run --rm migrate pnpm db:plan <babyId> plus|free --i-know-this-is-production
   migrate:
     <<: *hardened
     build:
@@ -376,6 +385,20 @@ services:
       CSAM_MATCHER: ${CSAM_MATCHER:-none}
       PHOTODNA_API_KEY: ${PHOTODNA_API_KEY:-}
       PHOTODNA_ENDPOINT: ${PHOTODNA_ENDPOINT:-}
+      # AI provider keys: this is the only service that gets them. Empty => AI skipped with one
+      # log line. AI_ALLOW_FAKE_IN_PRODUCTION and FAKE_VISION_* are deliberately not passed, so
+      # VISION_PROVIDER=fake can never run here.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Empty = the real provider APIs (mock servers in testing only).
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      # Worker-only pipeline tuning; empty => code defaults (packages/shared aiPipelineEnvSchema).
+      AI_BATCH_MAX_BYTES: ${AI_BATCH_MAX_BYTES:-}
+      AI_FLUSH_INTERVAL_CRON: ${AI_FLUSH_INTERVAL_CRON:-}
+      AI_POLL_INTERVAL_CRON: ${AI_POLL_INTERVAL_CRON:-}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-}
+      AI_IMAGE_DETAIL: ${AI_IMAGE_DETAIL:-}
     volumes:
       # MinIO's data folder, read-only, only for statfs (objects are read through S3).
       - type: bind

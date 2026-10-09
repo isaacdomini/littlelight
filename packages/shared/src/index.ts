@@ -1,4 +1,6 @@
 export * from "./age";
+export * from "./ai-description";
+export * from "./api/ai";
 export * from "./api/auth";
 export * from "./api/babies";
 export * from "./api/common";
