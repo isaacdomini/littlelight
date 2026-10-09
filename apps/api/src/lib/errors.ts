@@ -1,4 +1,11 @@
-import { type ApiErrorCode, type ApiErrorResponse, CHAT_MESSAGES } from "@littlelight/shared";
+import {
+  type ApiErrorCode,
+  type ApiErrorResponse,
+  CHAT_MESSAGES,
+  type PasscodeInvalidDetails,
+  SHARE_EXPIRED_MESSAGE,
+  SHARE_LINKS_PER_BABY_MAX,
+} from "@littlelight/shared";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 
@@ -60,6 +67,52 @@ export const internalError = () => new ApiError(500, "internal", "Something went
  * `ai_spend_guard` trigger (plan lapsed during a turn).
  */
 export const planRequired = () => new ApiError(403, "plan_required", CHAT_MESSAGES.planRequired);
+
+// Step 8 (docs/plans/step-8.md 2.4, 2.9): share-link viewer errors. Thrown by
+// `apps/api/src/sharing/**`; the codes and statuses are fixed here so every route answers alike.
+
+/**
+ * 410 `share_link_expired`: unknown, expired, revoked, regenerated-away or deleted-baby link, and
+ * a viewer session that `viewer_session_check` no longer returns. One body for every case.
+ */
+export const shareLinkExpired = () =>
+  new ApiError(410, "share_link_expired", SHARE_EXPIRED_MESSAGE);
+
+/** 401 `passcode_required`: the link has a passcode and the exchange sent none (not a failure). */
+export const passcodeRequired = () =>
+  new ApiError(401, "passcode_required", "Enter the passcode the parents gave you");
+
+/** 401 `passcode_invalid` with `details: { attemptsLeft }` (this IP's window, never negative). */
+export const passcodeInvalid = (attemptsLeft: number) =>
+  new ApiError(401, "passcode_invalid", "That passcode isn't right", {
+    attemptsLeft: Math.max(0, Math.floor(attemptsLeft)),
+  } satisfies PasscodeInvalidDetails);
+
+/** 429 `passcode_locked` + `Retry-After`: too many failures on this link from any IP (D8). */
+export const passcodeLocked = (retryAfterSec: number) =>
+  new ApiError(
+    429,
+    "passcode_locked",
+    "This link is locked after too many wrong passcodes. Ask the parents for a new link.",
+    undefined,
+    { retryAfterSec },
+  );
+
+/** 403 `plan_required` for auto-share rules on a free baby (route pre-check and DB trigger, D3). */
+export const shareRulePlanRequired = () =>
+  new ApiError(
+    403,
+    "plan_required",
+    "Auto-share checks every photo for sensitive content first; it's part of Plus",
+  );
+
+/** 409 `conflict`: the baby already has `SHARE_LINKS_PER_BABY_MAX` links (`share_links_cap`). */
+export const shareLinkLimit = () =>
+  new ApiError(
+    409,
+    "conflict",
+    `This album already has the maximum of ${SHARE_LINKS_PER_BABY_MAX} share links`,
+  );
 
 /** A node-postgres `DatabaseError` (has a 5-character SQLSTATE). */
 export interface PgErrorLike {
@@ -211,6 +264,81 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
   ["chat_messages.cited_measurement_ids holds more than", () => internalError()],
   ["chat_messages.tools_used holds more than", () => internalError()],
   ["chat_reserve_turn expects a positive limit", () => internalError()],
+  // Step 8 (packages/db/migrations/1792100000100_sharing-v1.sql; docs/plans/step-8.md 2.3, 2.9).
+  // The routes validate with the shared schemas and pre-filter photos first, so these surface
+  // only on a race or a bug. Listed before the generic `<table>.<column>` rule.
+  ["share link limit reached", () => shareLinkLimit()],
+  // `share_links_lifecycle` (D13): renew is refused on a revoked link; only regenerate (a new
+  // token) brings it back. The route checks first; these surface on a concurrent revoke.
+  [
+    "a revoked share link cannot be renewed",
+    () => new ApiError(409, "conflict", "This link was revoked. Regenerate it to share again."),
+  ],
+  [
+    "a revoked share link can only be reactivated with a new token",
+    () => new ApiError(409, "conflict", "This link was revoked. Regenerate it to share again."),
+  ],
+  // `viewer_sessions_guard`: the token exchange raced a revoke/expiry. Same body as every other
+  // dead-link case.
+  ["share link is not active", () => shareLinkExpired()],
+  ["auto-share rules need the paid plan", () => shareRulePlanRequired()],
+  [
+    "share rule needs at least one include tag",
+    () =>
+      new ApiError(400, "validation_failed", "Pick at least one tag to share", {
+        fields: ["body.includeTags"],
+      }),
+  ],
+  [
+    "share_rules tags hold at most 20 entries per list",
+    () =>
+      new ApiError(400, "validation_failed", "A rule can list at most 20 tags", {
+        fields: ["body"],
+      }),
+  ],
+  [
+    "share_rules tags must be 1 to 60 characters, trimmed and lower-case",
+    () =>
+      new ApiError(400, "validation_failed", "Tags must be 1 to 60 characters", {
+        fields: ["body"],
+      }),
+  ],
+  [
+    "share link expiry must be within 30 days",
+    () =>
+      new ApiError(400, "validation_failed", "A link can stay open for at most 30 days", {
+        fields: ["body.ttlHours"],
+      }),
+  ],
+  [
+    "share_links.ttl_hours must be 1 to 720",
+    () =>
+      new ApiError(400, "validation_failed", "A link can stay open for at most 30 days", {
+        fields: ["body.ttlHours"],
+      }),
+  ],
+  // `shared_photos_gate` and `shared_photo_exclusions_guard` on manual adds/removes: the photo
+  // changed (trashed, quarantined, flagged, moved) between the route's pre-filter and the insert.
+  // The gate uses one message for pending, trashed and quarantined photos (quarantine is never
+  // disclosed).
+  [
+    "photo does not belong to the share link's baby",
+    () => new ApiError(409, "conflict", "That photo isn't part of this album"),
+  ],
+  ...[
+    "only approved, non-deleted photos can be shared",
+    "sensitive photos are never auto-shared",
+    "only analysed photos can be auto-shared",
+    "photo was removed from this album by an admin",
+    "only hand-picked photos can be shown to family",
+    "a sensitive photo can only be shown by the admin releasing it",
+  ].map(
+    (prefix) =>
+      [
+        prefix,
+        () => new ApiError(409, "conflict", "That photo can't be shared right now"),
+      ] as const,
+  ),
 ];
 
 /**

@@ -4,6 +4,8 @@ import {
   JOBS,
   type ReindexJob,
   reindexJobSchema,
+  type ShareApplyJob,
+  shareApplyJobSchema,
 } from "@littlelight/shared";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { PgBoss, type SendOptions } from "pg-boss";
@@ -28,6 +30,12 @@ import { errorCategory } from "../routes/healthz";
 // reconcile (the `updated_at` columns are the durable stale signal). Payloads are ids, a time
 // zone name and a reason only (strict `ingestJobSchema` / `reindexJobSchema`): never keys with
 // signatures, bytes, GPS, notes, people, values or emails.
+//
+// Step 8 (docs/plans/step-8.md 2.9) adds `share.apply {shareLinkId, reason}` after an admin
+// created or changed a link's auto-share rule. Same contract: sent after commit, outside `runAs`;
+// the strict `shareApplyJobSchema` lets nothing but the link id and the reason through (never a
+// token, passcode, link name or tag). A lost send is repaired by the worker's hourly
+// `share.reconcile` (the rule's `updated_at` is newer than its `evaluated_at`).
 
 /** Per-photo ingest options (plan 2.5): one queued copy per photo, 3 retries with backoff. */
 export const INGEST_SEND_OPTIONS = Object.freeze({
@@ -46,6 +54,16 @@ export const REINDEX_SEND_OPTIONS = Object.freeze({
   retryDelay: 15,
   retryBackoff: true,
   expireInSeconds: 300,
+}) satisfies SendOptions;
+
+/**
+ * Auto-share sync options (step-8 plan 2.8): the worker's `share.apply` queue is `exclusive`
+ * with `singletonKey = shareLinkId`, 2 retries 30 s apart, 15-minute expiry.
+ */
+export const SHARE_APPLY_SEND_OPTIONS = Object.freeze({
+  retryLimit: 2,
+  retryDelay: 30,
+  expireInSeconds: 900,
 }) satisfies SendOptions;
 
 /** The slice of `PgBoss` the API uses; tests pass a stub. */
@@ -71,12 +89,25 @@ export interface JobQueue {
    * the writing transaction committed, outside `runAs`.
    */
   enqueueReindex(job: ReindexJob): Promise<boolean>;
+  /**
+   * Validate and enqueue `share.apply` (singletonKey = shareLinkId), same contract as
+   * `enqueueReindex`: `true` when accepted, `false` after a failed retry (logged by category; the
+   * hourly `share.reconcile` re-syncs the rule), never throws for transport errors. Call only
+   * after the writing transaction committed, outside `runAs`.
+   *
+   * Optional in this interface only so job-queue stubs written before step 8 still type-check;
+   * `createJobQueue` always implements it and `app.jobs` (see `registerJobs`) always has it.
+   */
+  enqueueShareApply?(job: ShareApplyJob): Promise<boolean>;
   close(): Promise<void>;
 }
 
+/** `app.jobs`: every sender present (`registerJobs` fills a logged no-op for old stubs). */
+export type AppJobQueue = Required<JobQueue>;
+
 declare module "fastify" {
   interface FastifyInstance {
-    jobs: JobQueue;
+    jobs: AppJobQueue;
   }
 }
 
@@ -104,7 +135,7 @@ export function sendOnlyBoss(config: Pick<ApiConfig, "DATABASE_URL">): BossLike 
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export function createJobQueue(opts: JobQueueOptions): JobQueue {
+export function createJobQueue(opts: JobQueueOptions): AppJobQueue {
   const retryDelayMs = opts.retryDelayMs ?? 1000;
   let boss: BossLike | null = null;
   let starting: Promise<BossLike> | null = null;
@@ -135,14 +166,15 @@ export function createJobQueue(opts: JobQueueOptions): JobQueue {
   /** Send once, retry once after `retryDelayMs`; log by category and resolve false on failure. */
   async function sendWithRetry(
     name: string,
-    data: { photoId: string },
+    data: object,
+    singletonKey: string,
     options: SendOptions,
     failureMessage: string,
   ): Promise<boolean> {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const b = await ensureStarted();
-        await b.send(name, data, { ...options, singletonKey: data.photoId });
+        await b.send(name, data, { ...options, singletonKey });
         return true;
       } catch (err) {
         if (attempt === 2 || closed) {
@@ -161,6 +193,7 @@ export function createJobQueue(opts: JobQueueOptions): JobQueue {
       return sendWithRetry(
         JOBS.ingest,
         job,
+        job.photoId,
         INGEST_SEND_OPTIONS,
         "ingest enqueue failed; ingest.reconcile will retry",
       );
@@ -170,8 +203,19 @@ export function createJobQueue(opts: JobQueueOptions): JobQueue {
       return sendWithRetry(
         JOBS.reindex,
         job,
+        job.photoId,
         REINDEX_SEND_OPTIONS,
         "reindex enqueue failed; the search reconcile will catch up",
+      );
+    },
+    async enqueueShareApply(input) {
+      const job = shareApplyJobSchema.parse(input);
+      return sendWithRetry(
+        JOBS.shareApply,
+        job,
+        job.shareLinkId,
+        SHARE_APPLY_SEND_OPTIONS,
+        "share apply enqueue failed; share.reconcile will catch up",
       );
     },
     async close() {
@@ -205,8 +249,28 @@ export async function enqueueReindexAll(
   return accepted;
 }
 
+/**
+ * `jobs` with every sender present. A stub without `enqueueShareApply` gets one that validates the
+ * payload (a bad payload still throws, as in production), logs by job name only and resolves
+ * `false` (the "not accepted" result; `share.reconcile` would catch up). Exported for tests.
+ */
+export function withAllSenders(jobs: JobQueue, log: Pick<FastifyBaseLogger, "warn">): AppJobQueue {
+  if (jobs.enqueueShareApply) return jobs as AppJobQueue;
+  return {
+    enqueueIngest: (job) => jobs.enqueueIngest(job),
+    enqueueReindex: (job) => jobs.enqueueReindex(job),
+    async enqueueShareApply(input) {
+      shareApplyJobSchema.parse(input);
+      log.warn({ job: JOBS.shareApply }, "job queue has no share.apply sender; not enqueued");
+      return false;
+    },
+    close: () => jobs.close(),
+  };
+}
+
 /** Decorate `app.jobs`; stops pg-boss on `app.close()`. */
-export function registerJobs(app: FastifyInstance, jobs: JobQueue): void {
+export function registerJobs(app: FastifyInstance, input: JobQueue): void {
+  const jobs = withAllSenders(input, app.log);
   app.decorate("jobs", jobs);
   app.addHook("onClose", async () => {
     await jobs.close();

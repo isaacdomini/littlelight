@@ -1,8 +1,8 @@
-import { IonSpinner } from "@ionic/react";
 import type { BabySummary, PhotoSummary, SearchResponse } from "@littlelight/shared";
+import { searchOutline } from "ionicons/icons";
 import { t, tn } from "../../i18n";
 import { Thumb } from "../timeline/Thumb";
-import { Message } from "../ui";
+import { EmptyState, GridSkeleton, Message } from "../ui";
 
 const noop = () => {};
 
@@ -24,29 +24,29 @@ export function SearchResults({
 }) {
   const photos = data?.photos ?? [];
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" data-testid="search-results">
-      {error ? <Message>{t("search.error")}</Message> : null}
-      {loading && !data ? (
-        <div className="flex justify-center p-6" role="status">
-          <IonSpinner aria-label={t("common.loading")} />
+    <div className="min-h-0 flex-1 overflow-y-auto pb-3" data-testid="search-results">
+      {error ? (
+        <div className="px-4">
+          <Message>{t("search.error")}</Message>
         </div>
       ) : null}
+      {loading && !data ? <GridSkeleton count={9} /> : null}
       {data ? (
         <>
-          <p className="py-1 text-sm opacity-80" data-testid="search-count" aria-live="polite">
+          <p className="px-4 py-2 text-sm text-muted" data-testid="search-count" aria-live="polite">
             {tn("search.results", photos.length)}
           </p>
           {data.degraded ? (
-            <p className="pb-2 text-sm opacity-80" data-testid="search-degraded">
+            <p className="px-4 pb-2 text-sm text-muted" data-testid="search-degraded">
               {t("search.degraded")}
             </p>
           ) : null}
           {photos.length === 0 ? (
-            <p className="opacity-70" data-testid="search-empty">
+            <EmptyState icon={searchOutline} data-testid="search-empty">
               {t("search.none")}
-            </p>
+            </EmptyState>
           ) : (
-            <ul className="grid grid-cols-3 gap-1 sm:grid-cols-4 lg:grid-cols-5">
+            <ul className="grid grid-cols-3 gap-0.5 sm:grid-cols-4 lg:grid-cols-5">
               {photos.map((p) => (
                 <li key={p.id} className="min-w-0">
                   <Thumb

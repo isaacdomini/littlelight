@@ -58,11 +58,18 @@ describe.skipIf(!databaseUrl)("step 2 review-fix hardening", () => {
 
   // -----------------------------------------------------------------------------------------------
   describe("viewer sensitive gate (FR-9.5)", () => {
-    const shareByRule = (photo: string) =>
-      q("INSERT INTO shared_photos (share_link_id, photo_id, added_by) VALUES ($1, $2, 'rule')", [
-        LINK.LA,
-        photo,
-      ]);
+    // Since step 8 a rule row needs an analysed photo (a photo_ai row without flags here).
+    const shareByRule = async (photo: string) => {
+      await q(
+        `INSERT INTO photo_ai (photo_id, model, prompt_version, schema_version, description)
+         VALUES ($1, 'gpt-6-luna', 'v1', 'v1', '{"caption":"x"}'::jsonb)`,
+        [photo],
+      );
+      await q(
+        "INSERT INTO shared_photos (share_link_id, photo_id, added_by) VALUES ($1, $2, 'rule')",
+        [LINK.LA, photo],
+      );
+    };
     const viewerRows = async (photo: string) =>
       (await q("SELECT id FROM photos WHERE id = $1", [photo])).rowCount;
     const ruleRows = async (photo: string) => {
@@ -99,11 +106,9 @@ describe.skipIf(!databaseUrl)("step 2 review-fix hardening", () => {
         expect(await viewerRows(P.contribApproved)).toBe(1);
 
         await as("pipeline");
-        await q(
-          `INSERT INTO photo_ai (photo_id, model, prompt_version, schema_version, description, sensitive_flags)
-           VALUES ($1, 'gpt-6-luna', 'v1', 'v1', '{"caption":"x"}'::jsonb, '{bath}')`,
-          [P.contribApproved],
-        );
+        await q("UPDATE photo_ai SET sensitive_flags = '{bath}' WHERE photo_id = $1", [
+          P.contribApproved,
+        ]);
 
         await viewerLA();
         expect(await viewerRows(P.contribApproved)).toBe(0);

@@ -261,7 +261,7 @@ describe.skipIf(!databaseUrl)("AI pipeline database rules (step 6)", () => {
     await addPhoto(PH.deletedOk, BABY.deleted, { createdAt: t(18) });
     await q(
       `INSERT INTO public.share_links (id, baby_id, name, token_hash, passcode_hash, expires_at, created_by)
-       VALUES ($1, $2, 'ai-fx', decode(md5('aifx') || md5('aifxx'), 'hex'), 'argon2id$fixture', now() + interval '1 hour', $3)`,
+       VALUES ($1, $2, 'ai-fx', decode(md5('aifx') || md5('aifxx'), 'hex'), 'scrypt$x', now() + interval '1 hour', $3)`,
       [LINK, BABY.paid, U.admin],
     );
     await q("COMMIT");
@@ -744,8 +744,13 @@ describe.skipIf(!databaseUrl)("AI pipeline database rules (step 6)", () => {
         const L2 = fid("d", 2);
         await q(
           `INSERT INTO public.share_links (id, baby_id, name, token_hash, passcode_hash, expires_at, created_by)
-           VALUES ($1, $2, 'ai-fx2', decode(md5('aifx2') || md5('aifx2x'), 'hex'), 'argon2id$fixture', now() + interval '1 hour', $3)`,
+           VALUES ($1, $2, 'ai-fx2', decode(md5('aifx2') || md5('aifx2x'), 'hex'), 'scrypt$x', now() + interval '1 hour', $3)`,
           [L2, BABY.paid, U.admin],
+        );
+        // Step 8: a rule row needs an analysed photo, so analyse first (no flags), share, then flag.
+        await q(
+          "INSERT INTO public.photo_ai (photo_id, model, prompt_version, schema_version, description) VALUES ($1,'m','v1','v1','{}'::jsonb)",
+          [PH.ok],
         );
         await q(
           "INSERT INTO public.shared_photos (share_link_id, photo_id, added_by) VALUES ($1,$2,'rule')",
@@ -755,10 +760,9 @@ describe.skipIf(!databaseUrl)("AI pipeline database rules (step 6)", () => {
           "INSERT INTO public.shared_photos (share_link_id, photo_id, added_by, added_by_user_id) VALUES ($1,$2,'user',$3)",
           [L2, PH.ok, U.admin],
         );
-        await q(
-          "INSERT INTO public.photo_ai (photo_id, model, prompt_version, schema_version, description, sensitive_flags) VALUES ($1,'m','v1','v1','{}'::jsonb,'{bath}')",
-          [PH.ok],
-        );
+        await q("UPDATE public.photo_ai SET sensitive_flags = '{bath}' WHERE photo_id = $1", [
+          PH.ok,
+        ]);
         const p = await one<{ is_sensitive: boolean }>(
           "SELECT is_sensitive FROM public.photos WHERE id = $1",
           [PH.ok],

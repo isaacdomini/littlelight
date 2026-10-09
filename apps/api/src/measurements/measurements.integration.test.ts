@@ -304,7 +304,11 @@ describe.skipIf(!databaseUrl)("measurements (api + db)", () => {
 
   it("no value or note ever reaches the audit log; no analysis/gps in responses", async () => {
     const m = await make({ kind: "weight", value: 3.123, unit: "kg", note: "very private note" });
-    const log = JSON.stringify(await h.audit({ baby }));
+    // Random uuids can contain "3123" by chance: look at everything but ids.
+    const log = JSON.stringify(await h.audit({ baby })).replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
+      "<id>",
+    );
     expect(log).not.toContain("very private note");
     expect(log).not.toContain("3123");
     expect(log).not.toContain("3.123");

@@ -1,4 +1,5 @@
-import { IonContent, IonItem, IonLabel, IonList, IonPage } from "@ionic/react";
+import { IonContent, IonIcon, IonPage } from "@ionic/react";
+import { chevronForward } from "ionicons/icons";
 import { useNavigate } from "react-router-dom";
 import { useSignOut } from "../../auth/useSignOut";
 import { AppHeader } from "../../components/AppHeader";
@@ -12,27 +13,27 @@ export function SettingsPage() {
     <IonPage>
       <AppHeader title={t("settings.title")} />
       <IonContent className="ion-padding">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-4" data-testid="settings">
-          <IonList inset>
-            <IonItem
-              button
-              detail
-              data-testid="settings-devices"
-              onClick={() => navigate("/settings/devices")}
-              className="min-h-11"
-            >
-              <IonLabel>{t("settings.devices")}</IonLabel>
-            </IonItem>
-            <IonItem
-              button
-              detail
-              data-testid="settings-account"
-              onClick={() => navigate("/settings/account")}
-              className="min-h-11"
-            >
-              <IonLabel>{t("settings.account")}</IonLabel>
-            </IonItem>
-          </IonList>
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6" data-testid="settings">
+          <ul className="ll-list">
+            {(
+              [
+                ["settings-devices", "/settings/devices", t("settings.devices")],
+                ["settings-account", "/settings/account", t("settings.account")],
+              ] as const
+            ).map(([testId, to, label]) => (
+              <li key={testId} className="!p-0">
+                <button
+                  type="button"
+                  data-testid={testId}
+                  onClick={() => navigate(to)}
+                  className="flex min-h-14 w-full items-center justify-between gap-3 px-4 text-left"
+                >
+                  <span>{label}</span>
+                  <IonIcon icon={chevronForward} aria-hidden className="h-5 w-5 text-muted" />
+                </button>
+              </li>
+            ))}
+          </ul>
           <Button
             variant="secondary"
             data-testid="signout-local"

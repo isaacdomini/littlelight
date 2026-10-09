@@ -8,7 +8,7 @@ export function LegalPage({ kind }: { kind: "terms" | "privacy" }) {
   return (
     <SubPage title={t(terms ? "legal.terms" : "legal.privacy")} backHref="/onboarding/consent">
       <p>{t("legal.placeholder")}</p>
-      <p className="text-sm opacity-70">
+      <p className="text-sm text-muted">
         {t("legal.version", { version: terms ? TERMS_VERSION : PRIVACY_VERSION })}
       </p>
     </SubPage>

@@ -69,18 +69,18 @@ describe("AI queue definitions (step 6)", () => {
     });
   });
 
-  it("there are exactly ten queues, one per job name", () => {
+  it("there are exactly twelve queues, one per job name", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(Object.values(JOBS).sort());
-    expect(Object.keys(QUEUES)).toHaveLength(10);
+    expect(Object.keys(QUEUES)).toHaveLength(12);
   });
 
-  it("schedules(config) adds the two AI crons and the search reconcile to the three fixed ones (6 total)", () => {
+  it("schedules(config) adds the two AI crons and the search reconcile and the share reconcile to the three fixed ones (7 total)", () => {
     const all = schedules({
       AI_FLUSH_INTERVAL_CRON: "*/10 * * * *",
       AI_POLL_INTERVAL_CRON: "*/2 * * * *",
       SEARCH_RECONCILE_CRON: "5 * * * *",
     });
-    expect(all).toHaveLength(6);
+    expect(all).toHaveLength(7);
     expect(Object.fromEntries(all)[JOBS.searchReconcile]).toBe("5 * * * *");
     expect(Object.fromEntries(all)).toMatchObject({
       [JOBS.aiFlush]: "*/10 * * * *",

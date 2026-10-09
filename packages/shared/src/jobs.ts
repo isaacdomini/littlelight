@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // pg-boss job names (queues) and payloads (docs/plans/step-4.md 2.5, docs/plans/step-5.md 2.5,
-// docs/plans/step-6.md 2.4, docs/plans/step-7.md 2.4).
+// docs/plans/step-6.md 2.4, docs/plans/step-7.md 2.4, docs/plans/step-8.md 2.4).
 // The worker owns queue creation and scheduling; the API sends `photo.ingest` and
 // `photo.reindex`. Names live here so every producer
 // and consumer refers to one constant, never a string literal. Payloads carry ids and a time
@@ -44,6 +44,17 @@ export const JOBS = {
    * version change, or by an operator.
    */
   searchBackfill: "search.backfill",
+  /**
+   * On demand (`shareApplyJobSchema`, singleton key `shareLinkId`): full auto-share sync of one
+   * link after its rule was set or changed (docs/plans/step-8.md 2.7). Sent by the api after
+   * commit; no model call.
+   */
+  shareApply: "share.apply",
+  /**
+   * Cron `SHARE_RECONCILE_CRON` (default `41 * * * *`), singleton, no payload
+   * (`shareReconcileJobSchema`): watermark sync of every auto-share rule.
+   */
+  shareReconcile: "share.reconcile",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -184,3 +195,26 @@ export const searchBackfillJobSchema = z
     message: "required for an upgrade backfill",
   });
 export type SearchBackfillJob = z.infer<typeof searchBackfillJobSchema>;
+
+/**
+ * `share.apply` reasons: `rule_changed` (the api, after a rule was created or edited) or
+ * `manual` (operator / `run-job`).
+ */
+export const SHARE_APPLY_REASONS = ["rule_changed", "manual"] as const;
+export const shareApplyReasonSchema = z.enum(SHARE_APPLY_REASONS);
+export type ShareApplyReason = z.infer<typeof shareApplyReasonSchema>;
+
+/**
+ * `share.apply` payload: the link id and a reason only (strict: never a token, passcode, link
+ * name or tag). The worker re-reads the rule at run time and runs as `pipeline`, whose rights
+ * (and `shared_photos_gate`) can never add a sensitive, unanalysed or free-tier photo.
+ */
+export const shareApplyJobSchema = z.strictObject({
+  shareLinkId: z.uuid(),
+  reason: shareApplyReasonSchema,
+});
+export type ShareApplyJob = z.infer<typeof shareApplyJobSchema>;
+
+/** `share.reconcile` payload: none (cron ticks send no data; handlers parse `job.data ?? {}`). */
+export const shareReconcileJobSchema = z.strictObject({});
+export type ShareReconcileJob = z.infer<typeof shareReconcileJobSchema>;

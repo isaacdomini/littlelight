@@ -33,8 +33,12 @@ export const authenticatedClaimsSchema = z.looseObject({
 export type AuthenticatedClaims = z.infer<typeof authenticatedClaimsSchema>;
 
 /**
- * A share-link viewer (no account). Minted by the API in step 8 and signed with `JWT_SECRET`.
- * Unknown keys are stripped: a viewer token carries nothing else into SQL (in particular no `sub`).
+ * A share-link viewer (no account). Minted by the API in step 8 (docs/plans/step-8.md 2.2),
+ * HS256 with a viewer key HKDF-derived from `JWT_SECRET` (never GoTrue's key), `aud` =
+ * `VIEWER_JWT_AUDIENCE`; `jti` = the `viewer_sessions.id` that `viewer_session_check()` re-checks
+ * on every request; `exp` = the link's expiry. Unknown keys are stripped: a viewer token carries
+ * nothing else into SQL (in particular no `sub`). The viewer routes verify with the stricter
+ * `viewerSessionClaimsSchema`.
  */
 export const viewerClaimsSchema = z.object({
   role: z.literal("viewer"),
@@ -44,6 +48,17 @@ export const viewerClaimsSchema = z.object({
   jti: z.string().min(1).optional(),
 });
 export type ViewerClaims = z.infer<typeof viewerClaimsSchema>;
+
+/**
+ * A viewer JWT as the viewer routes accept it (step 8): `jti` (the `viewer_sessions` row) and
+ * `iat` are required, so a token without a server-side session can never authenticate. Still
+ * strips unknown keys; parse the result again with `jwtClaimsSchema` (`claimsToSql`) before SQL.
+ */
+export const viewerSessionClaimsSchema = viewerClaimsSchema.extend({
+  iat: z.number().int().nonnegative(),
+  jti: z.uuid(),
+});
+export type ViewerSessionClaims = z.infer<typeof viewerSessionClaimsSchema>;
 
 /** Either claim set, discriminated by `role`. */
 export const jwtClaimsSchema = z.discriminatedUnion("role", [

@@ -1,4 +1,6 @@
+import { IonIcon } from "@ionic/react";
 import type { SearchFacetsResponse } from "@littlelight/shared";
+import { chevronDown } from "ionicons/icons";
 import { useState } from "react";
 import { t } from "../../i18n";
 import type { SearchParams } from "../../lib/queries/search";
@@ -68,12 +70,10 @@ function RangeEditor({
     date ? params.dateFrom : params.ageFrom ? toMonths(params.ageFrom) : "",
   );
   const [to, setTo] = useState(date ? params.dateTo : params.ageTo ? toMonths(params.ageTo) : "");
-  const field =
-    "min-h-11 rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)]";
   const invalid = from !== "" && to !== "" && (date ? from > to : Number(from) > Number(to));
   return (
     <form
-      className="flex flex-wrap items-end gap-3"
+      className="ll-card flex flex-wrap items-end gap-3 !p-3"
       onSubmit={(e) => {
         e.preventDefault();
         if (invalid) return;
@@ -88,10 +88,9 @@ function RangeEditor({
         );
       }}
     >
-      <label className="flex flex-col gap-1 text-sm">
+      <label className="ll-label flex min-w-0 flex-1 flex-col gap-1.5">
         {date ? t("search.from") : t("search.ageFrom")}
         <input
-          className={field}
           data-testid={`${date ? "date" : "age"}-from`}
           type={date ? "date" : "number"}
           min={date ? facets?.dateRange?.from : 0}
@@ -101,10 +100,9 @@ function RangeEditor({
           onChange={(e) => setFrom(e.target.value)}
         />
       </label>
-      <label className="flex flex-col gap-1 text-sm">
+      <label className="ll-label flex min-w-0 flex-1 flex-col gap-1.5">
         {date ? t("search.to") : t("search.ageTo")}
         <input
-          className={field}
           data-testid={`${date ? "date" : "age"}-to`}
           type={date ? "date" : "number"}
           min={date ? facets?.dateRange?.from : 0}
@@ -171,33 +169,41 @@ export function FilterChips({
   return (
     <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
       <legend className="sr-only">{t("search.filters")}</legend>
-      <ul className="flex flex-wrap gap-2">
+      <ul className="ll-chips ll-chips-scroll">
         {CHIPS.map((chip) => {
           const value = summary(chip, params, facets);
           const kind = t(`search.chip.${chip}`);
           return (
             <li key={chip} className="flex">
-              <button
-                type="button"
-                data-testid={`chip-${chip}`}
-                aria-expanded={openChip === chip}
-                aria-pressed={value !== null}
-                onClick={() => setOpenChip(openChip === chip ? null : chip)}
-                className={`min-h-11 border px-3 text-sm ${value !== null ? "rounded-l-full border-[var(--ion-color-primary)] bg-[var(--ion-color-primary)] text-[var(--ion-color-primary-contrast)]" : "rounded-full border-gray-500/50"}`}
-              >
-                {value !== null ? t("search.chip.value", { kind, value }) : kind}
-              </button>
-              {value !== null ? (
+              <span className={value !== null ? "ll-chip-split" : "contents"}>
                 <button
                   type="button"
-                  data-testid={`chip-remove-${chip}`}
-                  aria-label={t("search.chip.remove", { kind })}
-                  onClick={() => onChange(clearChip(chip, params))}
-                  className="min-h-11 min-w-11 rounded-r-full border border-[var(--ion-color-primary)] px-2 text-sm"
+                  data-testid={`chip-${chip}`}
+                  aria-expanded={openChip === chip}
+                  aria-pressed={value !== null}
+                  onClick={() => setOpenChip(openChip === chip ? null : chip)}
+                  className="ll-chip"
                 >
-                  ×
+                  {value !== null ? t("search.chip.value", { kind, value }) : kind}
+                  {value === null ? (
+                    <IonIcon aria-hidden icon={chevronDown} className="h-3.5 w-3.5 text-muted" />
+                  ) : null}
                 </button>
-              ) : null}
+                {value !== null ? (
+                  <button
+                    type="button"
+                    data-testid={`chip-remove-${chip}`}
+                    aria-label={t("search.chip.remove", { kind })}
+                    aria-pressed="true"
+                    onClick={() => onChange(clearChip(chip, params))}
+                    className="ll-chip"
+                  >
+                    <span aria-hidden className="text-lg leading-none">
+                      ×
+                    </span>
+                  </button>
+                ) : null}
+              </span>
             </li>
           );
         })}
@@ -214,9 +220,9 @@ export function FilterChips({
           }}
         />
       ) : openChip ? (
-        <ul className="flex max-h-40 flex-wrap gap-2 overflow-y-auto" data-testid="chip-options">
+        <ul className="ll-chips max-h-44 overflow-y-auto" data-testid="chip-options">
           {options(openChip).length === 0 ? (
-            <li className="text-sm opacity-70">{t("search.noOptions")}</li>
+            <li className="text-sm text-muted">{t("search.noOptions")}</li>
           ) : (
             options(openChip).map((o) => (
               <li key={o.key}>
@@ -227,7 +233,7 @@ export function FilterChips({
                     onChange(o.apply());
                     setOpenChip(null);
                   }}
-                  className="min-h-11 rounded-full border border-gray-500/50 px-3 text-sm"
+                  className="ll-chip"
                 >
                   {o.label}
                 </button>

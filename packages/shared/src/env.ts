@@ -312,3 +312,32 @@ export const chatEnvSchema = z.object({
   ),
 });
 export type ChatEnv = z.infer<typeof chatEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Sharing (docs/plans/step-8.md 2.4, 2.11; PRD "Privacy and child safety": signed URLs ≤ 1 h,
+// scoped to one object). Read by the api (media URL TTL) and the worker (reconcile cron). No
+// secret here: viewer-JWT and IP-hash keys are HKDF-derived from `JWT_SECRET`.
+// ---------------------------------------------------------------------------------------------
+
+/** Defaults of `shareEnvSchema`. */
+export const SHARE_DEFAULTS = {
+  /**
+   * Lifetime of viewer `thumb`/`display` URLs (also capped at the link's expiry), so a revoked
+   * link's already-issued media URLs die within minutes (FR-9.7, D6). Parents keep 1 h.
+   */
+  SHARE_MEDIA_URL_TTL_SEC: 300,
+  /** Hourly `share.reconcile`. */
+  SHARE_RECONCILE_CRON: "41 * * * *",
+} as const;
+
+const SH = SHARE_DEFAULTS;
+
+/** Share-link settings (api: `SHARE_MEDIA_URL_TTL_SEC`; worker: `SHARE_RECONCILE_CRON`). */
+export const shareEnvSchema = z.object({
+  SHARE_MEDIA_URL_TTL_SEC: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(30).max(900).default(SH.SHARE_MEDIA_URL_TTL_SEC),
+  ),
+  SHARE_RECONCILE_CRON: z.preprocess(emptyAsUndefined, cronSchema.default(SH.SHARE_RECONCILE_CRON)),
+});
+export type ShareEnv = z.infer<typeof shareEnvSchema>;

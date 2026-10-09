@@ -150,10 +150,10 @@ export function TimelineGrid(props: TimelineGridProps) {
           return (
             <div
               data-testid={`timeline-group-${g.key}`}
-              className="flex items-baseline justify-between bg-[var(--ion-background-color)] px-2 py-2"
+              className="flex items-baseline justify-between bg-bg px-4 py-2"
             >
-              <h2 className="text-base font-semibold">{ageGroupText(g.key)}</h2>
-              <span className="text-xs opacity-70">{tn("timeline.groupCount", total)}</span>
+              <h2 className="text-xs font-semibold text-muted">{ageGroupText(g.key)}</h2>
+              <span className="text-xs text-muted">{tn("timeline.groupCount", total)}</span>
             </div>
           );
         }}
@@ -162,7 +162,7 @@ export function TimelineGrid(props: TimelineGridProps) {
           if (!row) return <div className="h-1" />;
           return (
             <div
-              className="grid gap-1 px-1 pb-1 [contain:layout_paint_style]"
+              className="grid gap-0.5 pb-0.5 [contain:layout_paint_style]"
               style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
               data-group={groups[gi]?.key}
             >

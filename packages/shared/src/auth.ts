@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { aiOverrideFieldSchema } from "./ai-description";
 import { aiUsageMonthSchema } from "./api/ai";
-import { aiSpendKindSchema, babyRoleSchema, measurementKindSchema, planSchema } from "./db-enums";
+import { SHARE_LINK_MAX_TTL_HOURS } from "./constants";
+import {
+  aiSpendKindSchema,
+  babyRoleSchema,
+  measurementKindSchema,
+  planSchema,
+  shareRuleModeSchema,
+} from "./db-enums";
 import { uploadFileErrorSchema } from "./upload";
 
 // Auth constants and helpers shared by the API and the SPA (docs/plans/step-3.md 2.2, 2.6, 2.9).
@@ -21,6 +28,20 @@ export const AUTH_COOKIE_REFRESH = "ll_refresh";
 export const CLIENT_HEADER = "x-littlelight-client";
 export const clientKindSchema = z.enum(["web", "native"]);
 export type ClientKind = z.infer<typeof clientKindSchema>;
+
+/**
+ * Share-link viewer session cookie (docs/plans/step-8.md 2.2): a short HS256 JWT (`role=viewer`,
+ * `share_link_id`, `jti` = `viewer_sessions.id`, `exp` = the link's expiry) signed with a key
+ * HKDF-derived from `JWT_SECRET` (never GoTrue's key). `HttpOnly; SameSite=Lax;
+ * Path=/api/share; Max-Age = exp − now` (+ Secure in production). Its own name and path: the
+ * browser never sends it to a parent route (`/api/babies/*`, chat, search), and the parent
+ * cookies' paths never make a parent session reach the viewer routes as a viewer.
+ */
+export const VIEWER_COOKIE = "ll_viewer";
+/** Browser-facing path of every viewer route (nginx/Vite strip `/api`; the API serves `/share/*`). */
+export const VIEWER_COOKIE_PATH = "/api/share";
+/** `aud` of viewer JWTs; `iss` is `${PUBLIC_URL}${VIEWER_COOKIE_PATH}`. GoTrue tokens never carry it. */
+export const VIEWER_JWT_AUDIENCE = "littlelight-viewer";
 
 /** SPA route that receives magic links (`#token_hash=…&type=email`) and OAuth returns (`?code=…`). */
 export const SPA_AUTH_CALLBACK_PATH = "/signin/callback";
@@ -135,8 +156,8 @@ export function userAgentLabel(ua: string | null | undefined): string {
 /**
  * `audit_log.event` values: step 3 (auth, invites, members, babies, account), step 4 (uploads,
  * photo moderation, purge, safety), step 5 (details, milestones, measurements), step 6 (AI
- * overrides, AI retry, plan changes, AI budget) and step 7 (chat history cleared). Step 8 appends
- * share-link events.
+ * overrides, AI retry, plan changes, AI budget), step 7 (chat history cleared) and step 8
+ * (share links).
  */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
@@ -182,9 +203,40 @@ export const AUDIT_EVENTS = [
   "ai.budget_exceeded",
   /** A user cleared their chat history for a baby (FR-7.6); no metadata (the row's `baby_id`). */
   "chat.cleared",
+  // Step 8 (docs/plans/step-8.md 2.4). The row's `share_link_id` names the link; metadata never
+  // carries the token, its hash, the passcode, the link name or rule tags.
+  /** Metadata `{hours, has_passcode, allow_download, mode?}`. */
+  "share_link.created",
+  /** Metadata `{fields}`: which settings changed, never their values. */
+  "share_link.updated",
+  /** Metadata `{hours}`. */
+  "share_link.renewed",
+  /** New token; every open viewer session ended. No metadata. */
+  "share_link.regenerated",
+  "share_link.revoked",
+  /** Written before the delete (the FK then sets `share_link_id` NULL). */
+  "share_link.deleted",
+  /** Metadata `{mode}`. */
+  "share_link.rule_updated",
+  "share_link.rule_removed",
+  /** Metadata `{count}`. */
+  "share_link.photos_added",
+  /** Metadata `{count}`. */
+  "share_link.photos_removed",
+  /** An admin released a sensitive photo to this link's viewers; metadata `{photo_id}` (or `{count}`). */
+  "share_link.sensitive_shown",
+  /** Metadata `{photo_id}`. */
+  "share_link.sensitive_hidden",
+  /** Per-link passcode lock reached (written by the token exchange, `actor_user_id` NULL). */
+  "share_link.passcode_locked",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
+
+/** Share-link settings named by `share_link.updated` metadata `fields` (never their values). */
+export const SHARE_LINK_AUDIT_FIELDS = ["name", "allow_download", "passcode", "ttl_hours"] as const;
+export const shareLinkAuditFieldSchema = z.enum(SHARE_LINK_AUDIT_FIELDS);
+export type ShareLinkAuditField = z.infer<typeof shareLinkAuditFieldSchema>;
 
 /**
  * `audit_log.metadata`. Rule: only these keys, ever. Never emails, IPs, tokens, codes, GPS,
@@ -225,5 +277,15 @@ export const auditMetadataSchema = z.strictObject({
   field: aiOverrideFieldSchema.optional(),
   /** `ai.budget_exceeded`: UTC month `YYYY-MM` (with `kind` when raised by chat/search, step 7). */
   month: aiUsageMonthSchema.optional(),
+  /** `share_link.created` / `share_link.rule_updated`: the auto-share rule mode, never its tags. */
+  mode: shareRuleModeSchema.optional(),
+  /** `share_link.created`: the download setting. */
+  allow_download: z.boolean().optional(),
+  /** `share_link.created`: whether a passcode was set (never the passcode or its hash). */
+  has_passcode: z.boolean().optional(),
+  /** `share_link.created` / `share_link.renewed`: validity in hours. */
+  hours: z.number().int().min(1).max(SHARE_LINK_MAX_TTL_HOURS).optional(),
+  /** `share_link.updated`: which settings changed. */
+  fields: z.array(shareLinkAuditFieldSchema).min(1).max(SHARE_LINK_AUDIT_FIELDS.length).optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

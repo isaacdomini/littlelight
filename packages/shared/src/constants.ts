@@ -28,7 +28,7 @@ export const DEFAULT_EMBED_MODEL = "text-embedding-3-small";
  */
 export const AI_COST_PER_PHOTO_ESTIMATE_USD = 0.00017;
 
-/** Share links expire after 24 hours by default. */
+/** Share links expire after 24 hours by default (`share_links.expires_at` default, CLAUDE.md). */
 export const SHARE_LINK_DEFAULT_TTL_HOURS = 24;
 
 /** Free-tier photo cap per baby space. */
@@ -150,6 +150,11 @@ export const DEMO_IDS = {
   baby: "00000000-0000-4000-8000-000000000100",
   /** "Grandparents" share link. */
   shareLink: "00000000-0000-4000-8000-000000000200",
+  /**
+   * Plaintext token of the "Grandparents" link (dev seed only; the database stores only its
+   * SHA-256). Real tokens are 22 base64url chars; this one is longer but fits `shareTokenSchema`.
+   */
+  shareToken: "demo-grandparents-share-token",
   /** The 12 seeded photos, `…-000000000301` through `…-000000000312`. */
   photos: [
     "00000000-0000-4000-8000-000000000301",
@@ -270,3 +275,62 @@ export const SEARCH_SEED_IDS = {
     return `00000000-0000-4000-8000-03${String(n).padStart(10, "0")}`;
   },
 } as const;
+
+// ---------------------------------------------------------------------------------------------
+// Sharing (docs/plans/step-8.md 2.2, 2.4; PRD "FR-9 Sharing", "Accounts and authentication →
+// Share-link viewers (no account)", "Security": tokens ≥ 128-bit random and stored hashed,
+// passcode attempts 5 / 15 min per IP + token). Env-tunable settings live in `SHARE_DEFAULTS`
+// (env.ts); these are fixed. Several are mirrored by database triggers (`share_links_shape`,
+// `share_links_cap`, `share_rules_shape`): change both together.
+// ---------------------------------------------------------------------------------------------
+
+/** SPA route prefix of share links: `${PUBLIC_URL}${SHARE_PATH}/${token}`. */
+export const SHARE_PATH = "/s";
+/** Random bytes per share token (128 bits, PRD "token is 128-bit random"). */
+export const SHARE_TOKEN_BYTES = 16;
+/** Length of a freshly minted token: 16 bytes base64url without padding. */
+export const SHARE_TOKEN_LENGTH = 22;
+/** Longest token accepted on input (the dev seed token is 29 chars). */
+export const SHARE_TOKEN_MAX_LENGTH = 64;
+
+/** Expiry choices offered by the UI, in hours: 24 h (default), 3 days, 7 days, 30 days (D2). */
+export const SHARE_LINK_TTL_CHOICES_HOURS = [24, 72, 168, 720] as const;
+export type ShareLinkTtlChoiceHours = (typeof SHARE_LINK_TTL_CHOICES_HOURS)[number];
+/** Longest expiry: 30 days (`share_links.ttl_hours` 1..720; `expires_at <= now() + 721 h`). */
+export const SHARE_LINK_MAX_TTL_HOURS = 720;
+/** Links per baby (`share_links_cap` trigger: "share link limit reached" ⇒ 409). */
+export const SHARE_LINKS_PER_BABY_MAX = 20;
+/** `share_links.name` length (trimmed). */
+export const SHARE_LINK_NAME_MAX_CHARS = 80;
+
+/** Optional passcode: exactly this many ASCII digits. */
+export const SHARE_PASSCODE_LENGTH = 6;
+/** PRD: failed passcode attempts per (IP, link) per `SHARE_PASSCODE_IP_WINDOW_MIN` ⇒ 429 `rate_limited`. */
+export const SHARE_PASSCODE_FAILURES_PER_IP = 5;
+export const SHARE_PASSCODE_IP_WINDOW_MIN = 15;
+/** Failed attempts per link (any IP) per `SHARE_PASSCODE_LINK_WINDOW_MIN` ⇒ 429 `passcode_locked` (D8). */
+export const SHARE_PASSCODE_FAILURES_PER_LINK = 20;
+export const SHARE_PASSCODE_LINK_WINDOW_MIN = 60;
+/** Token exchanges (`POST /share/session`) per IP per hour (in-memory throttle). */
+export const SHARE_EXCHANGES_PER_IP_PER_HOUR = 120;
+
+/** A viewer session idle this long starts a new "visit" (`share_links.view_count`, FR-9.8). */
+export const SHARE_VISIT_GAP_MIN = 30;
+
+/** Include / exclude tags per auto-share rule (`share_rules_shape`). */
+export const SHARE_RULE_TAGS_MAX = 20;
+/** Characters per rule tag (equals the longest tag `photo_search.tags` keeps). */
+export const SHARE_RULE_TAG_MAX_CHARS = 60;
+
+/** Default and maximum `limit` of `GET /share/photos`. */
+export const SHARE_VIEWER_PAGE_SIZE = 100;
+export const SHARE_VIEWER_PAGE_MAX = 200;
+/** Ids per `POST /share/photos/urls`. */
+export const SHARE_VIEWER_URLS_MAX = 200;
+/** Lifetime of a viewer download URL (the `display` derivative as an attachment). */
+export const SHARE_DOWNLOAD_URL_TTL_SEC = 60;
+/**
+ * The only derivative kinds a viewer is ever handed a URL for. Downloads are `display` (1600 px,
+ * metadata-free), never the original (D9).
+ */
+export const SHARE_VIEWER_MEDIA_KINDS = ["thumb", "display"] as const;

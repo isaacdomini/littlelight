@@ -2,9 +2,6 @@ import { PHOTO_DETAILS_LIMITS } from "@littlelight/shared";
 import { useState } from "react";
 import { t } from "../../i18n";
 
-const fieldClass =
-  "min-h-11 w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)] outline-none focus:border-[var(--ion-color-primary)]";
-
 /** Normalizes a typed name (trim, max length). */
 export function cleanPerson(raw: string): string {
   return raw.trim().slice(0, PHOTO_DETAILS_LIMITS.personName);
@@ -53,23 +50,19 @@ export function PeopleInput({
   };
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-sm font-medium" htmlFor={inputTestId}>
+      <label className="ll-label" htmlFor={inputTestId}>
         {label}
       </label>
       {value.length > 0 ? (
-        <ul className="flex flex-wrap gap-2">
+        <ul className="ll-chips">
           {value.map((name) => (
-            <li
-              key={name}
-              data-testid={`${chipTestIdPrefix}-${name}`}
-              className="flex items-center gap-1 rounded-full border border-gray-500/50 py-0.5 pl-3 pr-1 text-sm"
-            >
+            <li key={name} data-testid={`${chipTestIdPrefix}-${name}`} className="ll-chip !pr-1">
               <span>{name}</span>
               <button
                 type="button"
                 data-testid={`${chipTestIdPrefix}-remove-${name}`}
                 aria-label={t("details.removePerson", { name })}
-                className="flex h-11 w-11 items-center justify-center rounded-full"
+                className="-my-[6px] flex h-11 w-9 items-center justify-center rounded-full text-lg text-muted"
                 onClick={() => onChange(value.filter((x) => x !== name))}
               >
                 ×
@@ -81,7 +74,6 @@ export function PeopleInput({
       <input
         id={inputTestId}
         data-testid={inputTestId}
-        className={fieldClass}
         value={draft}
         disabled={full}
         maxLength={PHOTO_DETAILS_LIMITS.personName}
@@ -100,7 +92,7 @@ export function PeopleInput({
         onBlur={() => commit(draft)}
       />
       {full ? (
-        <p className="text-sm opacity-70">
+        <p className="text-sm text-muted">
           {t("details.peopleLimit", { max: PHOTO_DETAILS_LIMITS.people })}
         </p>
       ) : null}

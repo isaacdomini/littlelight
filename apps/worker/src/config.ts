@@ -8,6 +8,7 @@ import {
   logEnvSchema,
   s3EnvSchema,
   searchEnvSchema,
+  shareEnvSchema,
 } from "@littlelight/shared";
 import { z } from "zod";
 
@@ -23,12 +24,16 @@ import { z } from "zod";
 // `createVisionDescriber` so a missing key never fails worker boot. Step 7 adds the search
 // indexer settings (`searchEnvSchema`: reconcile cron, embedding batch; docs/plans/step-7.md 2.7)
 // and one AI-env guard that DOES fail boot: `EMBED_DIMS` must equal the `photo_search.embedding`
-// column width (1024), or every upsert would fail.
+// column width (1024), or every upsert would fail. Step 8 adds the worker's part of
+// `shareEnvSchema`: `SHARE_RECONCILE_CRON` (docs/plans/step-8.md 2.8; `SHARE_MEDIA_URL_TTL_SEC` is
+// the api's and never fails worker boot).
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
   HEARTBEAT_STALE_MS: z.coerce.number().int().min(1_000).default(30_000),
 });
+
+export const workerShareEnvSchema = shareEnvSchema.pick({ SHARE_RECONCILE_CRON: true });
 
 export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof databaseEnvSchema> &
@@ -38,6 +43,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof ingestEnvSchema> &
   z.output<typeof aiPipelineEnvSchema> &
   z.output<typeof searchEnvSchema> &
+  z.output<typeof workerShareEnvSchema> &
   z.output<typeof logEnvSchema>;
 
 /** Env needed by `healthcheck.ts` only (no S3/JWT/encryption key: it reads the heartbeat row). */
@@ -108,6 +114,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     ingestEnvSchema,
     aiPipelineEnvSchema,
     searchEnvSchema,
+    workerShareEnvSchema,
     embedDimsGuardSchema,
     logEnvSchema,
   ]);

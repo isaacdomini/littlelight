@@ -63,36 +63,8 @@ export function WelcomePage() {
   }
 
   return (
-    <FlowPage title={t("welcome.title")} subtitle={t("welcome.subtitle")} testId="welcome">
+    <FlowPage title={t("welcome.title")} subtitle={t("welcome.subtitle")} testId="welcome" brand>
       {pendingInvite.get() ? <Message kind="info">{t("welcome.invitePending")}</Message> : null}
-      {providers?.apple || providers?.google ? (
-        <div className="flex flex-col gap-3">
-          {providers.apple ? (
-            <Button
-              data-testid="welcome-apple"
-              onClick={() =>
-                void startOAuth("apple").catch(() => setError(t("welcome.oauthFailed")))
-              }
-            >
-              {t("welcome.apple")}
-            </Button>
-          ) : null}
-          {providers.google ? (
-            <Button
-              variant="secondary"
-              data-testid="welcome-google"
-              onClick={() =>
-                void startOAuth("google").catch(() => setError(t("welcome.oauthFailed")))
-              }
-            >
-              {t("welcome.google")}
-            </Button>
-          ) : null}
-          <p className="text-center text-sm opacity-70" aria-hidden>
-            {t("welcome.or")}
-          </p>
-        </div>
-      ) : null}
       <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-4" noValidate>
         <TextField
           data-testid="welcome-email"
@@ -115,6 +87,37 @@ export function WelcomePage() {
           {t("welcome.continue")}
         </Button>
       </form>
+      {providers?.apple || providers?.google ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3 text-muted" aria-hidden>
+            <span className="h-px flex-1 bg-line" />
+            <span className="text-sm">{t("welcome.or")}</span>
+            <span className="h-px flex-1 bg-line" />
+          </div>
+          {providers.apple ? (
+            <Button
+              variant="secondary"
+              data-testid="welcome-apple"
+              onClick={() =>
+                void startOAuth("apple").catch(() => setError(t("welcome.oauthFailed")))
+              }
+            >
+              {t("welcome.apple")}
+            </Button>
+          ) : null}
+          {providers.google ? (
+            <Button
+              variant="secondary"
+              data-testid="welcome-google"
+              onClick={() =>
+                void startOAuth("google").catch(() => setError(t("welcome.oauthFailed")))
+              }
+            >
+              {t("welcome.google")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </FlowPage>
   );
 }

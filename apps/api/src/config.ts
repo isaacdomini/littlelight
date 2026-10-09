@@ -12,8 +12,11 @@ import {
   mailEnvSchema,
   SEARCH_DEFAULTS,
   type SearchEnv,
+  SHARE_DEFAULTS,
+  type ShareEnv,
   s3EnvSchema,
   searchEnvSchema,
+  shareEnvSchema,
 } from "@littlelight/shared";
 import { z } from "zod";
 
@@ -30,6 +33,8 @@ import { z } from "zod";
 // `@littlelight/ai`'s factories (one schema rules), so the key never sits in `app.config`. The
 // one AI setting checked here is `EMBED_DIMS`, which must equal the `photo_search.embedding`
 // column width (1024): anything else fails boot.
+// Step 8 (docs/plans/step-8.md 2.9) adds `SHARE_MEDIA_URL_TTL_SEC` (viewer media URL lifetime,
+// 30..900 s, default 300); the worker reads `SHARE_RECONCILE_CRON` from the same shared schema.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -42,6 +47,10 @@ const serverEnvSchema = z.object({
  * reads no provider key and no other AI setting.
  */
 const aiApiEnvSchema = aiPipelineEnvSchema.pick({ AI_BABY_MONTHLY_BUDGET_USD: true });
+
+/** Step 8: the API reads only the viewer media URL lifetime from `shareEnvSchema`. */
+const shareApiEnvSchema = shareEnvSchema.pick({ SHARE_MEDIA_URL_TTL_SEC: true });
+export type ShareApiEnv = Pick<ShareEnv, "SHARE_MEDIA_URL_TTL_SEC">;
 
 /**
  * `EMBED_DIMS` (read by `@littlelight/ai`, default 1024) must equal the `vector(1024)` column.
@@ -69,7 +78,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   // Optional in the type (always set by `loadConfig`); read through `searchSettings` /
   // `chatSettings`, which fill the shared defaults.
   Partial<SearchEnv> &
-  Partial<ChatEnv>;
+  Partial<ChatEnv> &
+  // Optional in the type (always set by `loadConfig`); read through `shareSettings`.
+  Partial<ShareApiEnv>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -110,6 +121,7 @@ export function loadConfig(
     aiApiEnvSchema,
     searchEnvSchema,
     chatEnvSchema,
+    shareApiEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];
@@ -161,5 +173,13 @@ export function chatSettings(config: Partial<ChatEnv>): ChatEnv {
     ...(config.CHAT_FAST_PATH_MIN_SIMILARITY !== undefined
       ? { CHAT_FAST_PATH_MIN_SIMILARITY: config.CHAT_FAST_PATH_MIN_SIMILARITY }
       : {}),
+  };
+}
+
+/** Share settings with the shared defaults filled in (`shareEnvSchema`, step-8 plan 2.9). */
+export function shareSettings(config: Partial<ShareApiEnv>): ShareApiEnv {
+  return {
+    SHARE_MEDIA_URL_TTL_SEC:
+      config.SHARE_MEDIA_URL_TTL_SEC ?? SHARE_DEFAULTS.SHARE_MEDIA_URL_TTL_SEC,
   };
 }

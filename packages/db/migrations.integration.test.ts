@@ -11,7 +11,7 @@ import { databaseUrl, env } from "./test/harness";
 // auth.users is created by GoTrue in the dev stack; on a bare pgvector (CI) the harness stubs it.
 // WARNING: reverts every migration, so only point it at a disposable database.
 
-const EXPECTED_MIGRATIONS = 14;
+const EXPECTED_MIGRATIONS = 15;
 const quiet = () => undefined;
 
 const APP_TABLES = [
@@ -36,7 +36,9 @@ const APP_TABLES = [
   "photos",
   "profiles",
   "share_links",
+  "share_passcode_failures",
   "share_rules",
+  "shared_photo_exclusions",
   "shared_photos",
   "upload_files",
   "upload_sessions",
@@ -102,9 +104,9 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
       "SELECT DISTINCT tablename FROM pg_policies WHERE schemaname = 'public'",
     );
     const set = new Set(withPolicy.map((r) => r.tablename));
-    // chat_turns is deny-all by design (FORCE RLS, no policy, no grant but service_role): it is
+    // chat_turns is deny-all by design (and share_passcode_failures, step 8) (FORCE RLS, no policy, no grant but service_role): it is
     // reached only through SECURITY DEFINER functions (search-chat.integration.test.ts).
-    const denyAll = new Set(["chat_turns"]);
+    const denyAll = new Set(["chat_turns", "share_passcode_failures"]);
     for (const table of APP_TABLES) {
       if (denyAll.has(table)) {
         expect(set.has(table), `${table} must stay policy-less (deny-all)`).toBe(false);

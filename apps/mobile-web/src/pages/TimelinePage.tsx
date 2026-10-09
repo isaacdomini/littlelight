@@ -1,6 +1,7 @@
-import { IonAlert, IonContent, IonPage, IonSpinner } from "@ionic/react";
+import { IonAlert, IonContent, IonPage } from "@ionic/react";
 import type { PhotoGroup, PhotoSummary, PhotosView } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import { imagesOutline } from "ionicons/icons";
 import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
@@ -11,10 +12,11 @@ import { Panes, useBreakpoint, useOnline } from "../components/layout/Panes";
 import { FilterChips } from "../components/search/FilterChips";
 import { SearchBar } from "../components/search/SearchBar";
 import { SearchResults } from "../components/search/SearchResults";
+import { AddToShareSheet } from "../components/share/AddToShareSheet";
 import { BatchDetailsSheet } from "../components/timeline/BatchDetailsSheet";
 import { Scrubber } from "../components/timeline/Scrubber";
 import { TimelineGrid } from "../components/timeline/TimelineGrid";
-import { Button, Message } from "../components/ui";
+import { Button, EmptyState, GridSkeleton, Message, Segmented } from "../components/ui";
 import { PhotoViewer, ViewerEmpty } from "../components/viewer/PhotoViewer";
 import { useViewerParam } from "../components/viewer/useViewerParam";
 import { t, tn } from "../i18n";
@@ -117,6 +119,7 @@ export function TimelinePage() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -219,14 +222,15 @@ export function TimelinePage() {
       onDragLeave={() => setDragging(false)}
       onDrop={onDrop}
     >
-      <div className="flex flex-col gap-2 px-3 pb-1 pt-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm opacity-80" data-testid="timeline-total" aria-live="polite">
+      <div className="flex flex-col gap-3 px-4 pb-2 pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-muted" data-testid="timeline-total" aria-live="polite">
             {baby ? tn("timeline.photoCount", total) : ""}
           </p>
           {photos.length > 0 && !searching ? (
             <Button
-              variant={selectMode ? "primary" : "secondary"}
+              variant={selectMode ? "link" : "secondary"}
+              size="sm"
               data-testid="select-mode"
               aria-pressed={selectMode}
               onClick={() => (selectMode ? leaveSelectMode() : setSelectMode(true))}
@@ -249,7 +253,8 @@ export function TimelinePage() {
             {searching ? (
               <Button
                 variant="link"
-                className="self-start"
+                size="sm"
+                className="self-start !px-0"
                 data-testid="search-clear-all"
                 onClick={() => setSearchParams(EMPTY_SEARCH)}
               >
@@ -260,46 +265,51 @@ export function TimelinePage() {
         ) : null}
 
         {isAdmin && !searching ? (
-          <div role="tablist" className="flex flex-wrap gap-2">
-            <Button
+          <Segmented label={t("timeline.title")}>
+            <button
+              type="button"
               role="tab"
               aria-selected={view === "album"}
-              variant={view === "album" ? "primary" : "secondary"}
               data-testid="album-segment"
               onClick={() => changeView("album")}
             >
               {t("timeline.segmentAll")}
-            </Button>
-            <Button
+            </button>
+            <button
+              type="button"
               role="tab"
               aria-selected={view === "pending"}
-              variant={view === "pending" ? "primary" : "secondary"}
               data-testid="pending-segment"
               onClick={() => changeView("pending")}
             >
               {t("timeline.segmentPending", { n: pendingCount })}
-            </Button>
-            <Button
+            </button>
+            <button
+              type="button"
               role="tab"
               aria-selected={view === "trash"}
-              variant={view === "trash" ? "primary" : "secondary"}
               data-testid="trash-segment"
               onClick={() => changeView("trash")}
             >
               {t("timeline.trash")}
-            </Button>
-          </div>
+            </button>
+          </Segmented>
         ) : null}
 
         {filtered ? (
           <div
-            className="flex items-center justify-between gap-2 rounded-lg border border-gray-500/40 px-3"
+            className="ll-callout flex items-center justify-between gap-2 !py-1"
             data-testid="timeline-filter"
           >
             <span className="text-sm">
               {t("timeline.filteredByMilestone", { name: filterName ?? "…" })}
             </span>
-            <Button variant="link" data-testid="timeline-clear-filter" onClick={clearFilter}>
+            <Button
+              variant="link"
+              size="sm"
+              data-testid="timeline-clear-filter"
+              onClick={clearFilter}
+            >
               {t("timeline.clearFilter")}
             </Button>
           </div>
@@ -313,7 +323,18 @@ export function TimelinePage() {
         {notice ? <Message kind="info">{notice}</Message> : null}
         {actionError ? <Message>{actionError}</Message> : null}
         {timeline.isError ? <Message>{t("timeline.loadError")}</Message> : null}
-        {!baby ? <p className="opacity-70">{t("timeline.noBaby")}</p> : null}
+        {!baby ? (
+          <EmptyState
+            icon={imagesOutline}
+            action={
+              <Button onClick={() => navigate("/onboarding/baby?another=1")}>
+                {t("header.addBaby")}
+              </Button>
+            }
+          >
+            {t("timeline.noBaby")}
+          </EmptyState>
+        ) : null}
       </div>
 
       {searching ? (
@@ -328,14 +349,23 @@ export function TimelinePage() {
       ) : null}
 
       {empty && !searching ? (
-        <p className="px-3 opacity-70" data-testid="timeline-empty">
+        <EmptyState
+          data-testid="timeline-empty"
+          icon={imagesOutline}
+          action={
+            canUpload && effectiveView === "album" ? (
+              <Button onClick={() => navigate("/upload")}>{t("tabs.upload")}</Button>
+            ) : undefined
+          }
+        >
           {effectiveView === "pending" ? t("timeline.pendingEmpty") : t("timeline.empty")}
-        </p>
+        </EmptyState>
       ) : null}
       {baby && timeline.isPending && !timeline.isError && !searching ? (
-        <div className="flex justify-center p-6" role="status">
-          <IonSpinner aria-label={t("common.loading")} />
-        </div>
+        <GridSkeleton
+          count={breakpoint === "phone" ? 18 : 30}
+          cols={breakpoint === "phone" ? 3 : 6}
+        />
       ) : null}
 
       {photos.length > 0 && !searching ? (
@@ -373,7 +403,7 @@ export function TimelinePage() {
 
       {selectMode ? (
         <div
-          className="flex flex-wrap items-center gap-2 border-t border-gray-500/30 bg-[var(--ion-background-color)] px-3 py-2"
+          className="flex flex-wrap items-center gap-3 border-t border-line bg-bg px-4 py-3"
           data-testid="select-bar"
         >
           <span className="text-sm" aria-live="polite">
@@ -381,6 +411,7 @@ export function TimelinePage() {
           </span>
           <div className="ml-auto flex flex-wrap gap-2">
             <Button
+              size="sm"
               data-testid="batch-details"
               disabled={selected.size === 0}
               onClick={() => setBatchOpen(true)}
@@ -390,6 +421,7 @@ export function TimelinePage() {
             {isAdmin ? (
               <Button
                 variant="danger"
+                size="sm"
                 data-testid="batch-delete"
                 disabled={selected.size === 0}
                 onClick={() => setConfirmBatchDelete(true)}
@@ -397,21 +429,18 @@ export function TimelinePage() {
                 {t("timeline.batchDelete")}
               </Button>
             ) : null}
-            <Button
-              variant="secondary"
-              data-testid="batch-share"
-              disabled={!FEATURES.sharing || selected.size === 0}
-              aria-disabled={!FEATURES.sharing || selected.size === 0}
-              title={FEATURES.sharing ? undefined : t("timeline.comingWithSharing")}
-            >
-              {t("timeline.batchShare")}
-            </Button>
+            {isAdmin && FEATURES.sharing ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="batch-share"
+                disabled={selected.size === 0}
+                onClick={() => setShareOpen(true)}
+              >
+                {t("timeline.batchShare")}
+              </Button>
+            ) : null}
           </div>
-          {FEATURES.sharing ? null : (
-            <p className="w-full text-right text-xs opacity-70">
-              {t("timeline.comingWithSharing")}
-            </p>
-          )}
         </div>
       ) : null}
 
@@ -452,6 +481,20 @@ export function TimelinePage() {
         />
         {breakpoint === "phone" && showViewer ? viewerNode : null}
 
+        {isAdmin && babyId ? (
+          <AddToShareSheet
+            open={shareOpen}
+            babyId={babyId}
+            plus={baby?.plan !== "free"}
+            photoIds={[...selected]}
+            sensitiveCount={photos.filter((p) => selected.has(p.id) && p.isSensitive).length}
+            onClose={() => setShareOpen(false)}
+            onDone={(msg) => {
+              setNotice(msg);
+              leaveSelectMode();
+            }}
+          />
+        ) : null}
         <BatchDetailsSheet
           open={batchOpen}
           count={selected.size}

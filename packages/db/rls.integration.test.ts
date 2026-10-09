@@ -562,7 +562,7 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
     it("can create share links and share rows for A (with hashes insertable, not readable)", async () => {
       await db.asUser(U.adminA1, async (c) => {
         await c.query(
-          "INSERT INTO share_links (baby_id, name, token_hash, passcode_hash, created_by) VALUES ($1, 'new', decode(repeat('11', 32), 'hex'), 'h', $2)",
+          "INSERT INTO share_links (baby_id, name, token_hash, passcode_hash, created_by) VALUES ($1, 'new', decode(repeat('11', 32), 'hex'), 'scrypt$x', $2)",
           [BABY.A, U.adminA1],
         );
         await c.query(
@@ -570,7 +570,15 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
           [LINK.LA, P.contribApproved, U.adminA1],
         );
         // added_by must be 'user' with their own id for a user-role insert (a BEFORE trigger runs
-        // ahead of the WITH CHECK, so use a photo the gate trigger accepts to reach the policy).
+        // ahead of the WITH CHECK, so use a photo the gate trigger accepts to reach the policy;
+        // since step 8 that means an analysed photo, which only service_role can create here).
+        await c.query("SET LOCAL ROLE service_role");
+        await c.query(
+          `INSERT INTO photo_ai (photo_id, model, prompt_version, schema_version, description)
+           VALUES ($1, 'gpt-6-luna', 'v1', 'v1', '{"caption":"x"}'::jsonb)`,
+          [P.approved2],
+        );
+        await c.query("SET LOCAL ROLE authenticated");
         await expectRlsViolation(
           c,
           "INSERT INTO shared_photos (share_link_id, photo_id, added_by) VALUES ($1, $2, 'rule')",
@@ -1397,6 +1405,13 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
       await db.asPipeline(async (c) => {
         const ins = (link: string, photo: string, by = "rule") =>
           `INSERT INTO shared_photos (share_link_id, photo_id, added_by) VALUES ('${link}', '${photo}', '${by}')`;
+        // Step 8: a rule row needs an analysed photo (the pipeline may write photo_ai).
+        await expectCheckViolation(c, ins(LINK.LA, P.contribApproved), /only analysed photos/);
+        await c.query(
+          `INSERT INTO photo_ai (photo_id, model, prompt_version, schema_version, description)
+           VALUES ($1, 'gpt-6-luna', 'v1', 'v1', '{"caption":"x"}'::jsonb)`,
+          [P.contribApproved],
+        );
         expect(await tryQuery(c, ins(LINK.LA, P.contribApproved))).toBeNull();
         await expectCheckViolation(c, ins(LINK.LA, P.sensitive), /never auto-shared/);
         await expectCheckViolation(c, ins(LINK.LA, P.pendingOther), /approved, non-deleted/);
@@ -1408,9 +1423,13 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
           c,
           `INSERT INTO shared_photos (share_link_id, photo_id, added_by, added_by_user_id) VALUES ('${LINK.LA}', '${P.approved2}', 'rule', '${U.adminA1}')`,
         );
-        // Cannot modify or remove shares.
+        // Cannot modify shares; may remove only its own `rule` rows (step 8 rule sync), never a
+        // hand-picked `user` row.
         await expectDenied(c, "UPDATE shared_photos SET added_by = 'user'");
-        await expectDenied(c, "DELETE FROM shared_photos");
+        expect(await rowCount(c, "DELETE FROM shared_photos WHERE added_by = 'user'")).toBe(0);
+        expect(
+          await rowCount(c, "DELETE FROM shared_photos WHERE added_by = 'rule'"),
+        ).toBeGreaterThan(0);
       });
     });
 

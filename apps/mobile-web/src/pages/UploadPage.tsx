@@ -1,15 +1,24 @@
-import { IonContent, IonPage } from "@ionic/react";
+import { IonContent, IonIcon, IonPage } from "@ionic/react";
 import {
   MILESTONE_PRESETS,
   UPLOAD_MAX_FILES_PER_SESSION,
   type UploadDetails,
 } from "@littlelight/shared";
+import { chevronDown, cloudUploadOutline, imagesOutline } from "ionicons/icons";
 import { type DragEvent, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { AppHeader } from "../components/AppHeader";
 import { UploadRow } from "../components/UploadRow";
-import { Button, Card, Message, TextField } from "../components/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  Message,
+  SelectField,
+  TextAreaField,
+  TextField,
+} from "../components/ui";
 import { t } from "../i18n";
 import { usePhotosInvalidation } from "../lib/queries";
 import { clearResumableUpload, hasResumableUpload, uploadManager } from "../lib/upload/manager";
@@ -49,30 +58,25 @@ function DetailsPanel({
     setPerson("");
   };
   return (
-    <div className="flex flex-col gap-3" data-testid="upload-details">
-      <p className="text-sm opacity-70">{t("upload.detailsHint")}</p>
-      <div className="flex flex-col gap-1">
-        <label htmlFor="upload-milestone" className="text-sm font-medium">
-          {t("upload.milestone")}
-        </label>
-        <select
-          id="upload-milestone"
-          data-testid="upload-milestone"
-          className="min-h-11 w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)]"
-          value={value.milestoneId}
-          onChange={(e) => onChange({ ...value, milestoneId: e.target.value })}
-        >
-          <option value="">{t("upload.milestoneNone")}</option>
-          {MILESTONE_PRESETS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-      </div>
+    <div className="ll-card flex flex-col gap-4" data-testid="upload-details">
+      <p className="ll-hint">{t("upload.detailsHint")}</p>
+      <SelectField
+        id="upload-milestone"
+        label={t("upload.milestone")}
+        data-testid="upload-milestone"
+        value={value.milestoneId}
+        onChange={(e) => onChange({ ...value, milestoneId: e.target.value })}
+      >
+        <option value="">{t("upload.milestoneNone")}</option>
+        {MILESTONE_PRESETS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </SelectField>
       <div className="flex flex-col gap-2">
         <div className="flex items-end gap-2">
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <TextField
               label={t("upload.people")}
               data-testid="upload-people-input"
@@ -92,38 +96,36 @@ function DetailsPanel({
           </Button>
         </div>
         {value.people.length > 0 ? (
-          <ul className="flex flex-wrap gap-2">
+          <ul className="ll-chips">
             {value.people.map((name) => (
               <li key={name}>
                 <button
                   type="button"
-                  className="min-h-11 rounded-full border border-gray-500/50 px-3"
+                  className="ll-chip"
                   aria-label={t("upload.peopleRemove", { name })}
                   onClick={() =>
                     onChange({ ...value, people: value.people.filter((p) => p !== name) })
                   }
                 >
-                  {name} &times;
+                  {name}
+                  <span aria-hidden className="ll-chip-x">
+                    &times;
+                  </span>
                 </button>
               </li>
             ))}
           </ul>
         ) : null}
       </div>
-      <div className="flex flex-col gap-1">
-        <label htmlFor="upload-note" className="text-sm font-medium">
-          {t("upload.note")}
-        </label>
-        <textarea
-          id="upload-note"
-          data-testid="upload-note"
-          rows={3}
-          maxLength={2000}
-          className="w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)]"
-          value={value.note}
-          onChange={(e) => onChange({ ...value, note: e.target.value })}
-        />
-      </div>
+      <TextAreaField
+        id="upload-note"
+        label={t("upload.note")}
+        data-testid="upload-note"
+        rows={3}
+        maxLength={2000}
+        value={value.note}
+        onChange={(e) => onChange({ ...value, note: e.target.value })}
+      />
       <TextField
         label={t("upload.location")}
         data-testid="upload-location"
@@ -197,7 +199,7 @@ export function UploadPage() {
           aria-label={t("upload.title")}
           data-testid="upload-dropzone"
           data-dragging={dragging ? "true" : "false"}
-          className={`min-h-full p-4 ${dragging ? "bg-[var(--ion-color-primary)]/10 outline-2 -outline-offset-8 outline-dashed outline-[var(--ion-color-primary)]" : ""}`}
+          className={`min-h-full p-4 ${dragging ? "bg-accent-tint outline-2 -outline-offset-8 outline-dashed outline-accent" : ""}`}
           onDragEnter={(e) => {
             e.preventDefault();
             dragDepth.current++;
@@ -210,9 +212,18 @@ export function UploadPage() {
           }}
           onDrop={onDrop}
         >
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
+          <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
             {!baby ? (
-              <p className="opacity-70">{t("upload.noBaby")}</p>
+              <EmptyState
+                icon={cloudUploadOutline}
+                action={
+                  <Button onClick={() => navigate("/onboarding/baby?another=1")}>
+                    {t("header.addBaby")}
+                  </Button>
+                }
+              >
+                {t("upload.noBaby")}
+              </EmptyState>
             ) : (
               <>
                 <input
@@ -247,13 +258,14 @@ export function UploadPage() {
                 {resumable ? (
                   <Card className="flex flex-col gap-2" data-testid="upload-resume">
                     <h2 className="font-semibold">{t("upload.resumeTitle")}</h2>
-                    <p className="text-sm opacity-80">{t("upload.resumeBody")}</p>
+                    <p className="text-sm text-muted">{t("upload.resumeBody")}</p>
                     <div className="flex flex-wrap gap-2">
-                      <Button onClick={() => resumeInputRef.current?.click()}>
+                      <Button size="sm" onClick={() => resumeInputRef.current?.click()}>
                         {t("upload.resumeChoose")}
                       </Button>
                       <Button
                         variant="link"
+                        size="sm"
                         onClick={() => {
                           clearResumableUpload(baby.id);
                           setResumable(false);
@@ -265,14 +277,24 @@ export function UploadPage() {
                   </Card>
                 ) : null}
 
-                <div className="flex flex-col items-start gap-2">
-                  <Button data-testid="upload-choose" onClick={() => inputRef.current?.click()}>
+                <div className="ll-card flex flex-col items-center gap-3 px-4 py-8 text-center">
+                  <span
+                    aria-hidden
+                    className="flex h-14 w-14 items-center justify-center rounded-full bg-accent-tint text-accent-text"
+                  >
+                    <IonIcon icon={imagesOutline} className="h-7 w-7" />
+                  </span>
+                  <Button
+                    variant={summary.uploaded > 0 ? "secondary" : "primary"}
+                    data-testid="upload-choose"
+                    onClick={() => inputRef.current?.click()}
+                  >
                     {t("upload.choose")}
                   </Button>
-                  <p className="hidden text-sm opacity-70 [@media(pointer:fine)]:block">
+                  <p className="hidden text-sm text-muted [@media(pointer:fine)]:block">
                     {dragging ? t("upload.dropActive") : t("upload.dropHint")}
                   </p>
-                  <p className="text-sm opacity-70">{t("upload.limitHint")}</p>
+                  <p className="text-sm text-muted">{t("upload.limitHint")}</p>
                   {isContributor ? <p className="text-sm">{t("upload.reviewNote")}</p> : null}
                   {tooMany ? (
                     <Message kind="info">
@@ -281,16 +303,21 @@ export function UploadPage() {
                   ) : null}
                 </div>
 
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-3">
                   <Button
                     variant="link"
-                    className="self-start"
+                    className="self-start !px-0"
                     data-testid="upload-details-toggle"
                     aria-expanded={showDetails}
                     aria-controls="upload-details-panel"
                     onClick={() => setShowDetails((v) => !v)}
                   >
                     {t("upload.detailsToggle")}
+                    <IonIcon
+                      aria-hidden
+                      icon={chevronDown}
+                      className={`h-4 w-4 transition-transform duration-200 ${showDetails ? "rotate-180" : ""}`}
+                    />
                   </Button>
                   <div id="upload-details-panel" hidden={!showDetails}>
                     <DetailsPanel value={form} onChange={setForm} />
@@ -301,20 +328,46 @@ export function UploadPage() {
                   <>
                     <div
                       data-testid="upload-summary-bar"
-                      className="sticky top-0 z-10 flex flex-col gap-2 rounded-lg border border-gray-500/30 bg-[var(--ion-background-color)] p-3"
+                      className="ll-card sticky top-2 z-10 flex flex-col gap-3 !p-3"
                     >
                       <p data-testid="upload-summary" role="status" className="font-semibold">
                         {summaryText}
                       </p>
                       {summary.active > 0 ? (
-                        <p data-testid="upload-progress" className="text-sm opacity-70">
-                          {t("upload.progress", {
-                            done: summary.total - summary.active,
-                            total: summary.total,
-                          })}
-                        </p>
+                        <>
+                          <div
+                            role="progressbar"
+                            aria-label={t("upload.title")}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={Math.round(
+                              ((summary.total - summary.active) / Math.max(1, summary.total)) * 100,
+                            )}
+                            className="ll-progress"
+                          >
+                            <div
+                              style={{
+                                width: `${Math.round(((summary.total - summary.active) / Math.max(1, summary.total)) * 100)}%`,
+                              }}
+                            />
+                          </div>
+                          <p data-testid="upload-progress" className="text-sm text-muted">
+                            {t("upload.progress", {
+                              done: summary.total - summary.active,
+                              total: summary.total,
+                            })}
+                          </p>
+                        </>
                       ) : null}
                       <div className="flex flex-wrap gap-2">
+                        {summary.uploaded > 0 ? (
+                          <Button
+                            data-testid="upload-view-timeline"
+                            onClick={() => navigate("/timeline")}
+                          >
+                            {t("upload.viewTimeline")}
+                          </Button>
+                        ) : null}
                         {retryableCount > 0 ? (
                           <Button
                             variant="secondary"
@@ -333,17 +386,9 @@ export function UploadPage() {
                             {t("upload.clearDone")}
                           </Button>
                         ) : null}
-                        {summary.uploaded > 0 ? (
-                          <Button
-                            data-testid="upload-view-timeline"
-                            onClick={() => navigate("/timeline")}
-                          >
-                            {t("upload.viewTimeline")}
-                          </Button>
-                        ) : null}
                       </div>
                     </div>
-                    <ul className="flex flex-col gap-2" data-testid="upload-list">
+                    <ul className="ll-list" data-testid="upload-list">
                       {items.map((item) => (
                         <UploadRow
                           key={item.clientId}

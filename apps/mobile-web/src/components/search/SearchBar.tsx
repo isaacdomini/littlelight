@@ -59,7 +59,6 @@ export function SearchBar({
           onKeyDown={(e) => {
             if (e.key === "Enter") emit(text);
           }}
-          className="min-h-11 w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)] outline-none focus:border-[var(--ion-color-primary)] focus:ring-2 focus:ring-[var(--ion-color-primary)] disabled:opacity-60"
         />
         {text !== "" && !disabled ? (
           <button
@@ -70,14 +69,14 @@ export function SearchBar({
               setText("");
               emit("");
             }}
-            className="min-h-11 min-w-11 rounded-lg border border-gray-500/50 px-3 text-base"
+            className="ll-btn ll-btn-secondary !px-0 text-xl"
           >
-            ×
+            <span aria-hidden>×</span>
           </button>
         ) : null}
       </div>
       {disabled ? (
-        <p className="text-xs opacity-70" data-testid="search-upsell">
+        <p className="ll-caption" data-testid="search-upsell">
           {t("search.upsell")}
         </p>
       ) : null}

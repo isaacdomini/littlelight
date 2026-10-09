@@ -15,8 +15,8 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("reindex queue (step 5) in the ten-queue set", () => {
-  it("QUEUES has exactly the ten jobs, all exclusive", () => {
+describe("reindex queue (step 5) in the twelve-queue set", () => {
+  it("QUEUES has exactly the twelve jobs, all exclusive", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
       [
         "photo.ingest",
@@ -29,6 +29,8 @@ describe("reindex queue (step 5) in the ten-queue set", () => {
         "ai.backfill",
         "search.reconcile",
         "search.backfill",
+        "share.apply",
+        "share.reconcile",
       ].sort(),
     );
     for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
@@ -72,7 +74,7 @@ describe("reindex queue (step 5) in the ten-queue set", () => {
     );
   });
 
-  it("startWorkers registers ten handlers; reindex runs batches of 25 through one indexer call", async () => {
+  it("startWorkers registers twelve handlers; reindex runs batches of 25 through one indexer call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;
@@ -100,6 +102,11 @@ describe("reindex queue (step 5) in the ten-queue set", () => {
       sweep: {} as never,
       ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
       indexer: { reindex } as never,
+      autoSharer: {
+        evaluatePhotos: vi.fn(async () => ({})),
+        applyLink: vi.fn(),
+        reconcile: vi.fn(),
+      } as never,
       log,
       ingestConcurrency: 2,
     });

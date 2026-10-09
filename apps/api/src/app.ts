@@ -25,6 +25,7 @@ import { babiesRoutes } from "./routes/babies";
 import { healthzRoutes } from "./routes/healthz";
 import { meRoutes } from "./routes/me";
 import { type SearchChatDeps, searchRoutes } from "./search";
+import { registerSharing, registerViewerAuth } from "./sharing";
 import { createUrlSigner, type UrlSigner } from "./storage/sign";
 import { uploadsRoutes } from "./uploads/routes";
 
@@ -64,20 +65,42 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
 }
 
-// A path segment that looks like a bearer token (invite tokens are 43-char base64url); UUIDs are
-// identifiers, not secrets, and stay readable.
-const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{32,}$/;
+// A path segment that looks like a bearer token (invite tokens are 43-char base64url, share
+// tokens 22: `SHARE_TOKEN_LENGTH`); UUIDs are identifiers, not secrets, and stay readable.
+const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{22,}$/;
 const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * The only literal segments of the viewer routes (`/share/*`, docs/plans/step-8.md 2.6). Anything
+ * else under `/share/` that is not a UUID is logged as `[redacted]`: no viewer route takes a
+ * token in its path, so a token there is a client mistake that must still never reach a log.
+ */
+const SHARE_ROUTE_SEGMENTS: ReadonlySet<string> = new Set([
+  "session",
+  "album",
+  "photos",
+  "urls",
+  "download",
+  "manifest.webmanifest",
+]);
 
 /**
- * URL as logged: query strings dropped (they can carry codes), the segment after `/invites/` and
- * any token-shaped segment replaced. Exported for tests.
+ * URL as logged: query strings dropped (they can carry codes, and the viewer manifest's `?t=`
+ * share token), the segment after `/invites/` or `/s/` (SPA share link) replaced, every segment
+ * under `/share/` except the route's own words and UUIDs replaced, and any token-shaped segment
+ * replaced. Works with and without the browser-facing `/api` prefix. Exported for tests.
  */
 export function redactUrl(url: string): string {
   const q = url.indexOf("?");
   const path = q === -1 ? url : url.slice(0, q);
-  const segments = path.split("/").map((seg, i, all) => {
-    if (i > 0 && all[i - 1] === "invites" && seg !== "") return "[redacted]";
+  const parts = path.split("/");
+  const shareAt = parts[1] === "api" ? 2 : 1;
+  const underShare = parts[shareAt] === "share";
+  const segments = parts.map((seg, i, all) => {
+    if (seg === "") return seg;
+    if (i > 0 && (all[i - 1] === "invites" || all[i - 1] === "s")) return "[redacted]";
+    if (underShare && i > shareAt && !SHARE_ROUTE_SEGMENTS.has(seg) && !UUID_SEGMENT.test(seg)) {
+      return "[redacted]";
+    }
     if (TOKEN_SEGMENT.test(seg) && !UUID_SEGMENT.test(seg)) return "[redacted]";
     return seg;
   });
@@ -85,8 +108,9 @@ export function redactUrl(url: string): string {
 }
 
 /**
- * Pino options. Never log auth headers, cookies, tokens, codes, emails or client IPs; request
- * logs carry method + redacted URL only, no bodies.
+ * Pino options. Never log auth headers, cookies (`ll_access`, `ll_refresh`, the viewer's
+ * `ll_viewer`), tokens, share tokens, passcodes, codes, emails or client IPs; request logs carry
+ * method + redacted URL only, no bodies.
  */
 export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">) {
   return {
@@ -121,6 +145,13 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         "req.body.content",
         "req.body.question",
         "req.query.q",
+        // Step 8 (docs/plans/step-8.md 2.6, 2.9): the share token exchange
+        // (`POST /share/session {token, passcode}`), the viewer manifest's `?t=<token>`, the
+        // viewer JWT (cookie or native bearer; the header paths above cover the raw headers).
+        "req.body.token",
+        "req.body.passcode",
+        "req.query.t",
+        "req.cookies",
       ],
       censor: "[redacted]",
     },
@@ -214,7 +245,17 @@ export async function buildApp(opts: BuildAppOptions) {
     config,
   });
 
+  // Step 8 (docs/plans/step-8.md 2.6, 2.9): the viewer-auth hook for `/share/*` (`ll_viewer`
+  // cookie, Path=/api/share; or a native bearer viewer JWT) sits next to the user auth hook and
+  // before every route. The two credentials never cross: viewer JWTs use an HKDF-derived key,
+  // their own issuer and audience, so `registerAuth` rejects them on every parent route (chat,
+  // search, `/babies`), and the viewer hook never reads `ll_access` or a GoTrue bearer.
+  registerViewerAuth(app, config);
+
   registerRoutes(app, config);
+  // Admin share-link routes + viewer routes (`apps/api/src/sharing`, tasks 8.6/8.7). They read
+  // `app.config` (`shareSettings`), `app.jobs.enqueueShareApply` and `app.signer`.
+  await registerSharing(app);
 
   await app.ready();
   return app;

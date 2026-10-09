@@ -44,16 +44,17 @@ export function UploadRow({
 }) {
   const busy = item.state === "uploading" || item.state === "completing";
   const failed = item.state === "failed";
+  const done = item.state === "ingested" || item.state === "duplicate";
   return (
     <li
       data-testid={`upload-row-${item.clientId}`}
       data-state={item.state}
       data-filename={item.name}
-      className="flex flex-col gap-1 rounded-lg border border-gray-500/30 p-3"
+      className="flex flex-col gap-2"
     >
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
-        <span className="shrink-0 text-sm opacity-70">{formatBytes(item.size)}</span>
+        <span className="min-w-0 flex-1 truncate font-semibold">{item.name}</span>
+        <span className="shrink-0 text-sm text-muted">{formatBytes(item.size)}</span>
       </div>
       {busy ? (
         <div
@@ -62,17 +63,14 @@ export function UploadRow({
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(item.progress * 100)}
-          className="h-2 overflow-hidden rounded-full bg-gray-500/30"
+          className="ll-progress"
         >
-          <div
-            className="h-full bg-[var(--ion-color-primary)] transition-[width]"
-            style={{ width: `${Math.round(item.progress * 100)}%` }}
-          />
+          <div style={{ width: `${Math.round(item.progress * 100)}%` }} />
         </div>
       ) : null}
       <div className="flex items-center gap-2">
         <span
-          className={`min-w-0 flex-1 text-sm ${failed ? "font-medium text-red-600 dark:text-red-400" : "opacity-80"}`}
+          className={`min-w-0 flex-1 text-sm ${failed ? "font-semibold text-danger-text" : done ? "text-success-text" : "text-muted"}`}
           role={failed ? "alert" : undefined}
         >
           {stateLabel(item)}
@@ -80,6 +78,7 @@ export function UploadRow({
         {failed && item.retryable ? (
           <Button
             variant="secondary"
+            size="sm"
             data-testid={`upload-retry-${item.clientId}`}
             aria-label={t("upload.retryFile", { name: item.name })}
             onClick={() => onRetry(item.clientId)}
@@ -90,6 +89,7 @@ export function UploadRow({
         {CANCELABLE.has(item.state) ? (
           <Button
             variant="link"
+            size="sm"
             data-testid={`upload-cancel-${item.clientId}`}
             aria-label={t("upload.cancelFile", { name: item.name })}
             onClick={() => onCancel(item.clientId)}

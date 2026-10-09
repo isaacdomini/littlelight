@@ -645,6 +645,9 @@ export interface ShareLinksRow {
   view_count: number;
   created_at: Date;
   updated_at: Date;
+  ttl_hours: number;
+  token_rotated_at: Date | null;
+  has_passcode: boolean;
 }
 
 export interface ShareLinksInsert {
@@ -661,6 +664,21 @@ export interface ShareLinksInsert {
   view_count?: number;
   created_at?: Date;
   updated_at?: Date;
+  ttl_hours?: number;
+  token_rotated_at?: Date | null;
+}
+
+export interface SharePasscodeFailuresRow {
+  id: string;
+  share_link_id: string;
+  ip_hash: Buffer;
+  created_at: Date;
+}
+
+export interface SharePasscodeFailuresInsert {
+  share_link_id: string;
+  ip_hash: Buffer;
+  created_at?: Date;
 }
 
 export interface ShareRulesRow {
@@ -669,6 +687,7 @@ export interface ShareRulesRow {
   include_tags: string[];
   exclude_tags: string[];
   updated_at: Date;
+  evaluated_at: Date | null;
 }
 
 export interface ShareRulesInsert {
@@ -677,6 +696,21 @@ export interface ShareRulesInsert {
   include_tags?: string[];
   exclude_tags?: string[];
   updated_at?: Date;
+  evaluated_at?: Date | null;
+}
+
+export interface SharedPhotoExclusionsRow {
+  share_link_id: string;
+  photo_id: string;
+  excluded_by: string | null;
+  created_at: Date;
+}
+
+export interface SharedPhotoExclusionsInsert {
+  share_link_id: string;
+  photo_id: string;
+  excluded_by?: string | null;
+  created_at?: Date;
 }
 
 export interface SharedPhotosRow {
@@ -685,6 +719,8 @@ export interface SharedPhotosRow {
   added_by: "user" | "rule";
   added_by_user_id: string | null;
   added_at: Date;
+  sensitive_released_at: Date | null;
+  sensitive_released_by: string | null;
 }
 
 export interface SharedPhotosInsert {
@@ -693,6 +729,8 @@ export interface SharedPhotosInsert {
   added_by: "user" | "rule";
   added_by_user_id?: string | null;
   added_at?: Date;
+  sensitive_released_at?: Date | null;
+  sensitive_released_by?: string | null;
 }
 
 export interface UploadFilesRow {
@@ -791,6 +829,7 @@ export interface ViewerSessionsRow {
   ip_hash: Buffer | null;
   user_agent_hash: Buffer | null;
   last_seen_at: Date | null;
+  revoked_at: Date | null;
 }
 
 export interface ViewerSessionsInsert {
@@ -801,6 +840,7 @@ export interface ViewerSessionsInsert {
   ip_hash?: Buffer | null;
   user_agent_hash?: Buffer | null;
   last_seen_at?: Date | null;
+  revoked_at?: Date | null;
 }
 
 export interface WorkerHeartbeatsRow {
@@ -849,7 +889,9 @@ export interface Tables {
   photos: { row: PhotosRow; insert: PhotosInsert };
   profiles: { row: ProfilesRow; insert: ProfilesInsert };
   share_links: { row: ShareLinksRow; insert: ShareLinksInsert };
+  share_passcode_failures: { row: SharePasscodeFailuresRow; insert: SharePasscodeFailuresInsert };
   share_rules: { row: ShareRulesRow; insert: ShareRulesInsert };
+  shared_photo_exclusions: { row: SharedPhotoExclusionsRow; insert: SharedPhotoExclusionsInsert };
   shared_photos: { row: SharedPhotosRow; insert: SharedPhotosInsert };
   upload_files: { row: UploadFilesRow; insert: UploadFilesInsert };
   upload_sessions: { row: UploadSessionsRow; insert: UploadSessionsInsert };
@@ -881,7 +923,9 @@ export const TABLE_NAMES = [
   "photos",
   "profiles",
   "share_links",
+  "share_passcode_failures",
   "share_rules",
+  "shared_photo_exclusions",
   "shared_photos",
   "upload_files",
   "upload_sessions",

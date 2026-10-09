@@ -1,7 +1,9 @@
 import { type ReindexJob, type ReindexReason, reindexJobSchema } from "@littlelight/shared";
 import type { JobWithMetadata } from "pg-boss";
 import type { ReconcileResult, ReindexResult, SearchIndexer } from "./ai";
+import { errorCategory } from "./clients";
 import type { WorkerLog } from "./log-types";
+import type { AutoShareResult, AutoSharer } from "./sharing/autoshare";
 
 // `photo.reindex` handler (docs/plans/step-5.md 2.5, docs/plans/step-7.md 2.7). The API enqueues
 // one job per photo after every committed edit that changes its search document (details,
@@ -12,12 +14,24 @@ import type { WorkerLog } from "./log-types";
 // `baby_ai_enabled` in SQL before any embedding call: a free-tier id is skipped (no model call,
 // no row), never an error. Indexer errors (database, provider) propagate so pg-boss retries the
 // batch (`retryLimit 3`); the hourly `search.reconcile` is the backstop for anything dropped.
+//
+// Step 8 (docs/plans/step-8.md 2.8, D16; PRD "AI pipeline" stage 6 "Post-process: auto-share rules
+// run"): before indexing, the batch's photos go through the auto-sharer (`evaluatePhotos`). This
+// handler runs after every new `photo_ai` row (`reason: "ai"`) and every details / milestone /
+// override edit, which is exactly "after AI analysis and on details change". An auto-share failure
+// is logged (error category only) and never blocks indexing or fails the batch; the hourly
+// `share.reconcile` repairs it.
 
 /** The search indexer (`apps/worker/src/ai/search-index.ts`, docs/plans/step-7.md 2.6). */
 export type { ReconcileResult, ReindexResult, SearchIndexer };
 
 export interface ReindexDeps {
   indexer: Pick<SearchIndexer, "reindex">;
+  /**
+   * Stage 6 auto-share (docs/plans/step-8.md 2.8). Omitted only by unit tests that do not exercise
+   * it; `startWorkers` and run-job always set it.
+   */
+  autoSharer?: Pick<AutoSharer, "evaluatePhotos">;
   log: WorkerLog;
 }
 
@@ -28,6 +42,8 @@ export interface ReindexBatchOutcome {
   invalid: number;
   /** The indexer's result; null when nothing valid was in the batch. */
   result: ReindexResult | null;
+  /** The auto-sharer's result; null when nothing valid was in the batch or it failed. */
+  autoShare: AutoShareResult | null;
 }
 
 /**
@@ -46,7 +62,7 @@ export function batchReason(jobs: readonly Pick<ReindexJob, "reason">[]): Reinde
 /**
  * The `photo.reindex` handler for one pg-boss batch (exported for run-job and tests). Malformed
  * payloads are dropped with a warning that carries the job id only; the rest are de-duplicated
- * by photo id and indexed in one `indexer.reindex` call.
+ * by photo id, evaluated by the auto-sharer, then indexed in one `indexer.reindex` call.
  */
 export async function handleReindexJobs(
   deps: ReindexDeps,
@@ -65,16 +81,26 @@ export async function handleReindexJobs(
     }
   }
   const photoIds = [...new Set(valid.map((j) => j.photoId))];
-  if (photoIds.length === 0) return { photoIds, invalid, result: null };
+  if (photoIds.length === 0) return { photoIds, invalid, result: null, autoShare: null };
 
   const reason = batchReason(valid);
   const reasons: Partial<Record<ReindexReason, number>> = {};
   for (const j of valid) reasons[j.reason] = (reasons[j.reason] ?? 0) + 1;
   const started = performance.now();
+  // Stage 6 first (plan 2.8): its own try/catch so indexing always runs.
+  let autoShare: AutoShareResult | null = null;
+  try {
+    autoShare = deps.autoSharer ? await deps.autoSharer.evaluatePhotos(photoIds) : null;
+  } catch (err) {
+    deps.log.warn(
+      { photos: photoIds.length, err: errorCategory(err) },
+      "reindex: auto-share failed (share.reconcile will repair it)",
+    );
+  }
   const result = await deps.indexer.reindex(photoIds, reason);
   deps.log.debug(
     { photos: photoIds.length, invalid, reasons, ms: Math.round(performance.now() - started) },
     "reindex: batch done",
   );
-  return { photoIds, invalid, result };
+  return { photoIds, invalid, result, autoShare };
 }

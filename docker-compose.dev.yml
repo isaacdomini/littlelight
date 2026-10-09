@@ -399,6 +399,12 @@ services:
       # fake embedder here (no key, no network):
       #   VISION_PROVIDER=fake docker compose -f docker-compose.dev.yml up -d --no-deps api worker
       VISION_PROVIDER: ${VISION_PROVIDER:-openai}
+      # Sharing (docs/plans/step-8.md 2.11): lifetime of share-link viewers' presigned media URLs
+      # (30-900 s). Compose INTERPOLATION like VISION_PROVIDER, so the share gate can recreate
+      # the api with short-lived URLs and a plain `up` puts it back on 300:
+      #   SHARE_MEDIA_URL_TTL_SEC=30 docker compose -f docker-compose.dev.yml up -d --no-deps api
+      # The worker's SHARE_RECONCILE_CRON comes from .env.dev / .env.local.
+      SHARE_MEDIA_URL_TTL_SEC: ${SHARE_MEDIA_URL_TTL_SEC:-300}
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src

@@ -1,14 +1,15 @@
-import { IonAlert, IonSpinner } from "@ionic/react";
+import { IonAlert } from "@ionic/react";
 import { CHAT_LIMITS, type PhotoSummary } from "@littlelight/shared";
+import { chatbubbleEllipsesOutline } from "ionicons/icons";
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../../auth/AuthProvider";
 import { type MessageKey, t, tn } from "../../i18n";
 import { errorMessage } from "../../lib/api";
 import { FEATURES } from "../../lib/features";
 import { useChatThread, useClearChat, useSendChat } from "../../lib/queries/chat";
 import { useProfileTimeZone } from "../../lib/units";
-import { Button, Message } from "../ui";
+import { Button, EmptyState, Message, Skeleton, SkeletonRegion } from "../ui";
 import { PhotoViewer } from "../viewer/PhotoViewer";
 import { useViewerParam } from "../viewer/useViewerParam";
 import { ChatPhotoGrid } from "./ChatPhotoGrid";
@@ -33,6 +34,7 @@ const TURNS_LEFT_NOTICE = 10;
  * left pane next to the timeline (photos open in the timeline's viewer).
  */
 export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
+  const navigate = useNavigate();
   const { baby } = useCurrentBaby();
   const timeZone = useProfileTimeZone();
   const viewer = useViewerParam(variant === "page" ? "/chat" : "/timeline");
@@ -79,35 +81,44 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
 
   const shell = (children: React.ReactNode, testId: string) => (
     <section
-      className="flex h-full min-h-0 flex-col gap-2 p-4"
+      className="flex h-full min-h-0 flex-col gap-3 p-4"
       aria-label={t("chat.title")}
       data-testid={testId}
     >
-      {variant === "pane" ? <h2 className="text-lg font-semibold">{t("chat.title")}</h2> : null}
+      {variant === "pane" ? <h2 className="text-xl font-semibold">{t("chat.title")}</h2> : null}
       {children}
     </section>
   );
 
-  if (!baby) return shell(<p className="opacity-70">{t("chat.noBaby")}</p>, "chat-empty-baby");
+  if (!baby)
+    return shell(
+      <EmptyState
+        icon={chatbubbleEllipsesOutline}
+        action={
+          <Button onClick={() => navigate("/onboarding/baby?another=1")}>
+            {t("header.addBaby")}
+          </Button>
+        }
+      >
+        {t("chat.noBaby")}
+      </EmptyState>,
+      "chat-empty-baby",
+    );
   if (!isAdmin) {
     return shell(
-      <div className="flex flex-col gap-1" data-testid="chat-contributor-notice">
+      <div className="ll-card flex flex-col gap-1" data-testid="chat-contributor-notice">
         <p className="font-semibold">{t("chat.contributorNotice")}</p>
-        <p className="text-sm opacity-80">{t("chat.contributorBody")}</p>
+        <p className="text-sm text-muted">{t("chat.contributorBody")}</p>
       </div>,
       "chat-gated",
     );
   }
   if (!paid) {
     return shell(
-      <div className="flex flex-col gap-2" data-testid="chat-upsell">
-        <p className="font-semibold">{t("chat.upsellTitle")}</p>
-        <p className="text-sm opacity-80">{t("chat.upsellBody")}</p>
-        <Link
-          to="/settings"
-          className="inline-flex min-h-11 w-fit items-center rounded-lg bg-[var(--ion-color-primary)] px-4 font-semibold text-[var(--ion-color-primary-contrast)]"
-          data-testid="chat-upsell-link"
-        >
+      <div className="ll-card flex flex-col items-start gap-3" data-testid="chat-upsell">
+        <p className="text-lg font-semibold">{t("chat.upsellTitle")}</p>
+        <p className="text-muted">{t("chat.upsellBody")}</p>
+        <Link to="/settings" className="ll-btn ll-btn-primary w-fit" data-testid="chat-upsell-link">
           {t("chat.upsellCta")}
         </Link>
       </div>,
@@ -152,9 +163,11 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
     <>
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto" data-testid="chat-scroll">
         {thread.isPending ? (
-          <div className="flex justify-center p-6" role="status">
-            <IonSpinner aria-label={t("common.loading")} />
-          </div>
+          <SkeletonRegion className="flex flex-col gap-3">
+            <Skeleton className="ml-auto h-10 w-2/3 !rounded-2xl" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-4 w-3/5" />
+          </SkeletonRegion>
         ) : null}
         {thread.isError ? (
           <div className="flex flex-col items-start gap-2">
@@ -166,17 +179,17 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
         ) : null}
 
         {showSuggestions ? (
-          <div className="flex flex-col gap-3" data-testid="chat-intro">
-            <p className="opacity-80">{t("chat.intro", { name: babyName })}</p>
-            <p className="text-sm font-medium">{t("chat.suggestions")}</p>
-            <ul className="flex flex-wrap gap-2">
+          <div className="flex flex-col gap-3 pb-4" data-testid="chat-intro">
+            <p className="text-xl font-semibold">{t("chat.intro", { name: babyName })}</p>
+            <p className="text-sm text-muted">{t("chat.suggestions")}</p>
+            <ul className="flex flex-col items-start gap-2">
               {SUGGESTIONS.map((key, n) => (
                 <li key={key}>
                   <button
                     type="button"
                     data-testid={`chat-suggestion-${n}`}
                     onClick={() => submit(t(key))}
-                    className="min-h-11 rounded-full border border-gray-500/50 px-4 text-left text-base"
+                    className="ll-chip !min-h-11 !rounded-2xl !py-2 text-left"
                   >
                     {t(key)}
                   </button>
@@ -187,7 +200,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
         ) : null}
 
         <ol
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-4"
           data-testid="chat-messages"
           aria-label={t("chat.messages")}
         >
@@ -203,7 +216,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
           {chat.turn && !chat.turn.done ? (
             <>
               <li className="flex flex-col items-end" data-testid="chat-user-message">
-                <div className="max-w-[92%] rounded-2xl bg-[var(--ion-color-primary)] px-3 py-2 text-[var(--ion-color-primary-contrast)]">
+                <div className="ll-bubble-user max-w-[88%]">
                   <p className="whitespace-pre-wrap break-words">{chat.turn.userText}</p>
                 </div>
               </li>
@@ -223,7 +236,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
               ) : (
                 <li className="flex flex-col items-start gap-2">
                   <div
-                    className="flex max-w-[92%] flex-col gap-2 rounded-2xl border border-gray-500/30 px-3 py-2"
+                    className="flex max-w-full flex-col gap-2"
                     data-testid="chat-streaming"
                     aria-live="polite"
                     aria-busy={true}
@@ -231,7 +244,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
                     {chat.turn.text ? (
                       <p className="whitespace-pre-wrap break-words">{chat.turn.text}</p>
                     ) : null}
-                    <p className="text-sm opacity-70" data-testid="chat-status">
+                    <p className="text-sm text-muted" data-testid="chat-status">
                       {chat.turn.status === "searching" ? t("chat.searching") : t("chat.thinking")}
                     </p>
                     <ChatPhotoGrid
@@ -250,20 +263,20 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
 
       {clearError ? <Message>{clearError}</Message> : null}
 
-      <form onSubmit={onSubmit} className="flex flex-col gap-1">
+      <form onSubmit={onSubmit} className="flex flex-col gap-2">
         <div className="flex items-end gap-2">
           <textarea
             data-testid="chat-input"
             aria-label={t("chat.inputLabel")}
             placeholder={t("chat.inputPlaceholder")}
             value={text}
-            rows={2}
+            rows={1}
             maxLength={CHAT_LIMITS.text}
             enterKeyHint="send"
             disabled={busy}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
-            className="min-h-11 w-full resize-none rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)] outline-none focus:border-[var(--ion-color-primary)] focus:ring-2 focus:ring-[var(--ion-color-primary)]"
+            className="max-h-36 !min-h-11 resize-none [field-sizing:content]"
           />
           {busy ? (
             <Button variant="secondary" data-testid="chat-stop" onClick={chat.abort}>
@@ -275,7 +288,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
             </Button>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs opacity-70">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted empty:hidden">
           {text.length > CHAT_LIMITS.text * 0.8 ? (
             <span aria-live="polite">
               {t("chat.counter", { n: text.length, max: CHAT_LIMITS.text })}
@@ -287,7 +300,8 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
           {messages.length > 0 && !busy ? (
             <Button
               variant="link"
-              className="!min-h-11 !px-2 !text-xs"
+              size="sm"
+              className="!px-2 !text-xs"
               data-testid="chat-clear"
               onClick={() => setConfirmClear(true)}
             >
@@ -295,7 +309,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
             </Button>
           ) : null}
         </div>
-        <p className="text-xs opacity-70" data-testid="chat-disclaimer">
+        <p className="text-xs text-muted" data-testid="chat-disclaimer">
           {t("chat.disclaimer")}
         </p>
       </form>

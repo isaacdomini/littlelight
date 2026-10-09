@@ -8,6 +8,8 @@ import {
   reindexJobSchema,
   searchBackfillJobSchema,
   searchReconcileJobSchema,
+  shareApplyJobSchema,
+  shareReconcileJobSchema,
 } from "@littlelight/shared";
 import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
@@ -21,14 +23,17 @@ import { purgeTrash } from "./purge";
 import {
   chainSearchBackfill,
   SEARCH_RECONCILE_SEND_OPTIONS,
+  SHARE_RECONCILE_SEND_OPTIONS,
   sendAiBackfill,
   sendAiFlush,
   sendIngest,
   sendReindex,
   sendSearchBackfill,
+  sendShareApply,
 } from "./queues";
 import { reconcileIngest } from "./reconcile";
 import { handleReindexJobs } from "./reindex";
+import { createAutoSharer } from "./sharing/autoshare";
 import { createStorage } from "./storage";
 import { sweepUploads } from "./uploads-sweep";
 
@@ -44,9 +49,15 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job ai.backfill '{"babyId":"…","reason":"upgrade"}'
 //   pnpm --filter @littlelight/worker run-job search.reconcile
 //   pnpm --filter @littlelight/worker run-job search.backfill '{"babyId":"…","reason":"manual"}'
+//   pnpm --filter @littlelight/worker run-job share.apply '{"shareLinkId":"…","reason":"manual"}'
+//   pnpm --filter @littlelight/worker run-job share.reconcile
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
 //   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
+//   pnpm --filter @littlelight/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
+//
+// `photo.reindex` runs the auto-share hook first, like the worker; the share jobs make no model
+// call and need no AI env.
 //
 // The AI jobs run in-process with this process's AI env (`VISION_PROVIDER`, keys): without a
 // provider, flush/poll print `{skipped: true}`, and the search jobs (`photo.reindex`,
@@ -147,6 +158,16 @@ async function main(argv: string[]): Promise<number> {
         case JOBS.searchBackfill:
           result = { jobId: await sendSearchBackfill(b, searchBackfillJobSchema.parse(payload)) };
           break;
+        case JOBS.shareApply:
+          result = { jobId: await sendShareApply(b, shareApplyJobSchema.parse(payload)) };
+          break;
+        case JOBS.shareReconcile:
+          result = {
+            jobId: await b.send(name, shareReconcileJobSchema.parse(payload), {
+              ...SHARE_RECONCILE_SEND_OPTIONS,
+            }),
+          };
+          break;
         default:
           result = { jobId: await b.send(name, {}) };
       }
@@ -188,12 +209,24 @@ async function main(argv: string[]): Promise<number> {
             log,
           });
           result = reindexJob
-            ? await handleReindexJobs({ indexer, log }, [{ id: "run-job", data: reindexJob }])
+            ? await handleReindexJobs(
+                { indexer, autoSharer: createAutoSharer({ pool, log }), log },
+                [{ id: "run-job", data: reindexJob }],
+              )
             : backfillJob
               ? await indexer.backfill(backfillJob)
               : await indexer.reconcile();
           break;
         }
+        case JOBS.shareApply: {
+          const job = shareApplyJobSchema.parse(payload);
+          result = await createAutoSharer({ pool, log }).applyLink(job.shareLinkId);
+          break;
+        }
+        case JOBS.shareReconcile:
+          shareReconcileJobSchema.parse(payload);
+          result = await createAutoSharer({ pool, log }).reconcile();
+          break;
         case JOBS.aiFlush:
         case JOBS.aiPoll:
         case JOBS.aiBackfill: {

@@ -1,12 +1,14 @@
 import { IonContent, IonPage } from "@ionic/react";
+import { flagOutline } from "ionicons/icons";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { AppHeader } from "../components/AppHeader";
 import { GrowthChart } from "../components/growth/GrowthChart";
 import { AddMilestone } from "../components/milestones/AddMilestone";
 import { MilestoneAdminControls } from "../components/milestones/MilestoneAdminControls";
 import { MilestoneCard } from "../components/milestones/MilestoneCard";
-import { Message } from "../components/ui";
+import { Button, EmptyState, Message, Segmented, Skeleton, SkeletonRegion } from "../components/ui";
 import { t } from "../i18n";
 import { useMilestones } from "../lib/queries/milestones";
 
@@ -14,22 +16,26 @@ type Segment = "milestones" | "growth";
 
 function MilestonesView({ babyId, isAdmin }: { babyId: string; isAdmin: boolean }) {
   const query = useMilestones(babyId);
+  const navigate = useNavigate();
   if (query.isError)
     return <Message data-testid="milestones-error">{t("milestones.loadError")}</Message>;
   if (query.isLoading) {
     return (
-      <p role="status" className="opacity-70">
-        {t("common.loading")}
-      </p>
+      <SkeletonRegion className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+          <Skeleton key={i} className="aspect-[4/5] !rounded-xl" />
+        ))}
+      </SkeletonRegion>
     );
   }
   const all = query.data ?? [];
   const recorded = all.filter((m) => m.photoCount > 0);
   const upcoming = all.filter((m) => m.photoCount === 0);
   return (
-    <div className="flex flex-col gap-6">
-      <section className="flex flex-col gap-3">
-        <h2 className="text-xl font-bold">{t("milestones.recorded")}</h2>
+    <div className="flex flex-col gap-8">
+      <section className="flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">{t("milestones.recorded")}</h2>
         {recorded.length ? (
           <ul
             data-testid="milestones-recorded"
@@ -40,23 +46,34 @@ function MilestonesView({ babyId, isAdmin }: { babyId: string; isAdmin: boolean 
             ))}
           </ul>
         ) : (
-          <p data-testid="milestones-recorded-empty" className="opacity-80">
+          <EmptyState
+            icon={flagOutline}
+            data-testid="milestones-recorded-empty"
+            className="ll-card"
+            action={
+              <Button variant="secondary" onClick={() => navigate("/timeline")}>
+                {t("tabs.timeline")}
+              </Button>
+            }
+          >
             {t("milestones.recordedEmpty")}
-          </p>
+          </EmptyState>
         )}
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-xl font-bold">{t("milestones.upcoming")}</h2>
-        <ul data-testid="milestones-upcoming" className="flex flex-col divide-y divide-gray-500/20">
+      <section className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-xl font-semibold">{t("milestones.upcoming")}</h2>
+          <p className="text-sm text-muted">{t("milestones.upcomingHint")}</p>
+        </div>
+        <ul data-testid="milestones-upcoming" className="ll-list">
           {upcoming.map((m) => (
             <li
               key={m.id}
               data-testid={`milestone-upcoming-${m.id}`}
-              className="flex flex-col gap-2 py-3"
+              className="flex flex-col justify-center gap-2"
             >
-              <span className="font-medium">{m.name}</span>
-              <span className="text-sm opacity-70">{t("milestones.upcomingHint")}</span>
+              <span className="font-semibold">{m.name}</span>
               {isAdmin && !m.isPreset ? <MilestoneAdminControls milestone={m} /> : null}
             </li>
           ))}
@@ -78,10 +95,10 @@ export function MilestonesPage() {
       <AppHeader title={t("milestones.title")} />
       <IonContent className="ion-padding">
         <main
-          className="mx-auto flex w-full max-w-4xl flex-col gap-5"
+          className="mx-auto flex w-full max-w-4xl flex-col gap-6"
           data-testid="milestones-page"
         >
-          <div role="tablist" aria-label={t("milestones.title")} className="flex gap-2">
+          <Segmented label={t("milestones.title")}>
             {(["milestones", "growth"] as const).map((s) => (
               <button
                 key={s}
@@ -90,18 +107,13 @@ export function MilestonesPage() {
                 aria-selected={segment === s}
                 data-testid={`milestones-segment-${s}`}
                 onClick={() => setSegment(s)}
-                className={`min-h-11 flex-1 rounded-lg border px-3 text-base ${
-                  segment === s
-                    ? "border-transparent bg-[var(--ion-color-primary)] font-semibold text-[var(--ion-color-primary-contrast)]"
-                    : "border-gray-500/50"
-                }`}
               >
                 {s === "milestones"
                   ? t("milestones.segmentMilestones")
                   : t("milestones.segmentGrowth")}
               </button>
             ))}
-          </div>
+          </Segmented>
           {baby ? (
             segment === "milestones" ? (
               <MilestonesView babyId={baby.id} isAdmin={isAdmin} />

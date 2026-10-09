@@ -1,12 +1,23 @@
 import { IonContent, IonPage } from "@ionic/react";
 import { type BabyRole, emailSchema, inviteSchema, type Member } from "@littlelight/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { peopleOutline } from "ionicons/icons";
 import { type FormEvent, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ME_KEY, useAuth, useCurrentBaby } from "../auth/AuthProvider";
 import { useFreshSignIn } from "../auth/FreshSignInGate";
 import { AiUsage } from "../components/AiUsage";
 import { AppHeader } from "../components/AppHeader";
-import { Button, Card, Message, TextField } from "../components/ui";
+import { ShareLinksSection } from "../components/share/ShareLinksSection";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ListSkeleton,
+  Message,
+  SelectField,
+  TextField,
+} from "../components/ui";
 import { t } from "../i18n";
 import { apiRequest, errorMessage } from "../lib/api";
 import { membersKey, useMembers } from "../lib/queries";
@@ -16,6 +27,7 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString();
 
 export function FamilyPage() {
   const { me } = useAuth();
+  const navigate = useNavigate();
   const { baby } = useCurrentBaby();
   const qc = useQueryClient();
   const withFresh = useFreshSignIn();
@@ -96,13 +108,24 @@ export function FamilyPage() {
     <IonPage>
       <AppHeader title={t("family.title")} />
       <IonContent className="ion-padding">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-5" data-testid="family">
-          {!baby ? <p className="opacity-70">{t("family.noBaby")}</p> : null}
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-8" data-testid="family">
+          {!baby ? (
+            <EmptyState
+              icon={peopleOutline}
+              action={
+                <Button onClick={() => navigate("/onboarding/baby?another=1")}>
+                  {t("header.addBaby")}
+                </Button>
+              }
+            >
+              {t("family.noBaby")}
+            </EmptyState>
+          ) : null}
           {removalForMe && baby ? (
-            <Card className="border-red-500/60">
+            <Card tone="danger">
               <div role="alert" data-testid="removal-banner">
                 <h2 className="font-semibold">{t("family.removalBannerTitle")}</h2>
-                <p className="mb-3">{t("family.removalBannerBody", { baby: baby.name })}</p>
+                <p className="mb-4 mt-1">{t("family.removalBannerBody", { baby: baby.name })}</p>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="danger"
@@ -129,27 +152,38 @@ export function FamilyPage() {
             </Message>
           ) : null}
           {members.isError ? <Message>{errorMessage(members.error)}</Message> : null}
+          {baby && members.isPending && !members.isError ? <ListSkeleton rows={3} /> : null}
+
+          {isAdmin && baby ? (
+            <ShareLinksSection babyId={baby.id} plus={baby.plan !== "free"} />
+          ) : null}
 
           {data ? (
             <section aria-labelledby="members-h">
-              <h2 id="members-h" className="mb-2 text-lg font-semibold">
+              <h2 id="members-h" className="mb-3 text-xl font-semibold">
                 {t("family.members")}
               </h2>
-              <ul className="flex flex-col gap-2" data-testid="members-list">
+              <ul className="ll-list" data-testid="members-list">
                 {data.members.map((m) => {
                   const mine = m.userId === myId;
                   const pending = !!m.removalRequestedBy;
                   return (
                     <li
                       key={m.userId}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-500/30 p-3"
+                      className="ll-row !flex-nowrap"
                       data-testid={`member-${m.role}`}
                     >
-                      <div>
-                        <p className="font-medium">
+                      <span
+                        aria-hidden
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fill font-semibold text-muted"
+                      >
+                        {m.displayName.trim().charAt(0).toUpperCase()}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold">
                           {m.displayName} {mine ? t("family.you") : ""}
                         </p>
-                        <p className="text-sm opacity-70">
+                        <p className="text-sm text-muted">
                           {[roleLabel(m.role), m.relationshipLabel].filter(Boolean).join(", ")}
                         </p>
                         {pending && !mine ? (
@@ -158,20 +192,25 @@ export function FamilyPage() {
                       </div>
                       {isAdmin && !mine ? (
                         pending ? (
-                          <Button variant="secondary" onClick={() => answerRemoval(m, "decline")}>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => answerRemoval(m, "decline")}
+                          >
                             {t("family.cancelRequest")}
                           </Button>
                         ) : (
                           <div className="flex flex-col items-end">
                             <Button
-                              variant="secondary"
+                              variant="danger"
+                              size="sm"
                               data-testid={`member-remove-${m.role}`}
                               onClick={() => removeMember(m)}
                             >
                               {t("family.remove")}
                             </Button>
                             {m.role === "admin" ? (
-                              <span className="text-xs opacity-70">
+                              <span className="ll-caption max-w-40 text-right">
                                 {t("family.removeAdminNote")}
                               </span>
                             ) : null}
@@ -184,8 +223,8 @@ export function FamilyPage() {
               </ul>
               {baby && myMember ? (
                 <Button
-                  variant="link"
-                  className="mt-2"
+                  variant="danger"
+                  className="mt-3"
                   data-testid="leave-album"
                   onClick={() => {
                     if (window.confirm(t("family.leaveConfirm", { baby: baby.name }))) leave();
@@ -198,11 +237,11 @@ export function FamilyPage() {
           ) : null}
 
           {isAdmin && data ? (
-            <section aria-labelledby="invites-h" className="flex flex-col gap-3">
-              <h2 id="invites-h" className="text-lg font-semibold">
+            <section aria-labelledby="invites-h" className="flex flex-col gap-4">
+              <h2 id="invites-h" className="text-xl font-semibold">
                 {t("family.invites")}
               </h2>
-              <form onSubmit={onInvite} className="flex flex-col gap-3" noValidate>
+              <form onSubmit={onInvite} className="flex flex-col gap-4" noValidate>
                 <TextField
                   data-testid="family-invite-email"
                   label={t("family.inviteNew")}
@@ -213,21 +252,16 @@ export function FamilyPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
-                <div className="flex flex-col gap-1">
-                  <label htmlFor="invite-role" className="text-sm font-medium">
-                    {t("family.inviteRole")}
-                  </label>
-                  <select
-                    id="invite-role"
-                    data-testid="family-invite-role"
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as BabyRole)}
-                    className="min-h-11 rounded-lg border border-gray-500/50 bg-transparent px-3"
-                  >
-                    <option value="contributor">{roleLabel("contributor")}</option>
-                    <option value="admin">{roleLabel("admin")}</option>
-                  </select>
-                </div>
+                <SelectField
+                  id="invite-role"
+                  label={t("family.inviteRole")}
+                  data-testid="family-invite-role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as BabyRole)}
+                >
+                  <option value="contributor">{roleLabel("contributor")}</option>
+                  <option value="admin">{roleLabel("admin")}</option>
+                </SelectField>
                 <Button
                   type="submit"
                   data-testid="family-invite-send"
@@ -238,16 +272,13 @@ export function FamilyPage() {
               </form>
               {data.invites.length > 0 ? (
                 <>
-                  <h3 className="font-medium">{t("family.invitePending")}</h3>
-                  <ul className="flex flex-col gap-2" data-testid="invites-list">
+                  <h3 className="ll-label">{t("family.invitePending")}</h3>
+                  <ul className="ll-list" data-testid="invites-list">
                     {data.invites.map((inv) => (
-                      <li
-                        key={inv.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-500/30 p-3"
-                      >
+                      <li key={inv.id} className="ll-row">
                         <div>
-                          <p className="font-medium">{inv.email}</p>
-                          <p className="text-sm opacity-70">
+                          <p className="font-semibold">{inv.email}</p>
+                          <p className="text-sm text-muted">
                             {roleLabel(inv.role)},{" "}
                             {t("family.expires", { date: fmtDate(inv.expiresAt) })}
                           </p>
@@ -255,6 +286,7 @@ export function FamilyPage() {
                         <div className="flex gap-2">
                           <Button
                             variant="secondary"
+                            size="sm"
                             data-testid="invite-resend"
                             onClick={() =>
                               act(async () => {
@@ -269,7 +301,8 @@ export function FamilyPage() {
                             {t("common.resend")}
                           </Button>
                           <Button
-                            variant="secondary"
+                            variant="danger"
+                            size="sm"
                             data-testid="invite-revoke"
                             onClick={() =>
                               act(async () => {

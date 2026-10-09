@@ -7,12 +7,12 @@ import { t } from "../../i18n";
 import { ageText } from "../../lib/age";
 import { FEATURES } from "../../lib/features";
 import { measurementText, useProfileTimeZone, useProfileUnits } from "../../lib/units";
-import { Button } from "../ui";
+import { Button, Tag } from "../ui";
 
 function Row({ label, children, testId }: { label: string; children: ReactNode; testId?: string }) {
   return (
     <div className="flex flex-col gap-0.5" data-testid={testId}>
-      <dt className="text-xs font-medium uppercase tracking-wide opacity-60">{label}</dt>
+      <dt className="text-xs text-muted">{label}</dt>
       <dd className="text-base">{children}</dd>
     </div>
   );
@@ -50,7 +50,7 @@ function EditedMark({ show }: { show: boolean }) {
   return show ? (
     <span
       data-testid="details-ai-edited"
-      className="ml-2 rounded bg-gray-500/20 px-1.5 py-0.5 text-xs font-medium"
+      className="ml-2 rounded-md bg-fill px-1.5 py-0.5 align-middle text-xs font-semibold text-muted"
     >
       {t("ai.edited")}
     </span>
@@ -89,20 +89,20 @@ function AiSection({
   let content: ReactNode;
   if (ai.status === "not_available") {
     content = paid ? (
-      <span className="opacity-70" data-testid="details-ai-unavailable">
+      <span className="text-muted" data-testid="details-ai-unavailable">
         {t("details.captionPending")}
       </span>
     ) : (
       <span data-testid="details-ai-upgrade">
-        <Link to="/settings" className="underline">
+        <Link to="/settings" className="ll-link">
           {t("ai.upgrade")}
         </Link>
-        <span className="mt-1 block text-sm opacity-70">{t("ai.upgradeBody")}</span>
+        <span className="mt-1 block text-sm text-muted">{t("ai.upgradeBody")}</span>
       </span>
     );
   } else if (ai.status === "pending") {
     content = (
-      <span className="opacity-70" data-testid="details-ai-pending">
+      <span className="text-muted" data-testid="details-ai-pending">
         {t("ai.pending")}
       </span>
     );
@@ -131,7 +131,7 @@ function AiSection({
           </Button>
         ) : null}
         {retryError ? (
-          <span role="alert" className="text-sm text-red-600 dark:text-red-400">
+          <span role="alert" className="ll-msg-error">
             {t("ai.retryError")}
           </span>
         ) : null}
@@ -139,7 +139,7 @@ function AiSection({
     );
   } else if (!d) {
     content = (
-      <span className="opacity-70" data-testid="details-ai-reanalysing">
+      <span className="text-muted" data-testid="details-ai-reanalysing">
         {t("ai.reanalysing")}
       </span>
     );
@@ -156,7 +156,7 @@ function AiSection({
           <EditedMark show={edited("detailed_description")} />
         </p>
         {line ? (
-          <p className="text-sm opacity-70" data-testid="details-ai-summary">
+          <p className="text-sm text-muted" data-testid="details-ai-summary">
             {line}
           </p>
         ) : null}
@@ -164,8 +164,8 @@ function AiSection({
           <p className="sr-only">{t("ai.tagsList")}</p>
           <ul className="flex flex-wrap gap-2" data-testid="details-ai-tags">
             {d.search_tags.map((tag) => (
-              <li key={tag} className="rounded-full border border-gray-500/50 px-3 py-0.5 text-sm">
-                {tag}
+              <li key={tag}>
+                <Tag>{tag}</Tag>
               </li>
             ))}
           </ul>
@@ -182,7 +182,7 @@ function AiSection({
                   {photo.canEdit && preset && onSuggestMilestone ? (
                     <Button
                       variant="secondary"
-                      className="!px-3 text-sm"
+                      size="sm"
                       data-testid={`details-ai-milestone-suggest-${n}`}
                       aria-label={t("ai.tagItLabel", { name: preset.name })}
                       onClick={() => onSuggestMilestone(preset.id)}
@@ -209,11 +209,11 @@ function AiSection({
     );
   }
   return (
-    <div className="flex flex-col gap-2" data-testid="details-ai">
+    <div className="ll-card flex flex-col gap-2 !p-3" data-testid="details-ai">
       {photo.isSensitive ? (
         <span
           data-testid="details-sensitive-badge"
-          className="inline-flex items-center gap-1.5 self-start rounded-full bg-black/70 px-3 py-1 text-sm text-white"
+          className="inline-flex items-center gap-1.5 self-start rounded-full bg-fill px-3 py-1 text-sm text-fg"
         >
           <IonIcon icon={eyeOffOutline} aria-hidden className="h-4 w-4" />
           {t("ai.sensitiveBadge")}
@@ -255,7 +255,7 @@ export function DetailsPanel({
   const place = isAdmin ? photo.exif?.placeLabel : null;
 
   return (
-    <dl data-testid="viewer-details" className="flex flex-col gap-3">
+    <dl data-testid="viewer-details" className="flex flex-col gap-4">
       <Row label={t("ai.sectionTitle")}>
         <AiSection
           photo={photo}
@@ -277,29 +277,29 @@ export function DetailsPanel({
       {place ? <Row label={t("details.place")}>{place}</Row> : null}
       {camera ? <Row label={t("details.camera")}>{camera}</Row> : null}
       <Row label={t("details.milestone")} testId="details-milestone-value">
-        {milestone ? milestone.name : <span className="opacity-60">{t("details.empty")}</span>}
+        {milestone ? milestone.name : <span className="text-muted">{t("details.empty")}</span>}
       </Row>
       <Row label={t("details.people")} testId="details-people-value">
         {d && d.people.length > 0 ? (
           <ul className="flex flex-wrap gap-2">
             {d.people.map((name) => (
-              <li key={name} className="rounded-full border border-gray-500/50 px-3 py-0.5 text-sm">
-                {name}
+              <li key={name}>
+                <Tag>{name}</Tag>
               </li>
             ))}
           </ul>
         ) : (
-          <span className="opacity-60">{t("details.empty")}</span>
+          <span className="text-muted">{t("details.empty")}</span>
         )}
       </Row>
       <Row label={t("details.location")} testId="details-location-value">
-        {d?.locationLabel || <span className="opacity-60">{t("details.empty")}</span>}
+        {d?.locationLabel || <span className="text-muted">{t("details.empty")}</span>}
       </Row>
       <Row label={t("details.note")} testId="details-note-value">
         {d?.note ? (
           <span className="whitespace-pre-wrap break-words">{d.note}</span>
         ) : (
-          <span className="opacity-60">{t("details.empty")}</span>
+          <span className="text-muted">{t("details.empty")}</span>
         )}
       </Row>
       {photo.measurements.length > 0 ? (

@@ -635,11 +635,18 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
     }
 
     // --- Share link (always fresh: expires 24 h from this run), rule, shared photos ------------
+    // A revoked link can only come back with a new token (`share_links_lifecycle`, step-8 D13),
+    // and the demo token is fixed: a revoked demo link is deleted (cascading its sessions, rule,
+    // album and exclusions) and recreated below.
+    await q("DELETE FROM public.share_links WHERE id = $1 AND revoked_at IS NOT NULL", [
+      DEMO.shareLink,
+    ]);
     await q(
-      `INSERT INTO public.share_links (id, baby_id, name, token_hash, passcode_hash, expires_at, allow_download, revoked_at, created_by)
-       VALUES ($1, $2, 'Grandparents', $3, NULL, now() + interval '24 hours', false, NULL, $4)
+      `INSERT INTO public.share_links (id, baby_id, name, token_hash, passcode_hash, expires_at, ttl_hours, allow_download, revoked_at, created_by)
+       VALUES ($1, $2, 'Grandparents', $3, NULL, now() + interval '24 hours', 24, false, NULL, $4)
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, token_hash = EXCLUDED.token_hash, passcode_hash = NULL,
-         expires_at = EXCLUDED.expires_at, allow_download = EXCLUDED.allow_download, revoked_at = NULL`,
+         expires_at = EXCLUDED.expires_at, ttl_hours = EXCLUDED.ttl_hours, allow_download = EXCLUDED.allow_download,
+         revoked_at = NULL`,
       [DEMO.shareLink, DEMO.baby, sha256(DEMO.shareToken), DEMO.users.mom],
     );
     await q(
@@ -647,11 +654,18 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
        ON CONFLICT (share_link_id) DO UPDATE SET mode = EXCLUDED.mode, include_tags = '{}', exclude_tags = '{}'`,
       [DEMO.shareLink],
     );
-    for (const nn of [2, 9, 10]) {
+    // Hand-picked by mom. Photo 4 (bath, sensitive) is shared but not released ("Show to family"
+    // off): viewers get a hidden tile with no image and cannot read its derivatives (step-8 D4).
+    for (const nn of [2, 4, 9, 10]) {
       await q(
-        `INSERT INTO public.shared_photos (share_link_id, photo_id, added_by, added_by_user_id)
-         VALUES ($1, $2, 'user', $3)
-         ON CONFLICT (share_link_id, photo_id) DO UPDATE SET added_by = EXCLUDED.added_by, added_by_user_id = EXCLUDED.added_by_user_id`,
+        "DELETE FROM public.shared_photo_exclusions WHERE share_link_id = $1 AND photo_id = $2",
+        [DEMO.shareLink, DEMO.photo(nn)],
+      );
+      await q(
+        `INSERT INTO public.shared_photos (share_link_id, photo_id, added_by, added_by_user_id, sensitive_released_at, sensitive_released_by)
+         VALUES ($1, $2, 'user', $3, NULL, NULL)
+         ON CONFLICT (share_link_id, photo_id) DO UPDATE SET added_by = EXCLUDED.added_by, added_by_user_id = EXCLUDED.added_by_user_id,
+           sensitive_released_at = NULL, sensitive_released_by = NULL`,
         [DEMO.shareLink, DEMO.photo(nn), DEMO.users.mom],
       );
     }

@@ -101,7 +101,7 @@ export function BabyPage() {
           value={length}
           onChange={(e) => setLength(e.target.value)}
         />
-        <p className="text-sm opacity-70">{t("baby.photoLater")}</p>
+        <p className="text-sm text-muted">{t("baby.photoLater")}</p>
         {error ? <Message data-testid="baby-error">{error}</Message> : null}
         <Button
           type="submit"

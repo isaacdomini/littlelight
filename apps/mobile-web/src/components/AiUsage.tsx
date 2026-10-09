@@ -21,16 +21,16 @@ export function AiUsage({ babyId, paid }: { babyId: string; paid: boolean }) {
   return (
     <section
       aria-labelledby="ai-usage-h"
-      className="flex flex-col gap-2"
+      className="ll-card flex flex-col gap-2"
       data-testid="ai-usage-section"
     >
-      <h2 id="ai-usage-h" className="text-lg font-semibold">
+      <h2 id="ai-usage-h" className="text-xl font-semibold">
         {t("ai.usageTitle")}
       </h2>
       {!paid ? (
         <p data-testid="ai-usage">{t("ai.usageFree")}</p>
       ) : usage.isError ? (
-        <p role="alert" className="text-sm">
+        <p role="alert" className="ll-msg-error">
           {t("ai.usageError")}
         </p>
       ) : (
@@ -38,7 +38,7 @@ export function AiUsage({ babyId, paid }: { babyId: string; paid: boolean }) {
           {line ?? t("common.loading")}
         </p>
       )}
-      <p className="text-sm opacity-70">{t("ai.usageNote")}</p>
+      <p className="text-sm text-muted">{t("ai.usageNote")}</p>
     </section>
   );
 }

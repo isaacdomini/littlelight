@@ -660,6 +660,15 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
 
     it("an approved, live, non-sensitive photo of the same baby is accepted either way", async () => {
       await sandbox(async () => {
+        // A rule row needs an analysed photo (step 8); a user row does not.
+        expect((await err(share(LINK.LA, P.contribApproved, "rule")))?.message).toMatch(
+          /only analysed photos/,
+        );
+        await q(
+          `INSERT INTO photo_ai (photo_id, model, prompt_version, schema_version, description)
+           VALUES ($1, 'gpt-6-luna', 'v1', 'v1', '{"caption":"x"}'::jsonb)`,
+          [P.contribApproved],
+        );
         expect(await err(share(LINK.LA, P.contribApproved, "rule"))).toBeNull();
         expect(await err(share(LINK.LAexpired, P.contribApproved, "user"))).toBeNull();
       });
@@ -779,7 +788,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
           ["photos", "is_sensitive = true", [P.approved1], "id = $1"],
           ["photo_details", "note = 'x'", [P.approved1], "photo_id = $1"],
           ["share_links", "name = 'x'", [LINK.LA], "id = $1"],
-          ["share_rules", "mode = 'tags'", [LINK.LA], "share_link_id = $1"],
+          ["share_rules", "mode = 'all'", [LINK.LA], "share_link_id = $1"],
           ["chat_threads", "title = 'x'", [THREAD_A], "id = $1"],
           ["photo_ai", "model = 'x'", [P.approved1], "photo_id = $1"],
           ["photo_exif", "camera_make = 'x'", [P.approved1], "photo_id = $1"],

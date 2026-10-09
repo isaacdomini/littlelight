@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { ME_KEY, useAuth } from "../../auth/AuthProvider";
 import { nextOnboardingRoute } from "../../auth/onboarding";
 import { FlowPage } from "../../components/Page";
-import { Button, Message, TextField } from "../../components/ui";
+import { Button, Message, SelectField, TextField } from "../../components/ui";
 import { t } from "../../i18n";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { pendingInvite } from "../../lib/session";
@@ -74,7 +74,7 @@ export function ProfilePage() {
 
   return (
     <FlowPage title={t("profile.title")} testId="profile">
-      <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-5" noValidate>
+      <form onSubmit={(e) => void onSubmit(e)} className="flex flex-col gap-6" noValidate>
         <TextField
           data-testid="profile-name"
           label={t("profile.nameLabel")}
@@ -84,8 +84,8 @@ export function ProfilePage() {
           onChange={(e) => setName(e.target.value)}
         />
         <fieldset className="flex flex-col gap-2">
-          <legend className="mb-1 text-sm font-medium">{t("profile.relationship")}</legend>
-          <div className="flex flex-wrap gap-2">
+          <legend className="ll-label mb-1">{t("profile.relationship")}</legend>
+          <div className="ll-chips">
             {RELATIONSHIP_LABELS.map((l) => (
               <button
                 key={l}
@@ -93,11 +93,7 @@ export function ProfilePage() {
                 aria-pressed={label === l}
                 data-testid={`profile-rel-${l.toLowerCase()}`}
                 onClick={() => setLabel(l)}
-                className={`min-h-11 rounded-full border px-4 ${
-                  label === l
-                    ? "border-[var(--ion-color-primary)] bg-[var(--ion-color-primary)] text-[var(--ion-color-primary-contrast)]"
-                    : "border-gray-500/50"
-                }`}
+                className="ll-chip"
               >
                 {l}
               </button>
@@ -110,34 +106,23 @@ export function ProfilePage() {
             onChange={(e) => setLabel(e.target.value)}
           />
         </fieldset>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="profile-tz" className="text-sm font-medium">
-            {t("profile.timezone")}
-          </label>
-          <select
-            id="profile-tz"
-            value={tz}
-            onChange={(e) => setTz(e.target.value)}
-            className="min-h-11 rounded-lg border border-gray-500/50 bg-transparent px-3"
-          >
-            {[...new Set([tz, ...timezones()])].map((z) => (
-              <option key={z} value={z}>
-                {z}
-              </option>
-            ))}
-          </select>
-        </div>
-        <fieldset className="flex flex-col gap-1">
-          <legend className="mb-1 text-sm font-medium">{t("profile.units")}</legend>
+        <SelectField
+          id="profile-tz"
+          label={t("profile.timezone")}
+          value={tz}
+          onChange={(e) => setTz(e.target.value)}
+        >
+          {[...new Set([tz, ...timezones()])].map((z) => (
+            <option key={z} value={z}>
+              {z}
+            </option>
+          ))}
+        </SelectField>
+        <fieldset className="flex flex-col">
+          <legend className="ll-label mb-1">{t("profile.units")}</legend>
           {(["metric", "imperial"] as const).map((u) => (
-            <label key={u} className="flex min-h-11 items-center gap-3">
-              <input
-                type="radio"
-                name="units"
-                className="h-5 w-5 accent-[var(--ion-color-primary)]"
-                checked={units === u}
-                onChange={() => setUnits(u)}
-              />
+            <label key={u} className="ll-check !items-center">
+              <input type="radio" name="units" checked={units === u} onChange={() => setUnits(u)} />
               {t(u === "metric" ? "profile.units.metric" : "profile.units.imperial")}
             </label>
           ))}

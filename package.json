@@ -20,6 +20,7 @@
     "e2e:upload-gate": "tsx e2e/upload/gate.ts",
     "e2e:ai-gate": "tsx e2e/ai/gate.ts",
     "e2e:search-gate": "tsx e2e/search/gate.ts",
+    "e2e:share-gate": "tsx e2e/sharing/gate.ts",
     "e2e:perf": "playwright test -c e2e/playwright.perf.config.ts",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @littlelight/db db:migrate",

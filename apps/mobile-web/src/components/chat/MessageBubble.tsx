@@ -32,14 +32,14 @@ function Chips({
   });
   if (chips.length === 0) return null;
   return (
-    <ul className="flex flex-wrap gap-1">
+    <ul className="ll-chips !py-0">
       {chips.map(({ photo, n }) => (
         <li key={photo.id}>
           <button
             type="button"
             data-testid={`chat-citation-${photo.id}`}
             onClick={() => onOpen(photo)}
-            className="min-h-11 min-w-11 rounded-full border border-gray-500/50 px-3 text-sm"
+            className="ll-chip"
           >
             {t("chat.citation", { n })}
           </button>
@@ -72,11 +72,9 @@ export function MessageBubble({
     >
       <span className="sr-only">{mine ? t("chat.you") : t("chat.assistant")}</span>
       <div
-        className={`flex max-w-[92%] flex-col gap-2 rounded-2xl px-3 py-2 ${
-          mine
-            ? "bg-[var(--ion-color-primary)] text-[var(--ion-color-primary-contrast)]"
-            : "border border-gray-500/30"
-        } ${message.status === "error" ? "border-red-500/60" : ""}`}
+        className={`flex flex-col gap-3 ${
+          mine ? "ll-bubble-user max-w-[88%]" : "max-w-full"
+        } ${message.status === "error" ? "text-danger-text" : ""}`}
       >
         <Text text={parsed.text} />
         {!mine ? (
@@ -88,7 +86,7 @@ export function MessageBubble({
             />
             <ChatPhotoGrid photos={photos} baby={baby} timeZone={timeZone} onOpen={open} />
             {message.status === "complete" && !message.grounded ? (
-              <p className="text-xs opacity-70" data-testid="chat-ungrounded">
+              <p className="text-xs text-muted" data-testid="chat-ungrounded">
                 {t("chat.ungrounded")}
               </p>
             ) : null}

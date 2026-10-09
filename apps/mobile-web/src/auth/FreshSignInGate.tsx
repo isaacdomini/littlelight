@@ -1,4 +1,4 @@
-import { IonContent, IonModal } from "@ionic/react";
+import { IonModal } from "@ionic/react";
 import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from "react";
 import { CodeEntry } from "../components/CodeEntry";
 import { Button } from "../components/ui";
@@ -49,30 +49,29 @@ export function FreshSignInProvider({ children }: { children: ReactNode }) {
         isOpen={open}
         onDidDismiss={() => waiter.current && close(false)}
         data-testid="fresh-gate"
+        className="ll-sheet"
       >
-        <IonContent className="ion-padding">
-          {email ? (
-            <div className="mx-auto flex max-w-md flex-col gap-4 py-6">
-              <h2 className="text-xl font-bold">{t("gate.title")}</h2>
-              <p>{t("gate.body", { email })}</p>
-              <CodeEntry
-                email={email}
-                sendOnMount
-                onVerified={async () => {
-                  await refetchMe();
-                  close(true);
-                }}
-              />
-              <Button
-                variant="secondary"
-                data-testid="fresh-gate-cancel"
-                onClick={() => close(false)}
-              >
-                {t("gate.cancel")}
-              </Button>
-            </div>
-          ) : null}
-        </IonContent>
+        {email ? (
+          <div className="flex max-h-[90vh] flex-col gap-4 overflow-y-auto p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+            <h2 className="text-xl font-semibold">{t("gate.title")}</h2>
+            <p className="text-muted">{t("gate.body", { email })}</p>
+            <CodeEntry
+              email={email}
+              sendOnMount
+              onVerified={async () => {
+                await refetchMe();
+                close(true);
+              }}
+            />
+            <Button
+              variant="secondary"
+              data-testid="fresh-gate-cancel"
+              onClick={() => close(false)}
+            >
+              {t("gate.cancel")}
+            </Button>
+          </div>
+        ) : null}
       </IonModal>
     </GateContext.Provider>
   );

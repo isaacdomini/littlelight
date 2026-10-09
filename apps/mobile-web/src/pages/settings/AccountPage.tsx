@@ -76,13 +76,13 @@ export function AccountPage() {
             <p>{t("account.deleteIntro")}</p>
             {data.blockingBabies.map((b) => (
               <Card key={b.id}>
-                <p className="mb-2" data-testid="account-blocking">
+                <p className="mb-3" data-testid="account-blocking">
                   {t("account.blocking", { baby: b.name })}
                 </p>
                 {confirmAlbum === b.id ? (
                   <div className="flex flex-col gap-2">
                     <p>{t("account.deleteAlbumConfirm", { baby: b.name })}</p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         variant="danger"
                         data-testid="blocking-delete-confirm"
@@ -113,7 +113,7 @@ export function AccountPage() {
               </Card>
             ))}
             {data.babiesKept.map((b) => (
-              <p key={b.id} className="opacity-80">
+              <p key={b.id} className="text-muted">
                 {t("account.kept", { baby: b.name, other: b.otherAdminName })}
               </p>
             ))}
@@ -125,8 +125,8 @@ export function AccountPage() {
 
         {step === "consequences" ? (
           <>
-            <h2 className="text-lg font-semibold">{t("account.consequencesTitle")}</h2>
-            <ul className="list-disc space-y-1 pl-5">
+            <h2 className="text-xl font-semibold">{t("account.consequencesTitle")}</h2>
+            <ul className="list-disc space-y-2 pl-5">
               <li>{t("account.consequence1")}</li>
               <li>{t("account.consequence2")}</li>
               <li>{t("account.consequence3")}</li>

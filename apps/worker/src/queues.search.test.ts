@@ -45,8 +45,8 @@ const pipeline = () => ({
 });
 
 describe("search queue definitions (step 7)", () => {
-  it("there are ten queues, all exclusive", () => {
-    expect(Object.keys(QUEUES)).toHaveLength(10);
+  it("there are twelve queues, all exclusive", () => {
+    expect(Object.keys(QUEUES)).toHaveLength(12);
     for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
   });
 
@@ -68,13 +68,13 @@ describe("search queue definitions (step 7)", () => {
     });
   });
 
-  it("the reconcile cron comes from config and is scheduled in addition to the five others", () => {
+  it("the reconcile cron comes from config and is scheduled in addition to the six others", () => {
     const all = schedules({
       AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
       AI_POLL_INTERVAL_CRON: "*/5 * * * *",
       SEARCH_RECONCILE_CRON: "31 * * * *",
     });
-    expect(all).toHaveLength(6);
+    expect(all).toHaveLength(7);
     expect(Object.fromEntries(all)[JOBS.searchReconcile]).toBe("31 * * * *");
     expect(Object.fromEntries(all)[JOBS.searchBackfill]).toBeUndefined(); // on demand only
     expect(SCHEDULES).toHaveLength(3);
@@ -279,7 +279,7 @@ describe("startWorkers: the search handlers", () => {
       log,
       ingestConcurrency: 1,
     });
-    expect(registered.size).toBe(10);
+    expect(registered.size).toBe(12);
     await registered.get(JOBS.searchReconcile)?.handler([job({}), job({ bad: 1 })]);
     expect(ix.reconcile).toHaveBeenCalledTimes(1);
     await registered.get(JOBS.searchBackfill)?.handler([job({ reason: "manual", babyId: BABY })]);

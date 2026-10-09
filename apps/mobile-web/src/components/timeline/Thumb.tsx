@@ -43,19 +43,19 @@ export const Thumb = memo(function Thumb({
         data-testid={`photo-${p.id}`}
         aria-pressed={selectMode ? selected : undefined}
         onClick={() => (selectMode ? onToggle(p) : onOpen(p))}
-        className="relative aspect-square min-h-11 w-full min-w-11 overflow-hidden bg-gray-500/10 [contain:layout_paint_style]"
+        className="relative aspect-square min-h-11 w-full min-w-11 overflow-hidden rounded-md bg-fill [contain:layout_paint_style]"
       >
         <PhotoImage
           photo={p}
           baby={baby}
           milestoneName={milestoneName}
           timeZone={timeZone}
-          className="h-full w-full rounded-md object-cover"
+          className="h-full w-full object-cover"
         />
         {p.approval === "pending" ? (
           <span
             data-testid={`photo-pending-${p.id}`}
-            className="absolute left-1 top-1 rounded bg-amber-500 px-1.5 py-0.5 text-xs font-semibold text-black"
+            className="absolute left-1.5 top-1.5 rounded-md bg-warning px-1.5 py-0.5 text-xs font-semibold text-on-accent"
           >
             {t("timeline.pendingBadge")}
           </span>
@@ -66,7 +66,7 @@ export const Thumb = memo(function Thumb({
             role="img"
             aria-label={t("timeline.milestoneBadge", { name: milestoneName })}
             title={milestoneName}
-            className="absolute bottom-1 left-1 flex h-6 w-6 items-center justify-center rounded-full bg-[var(--ion-color-primary)] text-[var(--ion-color-primary-contrast)]"
+            className="absolute bottom-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-accent text-on-accent"
           >
             <IonIcon icon={flag} aria-hidden className="h-4 w-4" />
           </span>
@@ -77,7 +77,7 @@ export const Thumb = memo(function Thumb({
             role="img"
             aria-label={t("ai.analyzingBadge")}
             title={t("ai.analyzingBadge")}
-            className="absolute right-1 top-1 h-2.5 w-2.5 animate-pulse rounded-full bg-sky-400 ring-2 ring-black/40"
+            className="absolute right-1.5 top-1.5 h-2.5 w-2.5 animate-pulse rounded-full bg-accent ring-2 ring-black/40"
           />
         ) : null}
         {p.isSensitive ? (
@@ -85,7 +85,7 @@ export const Thumb = memo(function Thumb({
             data-testid={`photo-sensitive-${p.id}`}
             role="img"
             aria-label={t("timeline.sensitiveBadge")}
-            className="absolute bottom-1 right-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white"
+            className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white"
           >
             <IonIcon icon={eyeOffOutline} aria-hidden className="h-4 w-4" />
           </span>
@@ -94,23 +94,22 @@ export const Thumb = memo(function Thumb({
           <span
             data-testid={`select-${p.id}`}
             aria-hidden
-            className={`absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white text-sm font-bold ${
-              selected
-                ? "bg-[var(--ion-color-primary)] text-[var(--ion-color-primary-contrast)]"
-                : "bg-black/40 text-transparent"
+            className={`absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white text-sm font-semibold ${
+              selected ? "bg-accent text-on-accent" : "bg-black/40 text-transparent"
             }`}
           >
             ✓
           </span>
         ) : null}
         {selectMode && selected ? (
-          <span className="absolute inset-0 ring-4 ring-inset ring-[var(--ion-color-primary)]" />
+          <span className="absolute inset-0 rounded-md ring-4 ring-inset ring-accent" />
         ) : null}
       </button>
       {pendingActions ? (
-        <div className="flex gap-1">
+        <div className="flex flex-col gap-1">
           <Button
-            className="flex-1 !px-2"
+            size="sm"
+            className="w-full !px-2"
             data-testid={`approve-${p.id}`}
             aria-label={t("timeline.approveLabel")}
             disabled={busy}
@@ -120,7 +119,8 @@ export const Thumb = memo(function Thumb({
           </Button>
           <Button
             variant="secondary"
-            className="flex-1 !px-2"
+            size="sm"
+            className="w-full !px-2"
             data-testid={`reject-${p.id}`}
             aria-label={t("timeline.rejectLabel")}
             disabled={busy}

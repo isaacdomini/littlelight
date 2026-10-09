@@ -407,3 +407,64 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Still open: production credentials, Apple/Google IDs, Turnstile, legal text, CSAM provider,
     ~1.1 GB unused Docker volumes.
 - **Commit**: step 7: search and chat
+
+## Step 8: Sharing
+
+- **Built**: Design system adopted (`docs/DESIGN.md`) and every existing screen restyled to it
+  (tokens on `:root` with dark variants, coral accent with dark text on fills and #B14128 for accent
+  text so AA holds, Ionic CSS layered under the theme, 44 px targets, filled secondary buttons);
+  `apps/mobile-web/scripts/screenshots.ts` + `screenshots-share.ts` capture light/dark × phone/desktop.
+  Migration 15 (`sharing-v1`): share links stored as SHA-256 of a 128-bit token, passcode hashes
+  (scrypt), 24 h default / 30-day max expiry, 20 links per baby, `share_rules` (only-added / all /
+  milestones / tags with include/exclude), `shared_photos` gate trigger (approved, live, not
+  quarantined; rule rows only for analysed, non-sensitive photos; takes `FOR SHARE` on the photo),
+  `shared_photo_exclusions` so rules never re-add a removed photo, viewer RLS through
+  `viewer_photo_ids()`, `viewer_session_check()` on every viewer request, passcode failure ledger
+  (5 per IP+token per 15 min, 20 per link per hour then locked until regenerate), session-ending
+  triggers on revoke/regenerate/delete/passcode change/trash. Worker: auto-sharer on `photo.reindex`
+  (runs before indexing, failure never blocks it), `share.apply` per link and hourly
+  `share.reconcile` with a DB-clock watermark (12 queues, 7 schedules); a refused row (race with a
+  sensitive flag) is skipped per row in a savepoint, never aborting the batch. API
+  (`apps/api/src/sharing/**`): admin routes (create/list/patch/renew/regenerate/revoke/delete, rule
+  PUT/DELETE Plus-only, add/remove photos, show a sensitive photo to family, per-photo links);
+  viewer token exchange → `ll_viewer` cookie (`Path=/api/share`, HttpOnly, SameSite=Lax, separate
+  `littlelight-viewer` JWT audience) or native bearer, album/photos/urls/download/manifest with exact
+  payload keys, 5-minute `Cache-Control: private` media URLs, display-copy downloads (60 s, ASCII
+  file name). Web: Family screen share-link cards (status, counts, views, passcode lock notice),
+  create/settings sheets, URL shown once, manage photos, viewer at `/s/:token` (passcode, album by
+  age, hidden tiles, photo view, expired page, install manifest, no-referrer). nginx `/s/`:
+  no-referrer, no-store, noindex. CI: sharing hygiene script, required sharing suites, share gate and
+  log scan in the dev-stack job. Tests: 1,839 unit, 1,086 integration, 42 Playwright e2e,
+  `pnpm e2e:share-gate` (49 checks), smoke step 5g.
+- **Gate**: orchestrator ran lint, typecheck, sharing hygiene, unit (1,839; 3 runs clean after an
+  `App.test.tsx` Ionic lazy-load teardown race was fixed), integration 1,086/1,086 with MinIO (no
+  skips), `pnpm e2e` 42/42, share gate 49/49 (expired, revoked and regenerated links give 410 and the
+  expired page; 0 rule rows on sensitive or unanalysed photos, including a held-lock race; viewer
+  media has no GPS/EXIF; old media URL 403 after revoke + TTL; passcode lockout; no token, passcode,
+  signature or GPS in logs), smoke passed twice, upload gate, AI gate (fake) and search gate (fake)
+  passed, perf passed (phone jank 0.09 %, desktop 2.82 %, p95 frame 16.8 ms, API p95 139/189 ms).
+  Run on the live dev stack, not a clean copy; CI's dev-stack job does the cold build. Screenshots
+  of all screens and the new sharing screens reviewed in light/dark × phone/desktop.
+  **Acceptance ("expired or revoked link returns the expired page; sensitive photos never
+  auto-share"): passed.**
+- **Decisions**:
+  - **User decisions (2026-10-09):** adopt `docs/DESIGN.md` and restyle now; share URL shown once
+    (hash only stored); 30-day max expiry (24 h / 3 d / 7 d / 30 d); auto-share rules Plus-only;
+    viewer downloads are the 1600 px display copy, never originals.
+  - A baby that leaves Plus: its rules stop adding photos but still remove ones that stop matching.
+    Photos must be ingested before a rule can add them. Deleting a rule keeps what it added.
+  - Trashed album: links can be revoked/deleted/trimmed but not created, renewed or extended.
+  - One viewer session per browser; native clients re-run the exchange after a renew (step-9 seam).
+  - A non-`scrypt$1$` passcode hash never verifies (link stays closed).
+- **Open issues**:
+  - First perf run after reseeding failed on API p95 (384/442 ms) until `ANALYZE`; after it,
+    139/189 ms. The perf seed should analyse its tables.
+  - The AI gate can pick up a stray pending photo from other test babies on a shared dev DB (one
+    run billed 51 instead of 50); passes on rerun. The gate could scope its flush to its own baby.
+  - `index.html` has no static `<meta name="referrer" content="no-referrer">` (added at runtime on
+    `/s/`; nginx header covers production).
+  - The walkthrough's chat 401 check needs a body (validation runs before auth on that route).
+  - Seeded demo photos still have no stored images (matters for the step-9 store demo account).
+  - Carried: Cloudflare "Bypass cache" rule for `files.`, production credentials, Apple/Google IDs,
+    Turnstile, legal text, CSAM provider, ~1.1 GB unused Docker volumes; final combined review.
+- **Commit**: step 8: sharing

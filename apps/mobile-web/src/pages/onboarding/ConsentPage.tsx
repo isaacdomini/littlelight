@@ -57,11 +57,11 @@ export function ConsentPage() {
           label={
             <>
               {t("consent.checkbox.prefix")}
-              <Link to="/legal/terms" className="underline">
+              <Link to="/legal/terms" className="ll-link">
                 {t("consent.checkbox.terms")}
               </Link>
               {t("consent.checkbox.and")}
-              <Link to="/legal/privacy" className="underline">
+              <Link to="/legal/privacy" className="ll-link">
                 {t("consent.checkbox.privacy")}
               </Link>
             </>

@@ -127,6 +127,14 @@ export type ShareRuleMode = z.infer<typeof shareRuleModeSchema>;
 export const sharedPhotoAddedBySchema = z.enum(["user", "rule"]);
 export type SharedPhotoAddedBy = z.infer<typeof sharedPhotoAddedBySchema>;
 
+/**
+ * Derived share-link state (not a column; docs/plans/step-8.md 2.5): `revoked` when
+ * `revoked_at` is set, else `expired` when `expires_at <= now()`, else `active`. Viewers of a
+ * non-active link get 410 `share_link_expired`.
+ */
+export const shareLinkStatusSchema = z.enum(["active", "expired", "revoked"]);
+export type ShareLinkStatus = z.infer<typeof shareLinkStatusSchema>;
+
 /** `chat_messages.role`. */
 export const chatRoleSchema = z.enum(["user", "assistant", "tool", "system"]);
 export type ChatRole = z.infer<typeof chatRoleSchema>;

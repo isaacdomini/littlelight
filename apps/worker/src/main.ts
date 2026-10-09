@@ -21,6 +21,7 @@ import {
   sendReindex,
   startWorkers,
 } from "./queues";
+import { createAutoSharer } from "./sharing/autoshare";
 import { createStorage } from "./storage";
 import { WORKER_VERSION } from "./version";
 
@@ -32,7 +33,9 @@ import { WORKER_VERSION } from "./version";
 // log line and the worker stays healthy), the AI queues are always created and registered.
 // Step 7 (docs/plans/step-7.md 2.7): the embedder is created with it (null without
 // OPENAI_API_KEY: search rows get no vector, keyword search still works) and the search indexer
-// serves `photo.reindex`, `search.reconcile` and `search.backfill`.
+// serves `photo.reindex`, `search.reconcile` and `search.backfill`. Step 8 (docs/plans/step-8.md
+// 2.8): the auto-sharer runs inside `photo.reindex` (before indexing) and serves `share.apply`
+// and `share.reconcile`; no model call.
 
 function readConfig() {
   try {
@@ -62,8 +65,9 @@ try {
 
 // Room for INGEST_CONCURRENCY handlers (a few short transactions each) plus the heartbeat, the
 // cron jobs and the AI flush/poll/backfill handlers (+2, docs/plans/step-6.md 2.7), and the
-// search reindex/reconcile/backfill handlers (+1, docs/plans/step-7.md 2.7).
-const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 7);
+// search reindex/reconcile/backfill handlers (+1, docs/plans/step-7.md 2.7), and the share
+// apply/reconcile handlers (+1, docs/plans/step-8.md 2.8).
+const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 8);
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
 const s3 = createS3Client(config);
 const storage = createStorage(s3, config.S3_BUCKET);
@@ -97,6 +101,8 @@ const indexer = createSearchIndexer({
   config: searchIndexerConfig(config, process.env, ai.embedder),
   log,
 });
+
+const autoSharer = createAutoSharer({ pool, log });
 
 const heartbeat = startHeartbeat(
   {
@@ -158,6 +164,7 @@ try {
     sweep: { pool, storage, log },
     ai: aiPipeline,
     indexer,
+    autoSharer,
     log,
     ingestConcurrency: config.INGEST_CONCURRENCY,
   });

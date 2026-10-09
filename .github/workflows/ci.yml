@@ -4,13 +4,16 @@
 #                    the step-6/7 AI hygiene greps (.github/scripts/ai-hygiene.sh: no provider key
 #                    names in the client/shared, no provider SDK, no dataKey in the AI pipeline,
 #                    no ANTHROPIC_API_KEY in the api, no search_text in the chat/search/shared API
-#                    code), typecheck (workspace + e2e/), unit tests (incl. packages/ai adapters
-#                    against local mock servers), integration tests (db-integration: RLS matrix,
-#                    search + chat tables etc.; api-integration: auth, invites, babies, uploads,
-#                    photos, search, chat via Fastify inject with a stubbed GoTrue and S3 and the
-#                    fake chat model / embedder; worker-integration: ingest, purge, sweep, the AI
-#                    batch pipeline and the search indexer with the in-process fake provider
-#                    against a standalone MinIO) on a pgvector service container (auth.* is
+#                    code), the step-8 sharing hygiene greps (.github/scripts/share-hygiene.sh:
+#                    exactly two withServiceRole call sites in the sharing api, no GPS/data key/
+#                    notes/people in the auto-sharer), typecheck (workspace + e2e/), unit tests
+#                    (incl. packages/ai adapters against local mock servers), integration tests
+#                    (db-integration: RLS matrix, search + chat + sharing tables etc.;
+#                    api-integration: auth, invites, babies, uploads, photos, search, chat, share
+#                    links + viewer via Fastify inject with a stubbed GoTrue and S3 and the fake
+#                    chat model / embedder; worker-integration: ingest, purge, sweep, the AI batch
+#                    pipeline, the search indexer and the auto-sharer with the in-process fake
+#                    provider against a standalone MinIO) on a pgvector service container (auth.* is
 #                    stubbed by the test harness) with a guard that fails the job if any project
 #                    or named suite silently skipped, a generated-DB-types drift check against a
 #                    database migrated in production order (bootstrap -> GoTrue migrate -> app
@@ -21,15 +24,18 @@
 #   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout (no .env, the step-1
 #                    check), then pins api + worker to the keyless fake AI provider with a CI-only
 #                    project .env (VISION_PROVIDER=fake; no provider key exists in CI) and runs
-#                    e2e/smoke/dev-stack.sh (step-1..7 acceptance checks), then the Playwright
+#                    e2e/smoke/dev-stack.sh (step-1..8 acceptance checks), then the Playwright
 #                    e2e suite (step-3 auth, step-4 upload, step-5 timeline edits, step-7 search
-#                    and chat specs; the demo family is seeded by `migrate` via .env.dev
-#                    SEED_DEMO_FAMILY=true) in Chromium, then the step-4 upload gate
+#                    and chat, step-8 sharing specs; the demo family is seeded by `migrate` via
+#                    .env.dev SEED_DEMO_FAMILY=true) in Chromium, then the step-4 upload gate
 #                    (docs/plans/step-4.md 4.1: `pnpm e2e:upload-gate`), then the step-5 perf gate
 #                    (docs/plans/step-5.md 4.1: `pnpm perf:seed` + `PERF_CI=1 pnpm e2e:perf`),
 #                    then the step-6 AI gate (docs/plans/step-6.md 4.1: `pnpm e2e:ai-gate
 #                    --provider fake`), then the step-7 search gate (docs/plans/step-7.md 4.1:
-#                    `pnpm e2e:search-gate --provider fake --count 2000`).
+#                    `pnpm e2e:search-gate --provider fake --count 2000`), then the step-8 share
+#                    gate (docs/plans/step-8.md 4.1: `pnpm e2e:share-gate`) and the step-8 log
+#                    scan of api + worker for share tokens, passcodes, presign signatures and
+#                    GPS (docs/plans/step-8.md 4.5).
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
 name: CI
@@ -117,6 +123,13 @@ jobs:
       - name: AI hygiene (keys, provider SDKs, data key, search document)
         run: bash .github/scripts/ai-hygiene.sh
 
+      # docs/plans/step-8.md 2.11 / 4.5: exactly two withServiceRole call sites in
+      # apps/api/src/sharing (token exchange, viewer sign-out; *.test.ts and comments excluded),
+      # and no gps_lat_enc / gps_lng_enc / decrypt_coord / dataKey / .note / .people in
+      # apps/worker/src/sharing. Same script runs locally.
+      - name: Sharing hygiene (service_role call sites, no GPS or private text in auto-share)
+        run: bash .github/scripts/share-hygiene.sh
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -128,7 +141,7 @@ jobs:
           pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
           --target es2022 --strict --types node
           e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts
-          e2e/search/*.ts e2e/chat/*.ts e2e/fixtures/*.ts
+          e2e/search/*.ts e2e/chat/*.ts e2e/sharing/*.ts e2e/fixtures/*.ts
           e2e/playwright.config.ts e2e/playwright.perf.config.ts
 
       - name: Unit tests
@@ -200,14 +213,18 @@ jobs:
           # this pins any config loaded from process.env to the keyless provider too. CI has no
           # provider keys and never will.
           VISION_PROVIDER: fake
+          # Step-8 sharing suites (docs/plans/step-8.md 2.12): the api harness builds its config
+          # with testConfig(); the defaults are pinned here for any config read from process.env.
+          SHARE_MEDIA_URL_TTL_SEC: "300"
+          SHARE_RECONCILE_CRON: "41 * * * *"
           REPORT: ${{ runner.temp }}/integration-report.json
         run: |
           set -euo pipefail
           pnpm test:integration \
             --reporter=default --reporter=github-actions \
             --reporter=json --outputFile.json="$REPORT"
-          # Project dirs, plus the step-6 AI and step-7 search/chat suites by name so a rename
-          # cannot drop them silently.
+          # Project dirs, plus the step-6 AI, step-7 search/chat and step-8 sharing suites by
+          # name so a rename cannot drop them silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
@@ -217,7 +234,11 @@ jobs:
             packages/db/search-chat.integration.test.ts \
             apps/api/src/search/search.integration.test.ts \
             apps/api/src/chat/chat.integration.test.ts \
-            apps/worker/src/ai/search-index.integration.test.ts
+            apps/worker/src/ai/search-index.integration.test.ts \
+            packages/db/sharing.integration.test.ts \
+            apps/api/src/sharing/admin.integration.test.ts \
+            apps/api/src/sharing/viewer.integration.test.ts \
+            apps/worker/src/sharing/autoshare.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -337,8 +358,9 @@ jobs:
     # Image builds + up (~10 min cold), fake-provider recreate of api + worker (~1 min), smoke,
     # Chromium download, e2e with one retry, five api restarts, upload gate (~3-4 min), perf
     # seed + perf run on two viewports (~2-4 min), AI gate (~1 min, capped at 10), search gate
-    # (2,000-photo seed + 50 search and 50 chat queries, a few minutes, capped at 15).
-    timeout-minutes: 95
+    # (2,000-photo seed + 50 search and 50 chat queries, a few minutes, capped at 15), share gate
+    # + log scan (~1-2 min, capped at 15).
+    timeout-minutes: 110
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,7 +419,7 @@ jobs:
           fi
           echo "api + worker on the fake provider, no provider key"
 
-      - name: Smoke test (step-1..7 acceptance checks)
+      - name: Smoke test (step-1..8 acceptance checks)
         env:
           SMOKE_SKIP_UP: "1"
         run: bash e2e/smoke/dev-stack.sh
@@ -440,7 +462,7 @@ jobs:
       - name: Reset API rate limits (restart api)
         run: bash .github/scripts/restart-api.sh
 
-      - name: e2e (Playwright, PRD step-3..7 specs)
+      - name: e2e (Playwright, PRD step-3..8 specs)
         env:
           # e2e/playwright.config.ts: retries 1 and HTML report on CI.
           CI: "1"
@@ -574,6 +596,69 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || true
           exit "$rc"
+
+      # The share gate signs two fresh parents in (OTP via Mailpit); the gates above spent
+      # sign-in codes.
+      - name: Reset API rate limits before the share gate (restart api)
+        run: bash .github/scripts/restart-api.sh
+
+      # PRD step-8 check, "expired or revoked link returns the expired page; sensitive photos never
+      # auto-share" (docs/plans/step-8.md 4.1, e2e/sharing/gate.ts), keyless. Signs fresh parents
+      # in (OTP via Mailpit), creates a Plus baby with three real uploads (analysed, analysed +
+      # sensitive, unanalysed), then checks the viewer flow (hidden tile without URL, media
+      # Cache-Control private), expired-by-SQL / revoked / regenerated links (API 410
+      # share_link_expired and the /s/<token> expired page in Chromium, installed above), the
+      # auto-share rule (no rule row for a sensitive or unanalysed photo anywhere) and the free
+      # tier's 403 plan_required. Shells out to `docker compose exec`/`run` (db, worker, migrate
+      # `pnpm db:plan`). Prints one PASS/FAIL line per check and exits 1 on any miss; any
+      # e2e/share-gate/ output is uploaded on failure below.
+      - name: Share gate (PRD step-8 check, fake provider)
+        timeout-minutes: 15
+        env:
+          SHARE_GATE_LOG: ${{ runner.temp }}/share-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$SHARE_GATE_LOG")"
+          rc=0
+          pnpm e2e:share-gate 2>&1 | tee "$SHARE_GATE_LOG" || rc=$?
+          {
+            echo '### Share gate (fake provider)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$SHARE_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |checks passed$|^FAILED:|^  - |^SHARE GATE|^gate crashed' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      # docs/plans/step-8.md 4.5: no share token (the seeded demo token is used by the smoke and
+      # the e2e spec), passcode field, presign signature or latitude in the api/worker logs.
+      # Captured to a file first (`logs | grep` can SIGPIPE under pipefail); grep exit 1 = clean.
+      - name: No share tokens, passcodes, signatures or GPS in api/worker logs
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/share-logscan/api-worker.log"
+          mkdir -p "$(dirname "$log")"
+          docker compose -f docker-compose.dev.yml logs --no-color api worker > "$log" 2>&1 \
+            || { echo "::error::docker compose logs failed"; exit 1; }
+          grep -Ein 'demo-grandparents-share-token|"passcode"|X-Amz-Signature|latitude' "$log" \
+            | cut -c1-200
+          rc=${PIPESTATUS[0]}
+          case "$rc" in
+            1) echo "ok: no share token, passcode, signature or latitude in api/worker logs" ;;
+            0) echo "::error::sensitive value in api/worker logs (lines above, truncated)"; exit 1 ;;
+            *) echo "::error::grep failed (exit $rc)"; exit 1 ;;
+          esac
+
+      - name: Upload share gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: share-gate
+          path: |
+            e2e/share-gate/
+            ${{ runner.temp }}/share-gate
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload search gate output
         if: failure()

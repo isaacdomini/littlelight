@@ -13,7 +13,7 @@ import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
 import { useCreateMeasurement, useUpdateMeasurement } from "../../lib/queries/measurements";
 import { defaultUnit, useProfileUnits } from "../../lib/units";
-import { Button, Message, TextField } from "../ui";
+import { Button, Message, SelectField, TextField } from "../ui";
 
 const KINDS: MeasurementKind[] = ["weight", "height", "head"];
 
@@ -145,37 +145,29 @@ function Form({
     }
   }
 
-  const selectClass =
-    "min-h-11 w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)]";
-
   return (
     <form
       onSubmit={(e) => void onSubmit(e)}
-      className="flex flex-col gap-4 p-4"
+      className="flex max-h-[90vh] flex-col gap-4 overflow-y-auto p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
       data-testid="measurement-form"
       noValidate
     >
-      <h2 className="text-xl font-bold">
+      <h2 className="text-xl font-semibold">
         {editing ? t("measurements.edit") : t("measurements.add")}
       </h2>
-      <div className="flex flex-col gap-1">
-        <label htmlFor="measurement-kind" className="text-sm font-medium">
-          {t("measurements.kind")}
-        </label>
-        <select
-          id="measurement-kind"
-          data-testid="measurement-kind"
-          className={selectClass}
-          value={kind}
-          onChange={(e) => changeKind(e.target.value as MeasurementKind)}
-        >
-          {KINDS.map((k) => (
-            <option key={k} value={k}>
-              {t(`growth.kind.${k}`)}
-            </option>
-          ))}
-        </select>
-      </div>
+      <SelectField
+        id="measurement-kind"
+        label={t("measurements.kind")}
+        data-testid="measurement-kind"
+        value={kind}
+        onChange={(e) => changeKind(e.target.value as MeasurementKind)}
+      >
+        {KINDS.map((k) => (
+          <option key={k} value={k}>
+            {t(`growth.kind.${k}`)}
+          </option>
+        ))}
+      </SelectField>
       <div className="flex gap-3">
         <div className="min-w-0 flex-1">
           <TextField
@@ -199,14 +191,11 @@ function Form({
             />
           </div>
         ) : null}
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <label htmlFor="measurement-unit" className="text-sm font-medium">
-            {t("measurements.unit")}
-          </label>
-          <select
+        <div className="min-w-0 flex-1">
+          <SelectField
             id="measurement-unit"
+            label={t("measurements.unit")}
             data-testid="measurement-unit"
-            className={selectClass}
             value={unit}
             onChange={(e) => setUnit(e.target.value as MeasurementUnit)}
           >
@@ -215,7 +204,7 @@ function Form({
                 {t(`measurements.unit.${u}`)}
               </option>
             ))}
-          </select>
+          </SelectField>
         </div>
       </div>
       <TextField
@@ -233,8 +222,8 @@ function Form({
         onChange={(e) => setNote(e.target.value)}
       />
       {error ? <Message data-testid="measurement-error">{error}</Message> : null}
-      <div className="flex flex-wrap gap-3">
-        <Button type="submit" data-testid="measurement-save" disabled={pending}>
+      <div className="flex gap-3">
+        <Button type="submit" className="flex-1" data-testid="measurement-save" disabled={pending}>
           {t("measurements.save")}
         </Button>
         <Button
@@ -256,7 +245,12 @@ function Form({
  */
 export function MeasurementSheet({ open, onClose, ...rest }: MeasurementSheetProps) {
   return (
-    <IonModal isOpen={open} onDidDismiss={onClose} data-testid="measurement-sheet">
+    <IonModal
+      isOpen={open}
+      onDidDismiss={onClose}
+      data-testid="measurement-sheet"
+      className="ll-sheet"
+    >
       {open ? <Form {...rest} onClose={onClose} /> : null}
     </IonModal>
   );

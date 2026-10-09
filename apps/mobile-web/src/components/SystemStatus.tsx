@@ -17,8 +17,7 @@ async function fetchAuth(): Promise<"ok" | "degraded"> {
 }
 
 function Row({ label, state }: { label: string; state: "loading" | "ok" | "degraded" | "error" }) {
-  const color =
-    state === "ok" ? "bg-green-500" : state === "loading" ? "bg-gray-400" : "bg-red-500";
+  const color = state === "ok" ? "bg-success" : state === "loading" ? "bg-fill" : "bg-danger";
   return (
     <li className="flex min-h-11 items-center justify-between">
       <span>{label}</span>
@@ -37,10 +36,8 @@ export function SystemStatus() {
     q.isPending ? "loading" : q.isError ? "error" : (q.data ?? "error");
 
   return (
-    <section aria-label="System status" className="rounded-xl border border-gray-500/30 p-4">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide opacity-70">
-        System status
-      </h2>
+    <section aria-label="System status" className="ll-card">
+      <h2 className="mb-2 text-sm font-semibold text-muted">System status</h2>
       <ul>
         <Row label="API" state={state(api)} />
         <Row label="Auth" state={state(auth)} />

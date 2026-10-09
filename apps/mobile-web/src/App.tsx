@@ -9,12 +9,24 @@ import {
 } from "@ionic/react";
 import { IonReactRouter } from "@ionic/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { addCircle, chatbubbleEllipses, flag, images, people } from "ionicons/icons";
+import {
+  addCircle,
+  addCircleOutline,
+  chatbubbleEllipses,
+  chatbubbleEllipsesOutline,
+  flag,
+  flagOutline,
+  images,
+  imagesOutline,
+  people,
+  peopleOutline,
+} from "ionicons/icons";
 import { type ReactNode, useState } from "react";
 import { Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import { FreshSignInProvider } from "./auth/FreshSignInGate";
 import { RedirectIfSignedIn, RequireAuth, RequireOnboarded, RootRedirect } from "./auth/guards";
+import { ShareExpired } from "./components/share/ShareExpired";
 import { t } from "./i18n";
 import { ApiError } from "./lib/api";
 import { CallbackPage } from "./pages/auth/CallbackPage";
@@ -31,9 +43,11 @@ import { FirstUploadPage } from "./pages/onboarding/FirstUploadPage";
 import { InviteCoParentPage } from "./pages/onboarding/InviteCoParentPage";
 import { PlanPage } from "./pages/onboarding/PlanPage";
 import { ProfilePage } from "./pages/onboarding/ProfilePage";
+import { ShareLinkPhotosPage } from "./pages/ShareLinkPhotosPage";
 import { AccountPage } from "./pages/settings/AccountPage";
 import { DevicesPage } from "./pages/settings/DevicesPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
+import { SharedAlbumPage } from "./pages/share/SharedAlbumPage";
 import { TimelinePage } from "./pages/TimelinePage";
 import { UploadPage } from "./pages/UploadPage";
 
@@ -50,32 +64,29 @@ function makeQueryClient() {
   });
 }
 
+const TABS = [
+  { tab: "chat", icon: chatbubbleEllipsesOutline, active: chatbubbleEllipses },
+  { tab: "timeline", icon: imagesOutline, active: images },
+  { tab: "upload", icon: addCircleOutline, active: addCircle },
+  { tab: "milestones", icon: flagOutline, active: flag },
+  { tab: "family", icon: peopleOutline, active: people },
+] as const;
+
 /** Tab bar stays mounted (Ionic requires it inside IonTabs) but is hidden outside the app. */
 function TabBar() {
   const { pathname } = useLocation();
   const visible = TAB_ROUTES.some((r) => pathname === r || pathname.startsWith(`${r}/`));
   return (
     <IonTabBar slot="bottom" style={visible ? undefined : { display: "none" }}>
-      <IonTabButton tab="chat" href="/chat">
-        <IonIcon aria-hidden icon={chatbubbleEllipses} />
-        <IonLabel>{t("tabs.chat")}</IonLabel>
-      </IonTabButton>
-      <IonTabButton tab="timeline" href="/timeline">
-        <IonIcon aria-hidden icon={images} />
-        <IonLabel>{t("tabs.timeline")}</IonLabel>
-      </IonTabButton>
-      <IonTabButton tab="upload" href="/upload">
-        <IonIcon aria-hidden icon={addCircle} />
-        <IonLabel>{t("tabs.upload")}</IonLabel>
-      </IonTabButton>
-      <IonTabButton tab="milestones" href="/milestones">
-        <IonIcon aria-hidden icon={flag} />
-        <IonLabel>{t("tabs.milestones")}</IonLabel>
-      </IonTabButton>
-      <IonTabButton tab="family" href="/family">
-        <IonIcon aria-hidden icon={people} />
-        <IonLabel>{t("tabs.family")}</IonLabel>
-      </IonTabButton>
+      {TABS.map(({ tab, icon, active }) => (
+        <IonTabButton key={tab} tab={tab} href={`/${tab}`}>
+          <IonIcon
+            aria-hidden
+            icon={pathname === `/${tab}` || pathname.startsWith(`/${tab}/`) ? active : icon}
+          />
+          <IonLabel>{t(`tabs.${tab}`)}</IonLabel>
+        </IonTabButton>
+      ))}
     </IonTabBar>
   );
 }
@@ -87,7 +98,7 @@ const app = (path: string, page: ReactNode, allowNoBaby = false) => (
 );
 const flow = (path: string, page: ReactNode) => <RequireAuth path={path}>{page}</RequireAuth>;
 
-export function App() {
+function ParentApp() {
   const [queryClient] = useState(makeQueryClient);
   return (
     <QueryClientProvider client={queryClient}>
@@ -136,6 +147,10 @@ export function App() {
                   <Route path="/upload" element={app("/upload", <UploadPage />)} />
                   <Route path="/milestones" element={app("/milestones", <MilestonesPage />)} />
                   <Route path="/family" element={app("/family", <FamilyPage />)} />
+                  <Route
+                    path="/family/share/:linkId"
+                    element={app("/family/share/:linkId", <ShareLinkPhotosPage />)}
+                  />
                   <Route path="/settings" element={app("/settings", <SettingsPage />, true)} />
                   <Route
                     path="/settings/devices"
@@ -154,5 +169,39 @@ export function App() {
         </IonApp>
       </AuthProvider>
     </QueryClientProvider>
+  );
+}
+
+/**
+ * `/s/:token` is the public family album: no AuthProvider (so no `/me` request), no router, no
+ * tab bar. The token comes from the path and is only ever sent in the session exchange body.
+ */
+function ViewerApp({ token }: { token: string }) {
+  const [queryClient] = useState(makeQueryClient);
+  return (
+    <QueryClientProvider client={queryClient}>
+      <IonApp>
+        <SharedAlbumPage token={token} />
+      </IonApp>
+    </QueryClientProvider>
+  );
+}
+
+const SHARE_PATH_RE = /^\/s\/([A-Za-z0-9_-]{22,64})\/?$/;
+
+export function App() {
+  const m = SHARE_PATH_RE.exec(window.location.pathname);
+  if (window.location.pathname.startsWith("/s/")) {
+    return m?.[1] ? <ViewerApp token={m[1]} /> : <ViewerExpired />;
+  }
+  return <ParentApp />;
+}
+
+/** A malformed `/s/…` path is the same friendly dead end as an expired link. */
+function ViewerExpired() {
+  return (
+    <IonApp>
+      <ShareExpired />
+    </IonApp>
   );
 }

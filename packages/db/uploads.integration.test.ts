@@ -185,7 +185,8 @@ describe.skipIf(!databaseUrl)("uploads and ingest (step 4 database rules)", () =
     await insertFile(F.other, S.other, BABY.B);
 
     // Quarantined, approved, shared photo with every kind of child row.
-    await insertPhoto(QP, BABY.A, { quarantined: true });
+    // QP is shared first (the gate refuses quarantined photos since step 8) and quarantined afterwards.
+    await insertPhoto(QP, BABY.A);
     await insertPhoto(QP_OWN, BABY.A, { quarantined: true, approval: "pending", by: U.contribA });
     await q("SELECT set_config('app.data_key', $1, false)", [DATA_KEY]);
     for (const p of [QP, QP_OWN]) {
@@ -204,6 +205,7 @@ describe.skipIf(!databaseUrl)("uploads and ingest (step 4 database rules)", () =
       `INSERT INTO shared_photos (share_link_id, photo_id, added_by, added_by_user_id) VALUES ($1, $2, 'user', $3)`,
       [LINK.LA, QP, U.adminA1],
     );
+    await q("UPDATE photos SET quarantined_at = now() WHERE id = $1", [QP]);
   });
 
   afterAll(async () => {

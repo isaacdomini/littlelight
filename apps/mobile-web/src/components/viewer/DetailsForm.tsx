@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
 import { useCreateMilestone, useMilestones } from "../../lib/queries/milestones";
-import { Button, Message, TextField } from "../ui";
+import { Button, Message, TextAreaField, TextField } from "../ui";
 import { MilestoneSelect } from "./MilestoneSelect";
 import { addPeople, PeopleInput } from "./PeopleInput";
 
@@ -87,8 +87,8 @@ export function DetailsForm({
         void save();
       }}
     >
-      <div className="flex flex-col gap-1">
-        <label htmlFor="details-milestone" className="text-sm font-medium">
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="details-milestone" className="ll-label">
           {t("details.milestone")}
         </label>
         <MilestoneSelect
@@ -101,7 +101,7 @@ export function DetailsForm({
           extra={isAdmin ? { value: NEW, label: t("details.newMilestone") } : undefined}
         />
         {addingNew ? (
-          <div className="flex gap-2">
+          <div className="mt-1 flex items-end gap-2">
             <TextField
               label={t("details.newMilestonePlaceholder")}
               data-testid="details-milestone-custom"
@@ -116,7 +116,7 @@ export function DetailsForm({
               }}
             />
             <Button
-              className="self-end"
+              variant="secondary"
               data-testid="details-milestone-add"
               disabled={!custom.trim() || createMilestone.isPending}
               onClick={() => void addCustomMilestone()}
@@ -144,23 +144,16 @@ export function DetailsForm({
         onChange={(e) => setLocation(e.target.value)}
       />
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="details-note" className="text-sm font-medium">
-          {t("details.noteLabel")}
-        </label>
-        <textarea
-          id="details-note"
-          data-testid="details-note"
-          rows={4}
-          maxLength={PHOTO_DETAILS_LIMITS.note}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          className="w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)] outline-none focus:border-[var(--ion-color-primary)]"
-        />
-        <p className="text-right text-xs opacity-70">
-          {t("details.noteCounter", { n: note.length, max: PHOTO_DETAILS_LIMITS.note })}
-        </p>
-      </div>
+      <TextAreaField
+        id="details-note"
+        label={t("details.noteLabel")}
+        data-testid="details-note"
+        rows={4}
+        maxLength={PHOTO_DETAILS_LIMITS.note}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        counter={t("details.noteCounter", { n: note.length, max: PHOTO_DETAILS_LIMITS.note })}
+      />
 
       {isAdmin && onAddMeasurement ? (
         <Button

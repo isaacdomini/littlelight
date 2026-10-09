@@ -36,9 +36,9 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `littlelight_api` | yes, NOINHERIT | API connection role. Has **no** privileges on app tables: every unit of work must `SET LOCAL ROLE authenticated \| viewer \| service_role`; a query outside that fails with `permission denied`. |
 | `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). |
-| `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link, the allow-listed columns of `photos`, `photo_derivatives` (thumb/display), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Nothing else, no writes, and nothing once the link is expired/revoked or the baby is deleted. |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`/`share_rules`, liveness columns of `upload_sessions`). Never invites, tokens, chat, members, viewer sessions, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
-| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
+| `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link (no parent user ids), the allow-listed columns of `photos`, `photo_derivatives` (thumb/display, and never those of a hidden sensitive photo), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Its only writes go through `viewer_session_check()`. Nothing else, and nothing once the link is expired/revoked or the baby is deleted (see "Sharing (step 8)"). |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`). Never invites, tokens, chat, members, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
+| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
 Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" for the one, narrow
@@ -91,7 +91,8 @@ Notes for API/worker code:
   concurrently) fails with `check_violation`; `service_role` inserts are never second-guessed, so
   the API may mark the invite itself first if it prefers.
 - Share-token exchange runs under `service_role` (`share_links.token_hash` / `passcode_hash` are
-  unreadable to every user role); the API then mints a viewer JWT and uses `SET LOCAL ROLE viewer`.
+  unreadable to every user role); the API then mints a viewer JWT and uses `SET LOCAL ROLE viewer`,
+  whose first statement is `viewer_session_check(jti)` (see "Sharing (step 8)").
 - Account deletion: delete the GoTrue user (cascades `profiles` → `baby_members`, `chat_*`,
   `auth.sessions`; sets `uploaded_by`/`created_by`/`edited_by` to NULL so photos survive for the
   remaining admin). The `baby_members_keep_last_admin` trigger blocks it while the user is the
@@ -119,9 +120,10 @@ Notes for API/worker code:
 - Business rules enforced by triggers (all raise `check_violation`, SQLSTATE 23514): max two
   admins, last admin stays, 20 invites/baby/day, free-tier 1,000-photo cap, AI queue and
   `photo_ai` only for approved photos of a paid-tier baby, `shared_photos` only approved live
-  photos of the link's baby and never sensitive ones by rule (a photo that later becomes sensitive
-  loses its rule-added shares at once; hand-picked shares stay and viewers get `is_sensitive` so
-  the grid can blur them), avatar must be an own approved photo, joining consumes the invite,
+  unquarantined photos of the link's baby and never sensitive, unanalysed or admin-excluded ones
+  by rule (a photo that later becomes sensitive loses its rule-added shares at once; hand-picked
+  shares stay as hidden tiles until an admin releases them per link; see "Sharing (step 8)"),
+  revoked links are never renewed or un-revoked with the old token, avatar must be an own approved photo, joining consumes the invite,
   `photo_exif.raw_json` can never carry a coordinate-looking key at any depth
   (`jsonb_has_gps_keys`: contains `gps`/`latitude`/`longitude`, word-start `geo`, or exactly
   `lat`/`lng`/`lon`; a trigger rather than a CHECK so the rejected row is never echoed into the
@@ -645,6 +647,126 @@ used ⇒ exactly one allowed; clearing the thread leaves the count at 100.
 CHECKs; chat is written only as `authenticated`. Production should run the db with
 `log_error_verbosity = terse`.
 
+## Sharing (step 8)
+
+Migration `1792100000100_sharing-v1.sql` (docs/plans/step-8.md 2.3; PRD "FR-9 Sharing",
+"Share-link viewers (no account)"). RLS stays ENABLE + FORCE everywhere (two new tables:
+`shared_photo_exclusions`, `share_passcode_failures`). Every error message below is fixed text: none
+echoes a token, hash, passcode, IP, link name or tag.
+
+**Tokens, passcodes, expiry.** A share token is 128-bit random; only `share_links.token_hash =
+sha256(token)` is stored and the plaintext URL is shown once (D1). `passcode_hash` holds the API's
+`scrypt$1$N$r$p$salt$dk` string (D7; the step-2 `argon2id$` form is still accepted); anything else,
+such as a plaintext 6-digit code, is refused (`share_links.passcode_hash has an unknown format`).
+`has_passcode` (generated) is what users read. `ttl_hours` (1..720, default 24) is the validity
+"Renew" re-applies; `expires_at` may be at most 30 days ahead (`share link expiry must be within 30
+days`, D2). Shape checks live in the `share_links_shape` trigger (the row holds a parent-entered
+name). At most 20 links per baby (`share_links_cap`, baby row locked; `share link limit reached`).
+
+**Lifecycle, every role (`share_links_lifecycle`, D13).** `token_rotated_at` is set by the database
+whenever `token_hash` changes and cannot be written by anyone (a forged value is replaced by the
+old one). A revoked link cannot be renewed (`a revoked share link cannot be renewed`) and cannot be
+un-revoked with the same token (`a revoked share link can only be reactivated with a new token`):
+regenerate = new `token_hash` + `revoked_at = NULL` + new `expires_at` in one UPDATE.
+
+**Sessions end as a database rule.** `share_links_end_sessions` (AFTER UPDATE OF `token_hash,
+passcode_hash, revoked_at`): a new token, a new non-NULL passcode or a revoke sets `revoked_at` on
+every open `viewer_sessions` row of the link in the same transaction. `viewer_sessions_guard`
+(BEFORE INSERT): a session can only be opened on an active link and its `expires_at` is clamped to
+the link's (`share link is not active`). Admins read `viewer_sessions.revoked_at` (active viewers =
+`revoked_at IS NULL AND expires_at > now()`); hashes stay unreadable.
+
+**`viewer_session_check(p_session_id uuid) RETURNS TABLE (share_link_id, baby_id, link_name,
+baby_name, baby_nickname, expires_at, allow_download)`**, VOLATILE, SECURITY DEFINER, `viewer` and
+`service_role`. The first statement of every viewer request, with the JWT's `jti`. One row iff the
+claims carry `role=viewer` + `share_link_id`, the session belongs to that link and is not revoked,
+and the link is active (not revoked, not expired, baby not trashed); no row ⇒ the API answers 410
+`share_link_expired`. Side effects (the viewer role's only write path): `last_seen_at` (at most once
+a minute); one visit (`share_links.view_count + 1`, `last_viewed_at`) when the previous
+`last_seen_at` is NULL or older than 30 minutes (`SHARE_VISIT_GAP_MIN`; concurrent requests count
+once); the session's `expires_at` follows a renewed link (the returned `expires_at` is the link's,
+for re-minting the cookie). Reads no hash column. The RLS policies re-check link liveness on every
+statement regardless.
+
+**The sensitive gate (FR-9.5), four places.**
+1. `shared_photos_gate` (BEFORE INSERT OR UPDATE, SECURITY DEFINER) locks the photo row `FOR SHARE`,
+   which conflicts with the row lock of `UPDATE photos SET is_sensitive = true`: whichever commits
+   second sees the other, so a rule row and a sensitive flag never both survive (verified with two
+   connections in both orders). Every row: same baby, approved, not trashed, not quarantined (one
+   message for all three). `rule` rows also: not sensitive (`sensitive photos are never
+   auto-shared`), analysed (`only analysed photos can be auto-shared`: a `photo_ai` row; free-tier
+   photos are never analysed, D3), not excluded (`photo was removed from this album by an admin`),
+   never released. A write that only withdraws a release or re-attributes a row is not re-gated.
+2. `photos_sensitive_unshare_rules`: a photo that becomes sensitive loses its rule rows and every
+   earlier release at once.
+3. Viewers never see a sensitive photo through a rule row (`viewer_photo_ids`, step-2 rule).
+4. A hand-shared sensitive photo is a **hidden tile** until an admin releases it for that link
+   (`shared_photos.sensitive_released_at/_by`, D4): the viewer lists it (id, dates, `is_sensitive`)
+   but cannot read its `photo_derivatives` rows, so the API cannot sign it even by mistake. A
+   release is forced to NULL on a non-sensitive photo, and from `authenticated` it must name the
+   releasing admin (`a sensitive photo can only be shown by the admin releasing it`).
+
+**Viewer visibility, once per statement (R4).** The viewer policies on `photos`, `shared_photos`,
+`photo_details` and `photo_derivatives` use three SECURITY DEFINER set helpers (`viewer`,
+`service_role`): `viewer_link_id()` (the claims' link when active, else NULL),
+`viewer_photo_ids()` (photos of that link that are approved, live, unquarantined and not
+sensitive-by-rule: the old `viewer_can_see_photo` + photos policy) and `viewer_media_photo_ids()`
+(the same, minus unreleased sensitive photos: `viewer_can_see_media`). Form: `col IN (SELECT f())`,
+a hashed SubPlan built once per statement; not the step-7 `= ANY (ARRAY(...))` form, because an
+array of thousands of ids is not hashed and would be scanned per row. Measured as `viewer` with
+10,000 shared photos (200 runs each, p50 / p95): first page of 101 rows 24 / 37 ms, keyset page
+near the end 18 / 25 ms, album counts 19 / 29 ms (3,436 ms with the per-row policies), thumbs for a
+page 8 / 15 ms; a link sharing 1 % of the baby's photos: first page 6–11 ms. The single-photo helpers
+`viewer_can_see_photo(uuid)` / `viewer_can_see_media(uuid)` stay (download / URL checks).
+
+**Exclusions.** `shared_photo_exclusions (share_link_id, photo_id, excluded_by, created_at)`: an admin
+removed the photo from that album, so rules never re-add it (gate). `authenticated`: admins of the
+link's baby SELECT / DELETE, INSERT with `excluded_by = auth_uid()`; `pipeline` SELECT;
+`service_role` ALL; `viewer` and contributors nothing. `shared_photo_exclusions_guard`: the photo
+belongs to the link's baby. Adding the photo back by hand deletes the exclusion (API).
+
+**Auto-share rules (D3, D5).** `share_rules_shape` (SECURITY DEFINER, every role): ≤ 20 tags per
+list, each 1..60 characters, NFC, trimmed, single inner spaces, lower-case (`normalizeShareTag` is
+the writer; this is the backstop), `mode = 'tags'` needs an include tag, and the baby must be
+`baby_ai_enabled` (`auto-share rules need the paid plan`). DELETE is always allowed (a downgraded
+baby can remove its rule). `authenticated` may write only `mode, include_tags, exclude_tags` (+
+`share_link_id` on insert). `evaluated_at` is the worker's sync watermark: `pipeline` may UPDATE only
+that column, and it does not move `updated_at` (that trigger now fires on rule columns only), so
+"rule changed since the last full sync" = `evaluated_at IS NULL OR evaluated_at < updated_at`.
+
+**Passcode failures (D8).** `share_passcode_failures (id, share_link_id, ip_hash bytea(32),
+created_at)`, `service_role` only (no other grant). Limits, counted only after `token_rotated_at`
+(so regenerate clears both): 5 per (link, IP hash) per 15 minutes ⇒ `rate_limited`, 20 per link per
+60 minutes ⇒ `passcode_locked`. The exchange calls **`share_passcode_lock_state(p_share_link_id uuid,
+p_ip_hash bytea) RETURNS TABLE (ip_failures integer, ip_retry_at timestamptz, link_failures integer,
+link_retry_at timestamptz)`** (service_role; takes a transaction-scoped advisory lock on the link so
+concurrent attempts serialise, then returns both counts and, at or above each limit, when it lifts),
+checks both limits before verifying, inserts a failure row on a wrong code, prunes that link's rows
+older than 24 h and commits. **`share_link_passcode_locked(p_share_link_id uuid) RETURNS boolean`**
+(`authenticated`, `service_role`): the admin card's "Passcode locked"; false unless the caller
+administers the link's baby (or is `service_role`).
+
+**Who may write what.**
+
+| Table | `authenticated` (admins of the baby) | `viewer` | `pipeline` | `service_role` |
+| --- | --- | --- | --- | --- |
+| `share_links` | INSERT/UPDATE/DELETE (hash columns write-only; never `token_rotated_at`), SELECT without hashes | SELECT own active row (no hashes) | SELECT id, baby_id, expires_at, revoked_at | ALL |
+| `share_rules` | SELECT/DELETE; INSERT/UPDATE of the rule columns (paid babies) | – | SELECT, UPDATE (`evaluated_at`) | ALL |
+| `shared_photos` | SELECT/DELETE; INSERT/UPDATE as `user` rows attributed to themselves | SELECT (no user ids), visible rows only | SELECT, INSERT + DELETE of `rule` rows | ALL |
+| `shared_photo_exclusions` | SELECT/INSERT/DELETE | – | SELECT | ALL |
+| `viewer_sessions` | SELECT (no hashes) | via `viewer_session_check()` only | – | ALL |
+| `share_passcode_failures` | – (`share_link_passcode_locked()` only) | – | – | ALL |
+
+Contributors gain nothing: every sharing policy requires `is_baby_admin`.
+
+**Error mapping for the API** (`apps/api/src/lib/errors.ts`): `share link limit reached` ⇒ 409;
+`a revoked share link cannot be renewed` / `a revoked share link can only be reactivated with a new
+token` ⇒ 409; `auto-share rules need the paid plan` ⇒ 403 `plan_required`; `share rule needs at least
+one include tag`, `share_rules tags …`, `share_links.…`, `share link expiry must be within 30 days`
+⇒ 400 `validation_failed`; the gate's messages on a manual add (`photo does not belong …`, `only
+approved, non-deleted photos …`, `a sensitive photo can only be shown …`) ⇒ 409; `share link is not
+active` (session insert raced a revoke) ⇒ 410 `share_link_expired`.
+
 ## Environment
 
 | Variable | Used by | Notes |
@@ -693,10 +815,13 @@ CI, throwaway containers). The `users`/`identities` column list is exactly what 
 Fixed ids (`DEMO` export): users `…-000000000001/2/3` = `demo-mom@littlelight.local` (admin, Maria,
 Mom), `demo-dad@…` (admin, Dad), `demo-nanny@…` (contributor); baby `…-000000000100` "Maya"
 ("Mimi", born 2025-06-30, `plan = plus`, encrypted home coordinates); share link `…-000000000200`
-"Grandparents" (dev token `demo-grandparents-share-token`, re-upserted so it always expires 24 h
-after the last seed run, rule `milestones`); 12 photos `…-0000000003NN`: 8 approved, 1 approved
-and sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny;
-3 shared photos; 3 measurements; `photo_search` rows for the 9 live approved photos (with `place`;
+"Grandparents" (dev token `demo-grandparents-share-token` = `DEMO_IDS.shareToken`, only its sha256
+stored; `ttl_hours = 24`, re-upserted so it always expires 24 h after the last seed run, no
+passcode; a revoked demo link is deleted and recreated because a revoked link cannot be revived
+with the same token; rule `milestones`); 12 photos `…-0000000003NN`: 8 approved, 1 approved and
+sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny;
+4 shared photos, all hand-picked by mom: 2, 9, 10 and the bath photo 4, which is **not released**
+(viewers get a hidden tile and cannot read its derivatives); 3 measurements; `photo_search` rows for the 9 live approved photos (with `place`;
 `embedding`, `embed_model`, `doc_version`, `content_hash` and `embedded_at` NULL, also reset on every
 re-seed, so the worker's `search.reconcile` rebuilds and embeds them); one audit row.
 Storage keys are placeholders; no image bytes exist.
@@ -752,8 +877,10 @@ PSQL="psql -h localhost -p 55432 -d littlelight -Atv ON_ERROR_STOP=0"
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos; rollback;"
 # contributor cannot delete: permission denied for table photos
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"
-# viewer sees only shared_photos: 3, 3, permission denied for table photo_exif
+# viewer sees only shared_photos: 4, 4, permission denied for table photo_exif
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
+# viewer media: 3 photos with readable derivatives, 0 rows for the unreleased bath photo
+PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(distinct photo_id) from photo_derivatives; select count(*) from photo_derivatives where photo_id = '00000000-0000-4000-8000-000000000304'; rollback;"
 # viewer gets nothing on upload tables: permission denied for table upload_sessions
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from upload_sessions; rollback;"
 # Home label in SQL, pipeline only: Home, then <null> 200 m away; never a plaintext coordinate in the result
@@ -778,3 +905,4 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1791900000100_ai-pipeline.sql` | `photos.ai_retry_requested_at` (+ `UPDATE` grant to `authenticated`); `ai_batches` provider file ids, `files_deleted_at`, versions, `reasoning_tokens`/`image_tokens`, `request_counts`, `last_polled_at`, `expires_at`, `submitted_bytes`, `ai_batches_open_idx`; `ai_batch_items` (ENABLE+FORCE RLS, pipeline/service_role ALL, authenticated column-limited SELECT via `photo_visible`, `ai_batch_items_guard`, 3 indexes); `ai_eligible_photos(...)` (pipeline/service_role); `ai_baby_month_cost_usd(...)` (authenticated/pipeline/service_role); `record_ai_budget_exceeded(uuid, text)` (SECURITY DEFINER, pipeline/service_role; inserts the `ai.budget_exceeded` audit row for a baby + `YYYY-MM` once, advisory-locked per (baby, month), returns whether it inserted; `pipeline` still has no SELECT on `audit_log`); `photo_ai_overrides_shape` extended to field/value shape (trigger now also `UPDATE OF value`) | restore the step-5 shape function/trigger verbatim; drop the three helpers, the table + guard, the index and columns; revoke + drop `ai_retry_requested_at` |
 | `1791800000100_timeline-and-details.sql` | `photos_baby_id_sort_idx` (replaces `photos_baby_id_taken_at_idx`) + `photos_baby_id_age_days_idx`; `age_group(integer)` (IMMUTABLE; authenticated/viewer/pipeline/service_role); `milestones.updated_at` + trigger, `UPDATE (updated_at)` grant, `milestones_cap` (200 custom per baby), `milestones_name_guard` (1..80 chars, no preset names ⇒ 23505); `photo_details_milestone_id_photo_id_idx` (replaces `photo_details_milestone_id_idx`); `measurements_photo_same_baby` trigger, `measurements_photo_id_idx`; 14 CHECK constraints on parent-entered text dropped and re-stated as shape triggers (`photo_details_shape`, `measurements_shape`, `babies_shape`, `upload_sessions_shape`, `share_links_shape`, `chat_threads_shape`, `invites_shape`, `photo_ai_overrides_shape`; see "Shape triggers") | drop the new indexes/triggers/functions/column, recreate the two step-2 indexes and every dropped CHECK verbatim |
 | `1792000000100_search-and-chat.sql` | `photo_search.doc_version/content_hash/embedded_at/place` + unembedded, (baby_id, place) and `lower_text_array(people)` GIN indexes; `lower_text_array(text[])`; `search_baby_ids()` and the `photo_search_authenticated_select` rewrite to `baby_id = ANY (ARRAY(SELECT search_baby_ids()))`; `photo_search_guard`, `photos_search_cleanup`, `photo_search_mark_stale` (5 triggers); `search_stale_photos(...)`, `photo_search_orphans(...)` (pipeline/service_role); `photo_search_text_candidates(...)`, `photo_search_term_candidates(...)` (SECURITY DEFINER, authenticated/service_role); `ai_spend` (ENABLE+FORCE RLS, `ai_spend_guard`); `ai_baby_month_cost_usd` = items + spend; `chat_threads (baby_id, user_id)` unique; `chat_messages.cited_measurement_ids/cost_usd/tools_used/status` + `chat_messages_shape`; `chat_turns` + `chat_reserve_turn(integer)`, `chat_user_turns_24h()`, `chat_messages_claim_turn` | drop all of it; restore the step-2 `photo_search` SELECT policy and the step-6 `ai_baby_month_cost_usd` body verbatim |
+| `1792100000100_sharing-v1.sql` | `share_links.ttl_hours`, `token_rotated_at` (DB-maintained), `has_passcode` (generated); `share_links_shape` (+ ttl 1..720, expiry ≤ 30 days, hash format), `share_links_cap` (20/baby), `share_links_lifecycle` (no renew/un-revoke of a revoked link with the old token), `share_links_end_sessions`; `viewer_sessions.revoked_at` + `viewer_sessions_guard` + `viewer_session_check(uuid)`; `shared_photo_exclusions` (ENABLE+FORCE RLS, guard); `shared_photos.sensitive_released_at/_by`, narrowed user UPDATE grant, viewer column grant, `shared_photos_pipeline_delete` (rule rows); `shared_photos_gate` hardened (`FOR SHARE`, quarantine, analysed-only / exclusions / no release for rule rows, release normalisation); `photos_sensitive_unshare_rules` also clears releases; `viewer_link_id()`, `viewer_photo_ids()`, `viewer_media_photo_ids()`, `viewer_can_see_media(uuid)` and the four viewer policies rewritten on them; `share_rules.evaluated_at` (pipeline UPDATE), narrowed user grants, updated_at on rule columns only, `share_rules_shape` (tags, include tag, paid plan); `share_passcode_failures` (service_role only) + `share_passcode_lock_state(uuid, bytea)` + `share_link_passcode_locked(uuid)` | drop the new tables, functions, triggers, columns, index and policies; restore the step-2 gate, unshare trigger, viewer policies (photos: step 4), shared_photos/share_rules grants and policies, share_rules updated_at trigger, and the step-5 `share_links_shape`, verbatim |

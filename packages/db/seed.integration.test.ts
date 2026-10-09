@@ -56,11 +56,11 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
     }
   });
 
-  it("seeds the documented family: 12 photos, 3 members, 3 shared photos", async () => {
+  it("seeds the documented family: 12 photos, 3 members, 4 hand-shared photos", async () => {
     expect(first.counts).toMatchObject({
       photos: 12,
       baby_members: 3,
-      shared_photos: 3,
+      shared_photos: 4,
       share_links: 1,
     });
     expect(
@@ -129,17 +129,26 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
     expect(exif.total).toBeGreaterThanOrEqual(8);
   });
 
-  it("sensitive demo photo carries a photo_ai row with the bath flag and is not shared", async () => {
+  it("sensitive demo photo carries a photo_ai row with the bath flag and is only hand-shared and hidden (never a rule row)", async () => {
     const r = await one<{ flags: string[] }>(
       "SELECT sensitive_flags flags FROM photo_ai pa JOIN photos p ON p.id = pa.photo_id WHERE p.is_sensitive AND p.baby_id = $1",
       [DEMO.baby],
     );
     expect(r.flags).toEqual(["bath"]);
-    const shared = await one<{ n: number }>(
-      "SELECT count(*)::int n FROM shared_photos sp JOIN photos p ON p.id = sp.photo_id WHERE p.is_sensitive AND sp.share_link_id = $1",
+    // Step 8: mom hand-picked it (a hidden tile for the viewer): a `user` row, never released, and
+    // no `rule` row of a sensitive photo exists anywhere.
+    const shared = await one<{ n: number; user_hidden: number }>(
+      `SELECT count(*)::int n,
+              count(*) FILTER (WHERE sp.added_by = 'user' AND sp.sensitive_released_at IS NULL)::int user_hidden
+         FROM shared_photos sp JOIN photos p ON p.id = sp.photo_id
+        WHERE p.is_sensitive AND sp.share_link_id = $1`,
       [DEMO.shareLink],
     );
-    expect(shared.n).toBe(0);
+    expect(shared).toEqual({ n: 1, user_hidden: 1 });
+    const rule = await one<{ n: number }>(
+      "SELECT count(*)::int n FROM shared_photos sp JOIN photos p ON p.id = sp.photo_id WHERE p.is_sensitive AND sp.added_by = 'rule'",
+    );
+    expect(rule.n).toBe(0);
   });
 
   it("share link: sha256 of the dev token is stored, never the token; expiry is refreshed each run", async () => {
@@ -241,10 +250,14 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
       });
     });
 
-    it("the Grandparents viewer sees 3 shared photos and nothing else", async () => {
+    it("the Grandparents viewer sees 4 album rows (3 visible photos + 1 hidden tile) and nothing else", async () => {
       await db.asViewer(DEMO.shareLink, async (c) => {
-        expect((await c.query("SELECT count(*)::int n FROM shared_photos")).rows[0].n).toBe(3);
-        expect((await c.query("SELECT count(*)::int n FROM photos")).rows[0].n).toBe(3);
+        expect((await c.query("SELECT count(*)::int n FROM shared_photos")).rows[0].n).toBe(4);
+        expect((await c.query("SELECT count(*)::int n FROM photos")).rows[0].n).toBe(4);
+        // The hidden (sensitive, unreleased) one has no readable derivative.
+        expect(
+          (await c.query("SELECT count(*)::int n FROM photo_derivatives")).rows[0].n,
+        ).toBeLessThanOrEqual(8);
         await expect(c.query("SELECT count(*) FROM photo_exif")).rejects.toThrow(
           /permission denied for table photo_exif/,
         );

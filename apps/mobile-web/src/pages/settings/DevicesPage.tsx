@@ -27,20 +27,17 @@ export function DevicesPage() {
 
   return (
     <SubPage title={t("devices.title")} backHref="/settings">
-      <p className="opacity-80">{t("devices.body")}</p>
+      <p className="text-muted">{t("devices.body")}</p>
       {sessions.isError ? <Message>{errorMessage(sessions.error)}</Message> : null}
       {error ? <Message>{error}</Message> : null}
-      <ul className="flex flex-col gap-2" data-testid="devices-list">
+      <ul className="ll-list" data-testid="devices-list">
         {sessions.data?.sessions.map((s) => (
-          <li
-            key={s.id}
-            className="flex items-center justify-between gap-3 rounded-xl border border-gray-500/30 p-3"
-          >
-            <div>
-              <p className="font-medium">
+          <li key={s.id} className="ll-row !flex-nowrap">
+            <div className="min-w-0">
+              <p className="font-semibold">
                 {s.deviceLabel} {s.current ? `(${t("devices.current")})` : ""}
               </p>
-              <p className="text-sm opacity-70">
+              <p className="text-sm text-muted">
                 {t("devices.lastActive", { date: new Date(s.lastActiveAt).toLocaleString() })}
               </p>
             </div>

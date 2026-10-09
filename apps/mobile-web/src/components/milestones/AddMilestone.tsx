@@ -2,7 +2,7 @@ import { MILESTONE_NAME_MAX, type MilestoneCategory } from "@littlelight/shared"
 import { type FormEvent, useState } from "react";
 import { t } from "../../i18n";
 import { useCreateMilestone } from "../../lib/queries/milestones";
-import { Button, Message, TextField } from "../ui";
+import { Button, Message, SelectField, TextField } from "../ui";
 import { milestoneErrorMessage } from "./MilestoneAdminControls";
 
 const CATEGORIES: MilestoneCategory[] = [
@@ -48,7 +48,7 @@ export function AddMilestone({ babyId }: { babyId: string }) {
   return (
     <form
       onSubmit={(e) => void onSubmit(e)}
-      className="flex flex-col gap-3 rounded-xl border border-gray-500/30 p-4"
+      className="ll-card flex flex-col gap-4"
       data-testid="milestone-add-form"
     >
       <TextField
@@ -58,24 +58,19 @@ export function AddMilestone({ babyId }: { babyId: string }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <div className="flex flex-col gap-1">
-        <label htmlFor="milestone-category" className="text-sm font-medium">
-          {t("milestones.categoryLabel")}
-        </label>
-        <select
-          id="milestone-category"
-          data-testid="milestone-category"
-          className="min-h-11 w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)]"
-          value={category}
-          onChange={(e) => setCategory(e.target.value as MilestoneCategory)}
-        >
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {t(`milestones.category.${c}`)}
-            </option>
-          ))}
-        </select>
-      </div>
+      <SelectField
+        id="milestone-category"
+        label={t("milestones.categoryLabel")}
+        data-testid="milestone-category"
+        value={category}
+        onChange={(e) => setCategory(e.target.value as MilestoneCategory)}
+      >
+        {CATEGORIES.map((c) => (
+          <option key={c} value={c}>
+            {t(`milestones.category.${c}`)}
+          </option>
+        ))}
+      </SelectField>
       {error ? <Message data-testid="milestone-error">{error}</Message> : null}
       <div className="flex gap-2">
         <Button

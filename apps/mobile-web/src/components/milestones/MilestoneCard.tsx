@@ -32,7 +32,7 @@ export function MilestoneCard({ milestone, isAdmin }: { milestone: Milestone; is
   return (
     <li
       data-testid={`milestone-card-${milestone.id}`}
-      className="flex flex-col overflow-hidden rounded-xl border border-gray-500/30"
+      className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface"
     >
       <button
         type="button"
@@ -41,21 +41,21 @@ export function MilestoneCard({ milestone, isAdmin }: { milestone: Milestone; is
         onClick={() => navigate(`/timeline?milestone=${milestone.id}`)}
         className="flex min-h-11 w-full flex-col text-left"
       >
-        <div className="aspect-square w-full bg-gray-500/10">
+        <div className="aspect-square w-full bg-fill">
           {cover ? (
             <PhotoImage photo={cover} baby={baby} milestoneName={milestone.name} timeZone={tz} />
           ) : null}
         </div>
         <div className="flex flex-col gap-0.5 p-3">
           <span className="font-semibold">{milestone.name}</span>
-          {when ? <span className="text-sm opacity-80">{when}</span> : null}
-          <span className="text-sm opacity-70">
+          {when ? <span className="text-sm text-muted">{when}</span> : null}
+          <span className="text-sm text-muted">
             {tn("milestones.photoCount", milestone.photoCount)}
           </span>
         </div>
       </button>
       {isAdmin && !milestone.isPreset ? (
-        <div className="border-t border-gray-500/20 p-2">
+        <div className="border-t border-line p-2">
           <MilestoneAdminControls milestone={milestone} />
         </div>
       ) : null}

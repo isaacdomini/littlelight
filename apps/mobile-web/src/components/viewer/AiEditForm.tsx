@@ -2,10 +2,7 @@ import { AI_DESCRIPTION_LIMITS, type Photo, type PhotoAiOverridePatch } from "@l
 import { useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
-import { Button, Message } from "../ui";
-
-const fieldClass =
-  "w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)] outline-none focus:border-[var(--ion-color-primary)]";
+import { Button, Message, TextAreaField } from "../ui";
 
 type Field = "caption" | "detailed_description" | "search_tags";
 
@@ -96,7 +93,8 @@ export function AiEditForm({
     isOverridden(f) ? (
       <Button
         variant="link"
-        className="!min-h-11 self-start !px-0 text-sm"
+        size="sm"
+        className="self-start !px-0"
         data-testid={`ai-edit-reset-${f}`}
         aria-label={t("ai.resetFieldLabel", { field: label })}
         onClick={() => resetField(f)}
@@ -116,11 +114,9 @@ export function AiEditForm({
       }}
     >
       <div className="flex flex-col gap-1">
-        <label htmlFor="ai-edit-caption" className="text-sm font-medium">
-          {t("ai.editCaption")}
-        </label>
-        <textarea
+        <TextAreaField
           id="ai-edit-caption"
+          label={t("ai.editCaption")}
           data-testid="ai-edit-caption"
           rows={2}
           maxLength={AI_DESCRIPTION_LIMITS.caption}
@@ -129,20 +125,15 @@ export function AiEditForm({
             unreset("caption");
             setCaption(e.target.value);
           }}
-          className={fieldClass}
+          counter={t("ai.counter", { n: caption.length, max: AI_DESCRIPTION_LIMITS.caption })}
         />
-        <p className="text-right text-xs opacity-70">
-          {t("ai.counter", { n: caption.length, max: AI_DESCRIPTION_LIMITS.caption })}
-        </p>
         {resetButton("caption", t("ai.editCaption"))}
       </div>
 
       <div className="flex flex-col gap-1">
-        <label htmlFor="ai-edit-description" className="text-sm font-medium">
-          {t("ai.editDescription")}
-        </label>
-        <textarea
+        <TextAreaField
           id="ai-edit-description"
+          label={t("ai.editDescription")}
           data-testid="ai-edit-description"
           rows={5}
           maxLength={AI_DESCRIPTION_LIMITS.detailedDescription}
@@ -151,35 +142,28 @@ export function AiEditForm({
             unreset("detailed_description");
             setDescription(e.target.value);
           }}
-          className={fieldClass}
-        />
-        <p className="text-right text-xs opacity-70">
-          {t("ai.counter", {
+          counter={t("ai.counter", {
             n: description.length,
             max: AI_DESCRIPTION_LIMITS.detailedDescription,
           })}
-        </p>
+        />
         {resetButton("detailed_description", t("ai.editDescription"))}
       </div>
 
       <div className="flex flex-col gap-2" data-testid="ai-edit-tags">
-        <label htmlFor="ai-edit-tag-input" className="text-sm font-medium">
+        <label htmlFor="ai-edit-tag-input" className="ll-label">
           {t("ai.editTags")}
         </label>
         {tags.length > 0 ? (
-          <ul className="flex flex-wrap gap-2">
+          <ul className="ll-chips">
             {tags.map((tag) => (
-              <li
-                key={tag}
-                data-testid={`ai-edit-tag-${tag}`}
-                className="flex items-center gap-1 rounded-full border border-gray-500/50 py-0.5 pl-3 pr-1 text-sm"
-              >
+              <li key={tag} data-testid={`ai-edit-tag-${tag}`} className="ll-chip !pr-1">
                 <span>{tag}</span>
                 <button
                   type="button"
                   data-testid={`ai-edit-tag-remove-${tag}`}
                   aria-label={t("ai.removeTag", { name: tag })}
-                  className="flex h-11 w-11 items-center justify-center rounded-full"
+                  className="-my-[6px] flex h-11 w-9 items-center justify-center rounded-full text-lg text-muted"
                   onClick={() => {
                     unreset("search_tags");
                     setTags(tags.filter((x) => x !== tag));
@@ -194,7 +178,6 @@ export function AiEditForm({
         <input
           id="ai-edit-tag-input"
           data-testid="ai-edit-tag-input"
-          className={`${fieldClass} min-h-11`}
           value={draft}
           disabled={tags.length >= AI_DESCRIPTION_LIMITS.searchTags}
           maxLength={AI_DESCRIPTION_LIMITS.searchTag}
@@ -219,7 +202,7 @@ export function AiEditForm({
           }}
         />
         {tags.length >= AI_DESCRIPTION_LIMITS.searchTags ? (
-          <p className="text-sm opacity-70">
+          <p className="text-sm text-muted">
             {t("ai.editTagsMax", { max: AI_DESCRIPTION_LIMITS.searchTags })}
           </p>
         ) : null}

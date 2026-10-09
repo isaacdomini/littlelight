@@ -7,6 +7,7 @@
 #   SMOKE_TEARDOWN=1 bash e2e/smoke/dev-stack.sh   also `down -v` on exit (pass or fail)
 #   SMOKE_SKIP_UP=1  bash e2e/smoke/dev-stack.sh   assume the stack is already running
 #   SMOKE_SKIP_STORAGE_STOP=1                      skip the stop-storage -> 503 check
+#   SMOKE_NGINX_PORT=18081                         host port of the throwaway nginx used for the /s/ header check (step 8)
 #
 # Exits non-zero on the first failure.
 set -euo pipefail
@@ -92,9 +93,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 14 migrations applied"
+step "3a. database: all 15 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "14" ] || fail "expected 14 applied migrations, found $MIGS"
+[ "$MIGS" = "15" ] || fail "expected 15 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -180,8 +181,8 @@ grep -qx 'stranger_photos=0' <<<"$OUT" || fail "a stranger can see photos: $OUT"
 OUT="$("${APSQL[@]}" -c "begin; set local role authenticated; $(claims "$NANNY") delete from photos; rollback;" 2>&1 || true)"
 grep -q 'permission denied for table photos' <<<"$OUT" || fail "contributor DELETE FROM photos was not denied: $OUT"
 OUT="$("${APSQL[@]}" -c "begin; set local role viewer; $(claims "$VIEWER") select 'shared=' || count(*) from shared_photos; select 'photos=' || count(*) from photos; rollback;" 2>&1 || true)"
-grep -qx 'shared=3' <<<"$OUT" || fail "viewer does not see exactly 3 shared_photos: $OUT"
-grep -qx 'photos=3' <<<"$OUT" || fail "viewer does not see exactly 3 photos: $OUT"
+grep -qx 'shared=4' <<<"$OUT" || fail "viewer does not see exactly 4 shared_photos: $OUT"
+grep -qx 'photos=4' <<<"$OUT" || fail "viewer does not see exactly 4 photos: $OUT"
 OUT="$("${APSQL[@]}" -c "begin; set local role viewer; $(claims "$VIEWER") select count(*) from photo_exif; rollback;" 2>&1 || true)"
 grep -q 'permission denied for table photo_exif' <<<"$OUT" || fail "viewer can read photo_exif: $OUT"
 OUT="$("${APSQL[@]}" -c "select count(*) from photos" 2>&1 || true)"
@@ -204,8 +205,9 @@ LEAK="$("${DC[@]}" logs api worker 2>&1 | grep -Eci 'X-Amz-Signature|GPSLatitude
 echo "api/worker use their own MinIO service accounts; worker queues ready; logs clean"
 
 
-step "5e. step 6: AI wiring (10 queues, provider line), seeded bath description, paid-tier gate, no keys in clients"
-grep -Eq 'queues: 10' <<<"$WLOG" || fail "worker log does not show 10 queues"
+step "5e. step 6: AI wiring (queues line, provider line), seeded bath description, paid-tier gate, no keys in clients"
+# step 6 added 2 queues (10), step 7/8 more (12): the newest worker boot line carries the total
+grep -Eq 'queues: 12' <<<"$WLOG" || fail "worker log does not show 12 queues"
 W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
 W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
 if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
@@ -282,6 +284,63 @@ curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/babies/$MAYA_ID/chat/t
 LOGS_NOW="$("${DC[@]}" logs --no-color --since 10m api worker 2>&1 || true)"
 grep -Eqi 'Note from parent|Show me bath time photos|X-Amz-Signature|latitude' <<<"$LOGS_NOW" && fail "api/worker logs carry a search document, a chat question, a signed URL or a coordinate"
 echo "search, chat, tier gates and log hygiene ok"
+
+step "5g. step 8: sharing: viewer endpoints need a cookie; expired/revoked/unknown links are 410; nginx /s/ headers"
+VB() { curl -s -o "$TMP/v.json" -w '%{http_code}' "$@"; }
+for p in album photos; do
+  C="$(VB "$BASE/api/share/$p")"
+  [ "$C" = "401" ] || fail "GET /api/share/$p without a viewer cookie answered $C, expected 401"
+done
+C="$(VB -X POST "$BASE/api/share/photos/urls" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"ids":["00000000-0000-4000-8000-000000000301"],"kind":"thumb"}')"
+[ "$C" = "401" ] || fail "POST /api/share/photos/urls without a cookie answered $C, expected 401"
+C="$(VB -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"token":"unknown-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}')"
+[ "$C" = "410" ] || fail "exchanging an unknown token answered $C, expected 410"
+grep -q '"share_link_expired"' "$TMP/v.json" || fail "unknown token body is not share_link_expired: $(cat "$TMP/v.json")"
+C="$(VB "$BASE/api/babies/$MAYA_ID/share-links")"
+[ "$C" = "401" ] || fail "GET share-links without a parent session answered $C, expected 401"
+# demo-mom: create a link, open it as a viewer, prove the viewer cookie opens no parent route, revoke it
+LINK="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/share-links" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"name":"smoke link"}')" || fail "demo-mom could not create a share link"
+LINK_ID="$(printf '%s' "$LINK" | json 'j.link.id')"
+LINK_TOKEN="$(printf '%s' "$LINK" | json 'j.url.split("/").pop()')"
+VJAR="$TMP/viewer.jar"
+C="$(curl -s -o "$TMP/v.json" -w '%{http_code}' -c "$VJAR" -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"token\":\"$LINK_TOKEN\"}")"
+[ "$C" = "200" ] || fail "exchanging a fresh link answered $C: $(cat "$TMP/v.json")"
+C="$(VB -b "$VJAR" "$BASE/api/share/album")"
+[ "$C" = "200" ] || fail "viewer album with the cookie answered $C"
+C="$(VB -b "$VJAR" "$BASE/api/me")"
+[ "$C" = "401" ] || fail "a viewer cookie opened a parent route (GET /api/me answered $C)"
+C="$(VB -b "$VJAR" "$BASE/api/babies/$MAYA_ID/chat/messages" -X POST -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"text":"hi"}')"
+case "$C" in 401|403) ;; *) fail "a viewer cookie reached chat (answered $C)";; esac
+curl -fsS -o /dev/null -b "$MOM_JAR" -X POST "$BASE/api/share-links/$LINK_ID/revoke" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{}' || fail "revoke failed"
+C="$(VB -b "$VJAR" "$BASE/api/share/album")"
+[ "$C" = "410" ] || fail "revoked link: open viewer session answered $C, expected 410"
+C="$(VB -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"token\":\"$LINK_TOKEN\"}")"
+[ "$C" = "410" ] || fail "revoked link: exchange answered $C, expected 410"
+curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/share-links/$LINK_ID" -H 'X-Littlelight-Client: web' || fail "delete of the smoke link failed"
+# The dev web is Vite (no nginx): the /s/ headers are checked on the production nginx config
+# itself, served by a throwaway nginx container with a stub shell (nothing else is touched).
+NGX_NAME="ll-smoke-nginx-$$"
+NGX_PORT="${SMOKE_NGINX_PORT:-18081}"
+mkdir -p "$TMP/html"
+echo '<!doctype html><html><head></head><body><div id="root"></div></body></html>' > "$TMP/html/index.html"
+if docker run -d --rm --name "$NGX_NAME" -p "127.0.0.1:$NGX_PORT:80" \
+     -v "$ROOT/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+     -v "$TMP/html:/usr/share/nginx/html:ro" nginx:1.28-alpine >/dev/null 2>&1; then
+  ngx_up() { curl -fsS -o /dev/null "http://127.0.0.1:$NGX_PORT/s/probe"; }
+  wait_for 20 "throwaway nginx" ngx_up
+  H="$(curl -sI "http://127.0.0.1:$NGX_PORT/s/abcdefghijklmnopqrstuv")"
+  docker rm -f "$NGX_NAME" >/dev/null 2>&1 || true
+  grep -qi '^referrer-policy: no-referrer' <<<"$H" || fail "nginx /s/ has no 'Referrer-Policy: no-referrer': $H"
+  grep -qi '^cache-control: no-store' <<<"$H" || fail "nginx /s/ has no 'Cache-Control: no-store': $H"
+  grep -Eqi '^x-robots-tag: noindex' <<<"$H" || fail "nginx /s/ has no 'X-Robots-Tag: noindex': $H"
+  grep -qi '^x-frame-options: DENY' <<<"$H" || fail "nginx /s/ lost X-Frame-Options (add_header inheritance)"
+  echo "nginx /s/ sends no-referrer, no-store and noindex"
+else
+  echo "WARNING: could not start a throwaway nginx:1.28-alpine (image missing and no network?); /s/ header check skipped"
+fi
+SHARE_LEAK="$("${DC[@]}" logs --no-color --since 10m api web 2>&1 | grep -cF -e "$LINK_TOKEN" || true)"
+[ "$SHARE_LEAK" = "0" ] || fail "the share token appears in api/web logs ($SHARE_LEAK line(s))"
+echo "sharing: viewer endpoints, 410 pages, parent isolation and log hygiene ok"
 
 if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   step "5c. stopping storage degrades the api (503) and the worker (unhealthy)"

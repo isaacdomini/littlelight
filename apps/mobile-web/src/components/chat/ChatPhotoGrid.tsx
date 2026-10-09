@@ -21,7 +21,7 @@ export function ChatPhotoGrid({
   if (photos.length === 0) return null;
   return (
     <ul
-      className="grid grid-cols-3 gap-1 sm:grid-cols-4"
+      className="grid grid-cols-3 gap-0.5 sm:grid-cols-4"
       data-testid="chat-photo-grid"
       aria-label={t("chat.photosLabel")}
     >

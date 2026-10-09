@@ -31,7 +31,7 @@ export function MilestoneSelect({
       data-testid={testId}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className={`min-h-11 w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)] ${className ?? ""}`}
+      className={className}
     >
       {first ? <option value={first.value}>{first.label}</option> : null}
       <option value="">{noneLabel}</option>

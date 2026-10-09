@@ -12,8 +12,12 @@ import {
   reindexJobSchema,
   SEARCH_DEFAULTS,
   type SearchBackfillJob,
+  SHARE_DEFAULTS,
+  type ShareApplyJob,
   searchBackfillJobSchema,
   searchReconcileJobSchema,
+  shareApplyJobSchema,
+  shareReconcileJobSchema,
 } from "@littlelight/shared";
 import type { JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
 import type { AiPipeline, FlushResult, PollResult } from "./ai";
@@ -24,6 +28,7 @@ import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
 import { reconcileIngest } from "./reconcile";
 import { handleReindexJobs, type ReconcileResult, type SearchIndexer } from "./reindex";
+import { type AutoShareResult, type AutoSharer, createAutoSharer } from "./sharing/autoshare";
 import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 
 // pg-boss queues, schedules and handlers (docs/plans/step-4.md 2.5, R1). The worker owns queue
@@ -48,7 +53,13 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // (`SEARCH_RECONCILE_CRON`, no retry: the next tick is the retry). `search.backfill` is sent on
 // demand with `singletonKey = babyId ?? "all"`; an `ai.backfill` with `reason: "upgrade"` sends
 // `search.backfill {babyId, reason: "upgrade"}` once it has completed (FR-5.8: search follows
-// the upgrade). Ten queues in total.
+// the upgrade).
+//
+// Step 8 (docs/plans/step-8.md 2.8): `share.apply` is sent by the api after a rule was set or
+// changed, `singletonKey = shareLinkId` (one queued/active full sync per link; a send while one is
+// active is dropped, and `share.reconcile` then re-syncs the rule because its `evaluated_at` is
+// older than its `updated_at`). `share.reconcile` is a cron singleton (`SHARE_RECONCILE_CRON`, no
+// retry: the next tick is the retry). Twelve queues in total.
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -86,6 +97,13 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     retryDelay: 60,
     expireInSeconds: 7200,
   },
+  [JOBS.shareApply]: {
+    policy: "exclusive",
+    retryLimit: 2,
+    retryDelay: 30,
+    expireInSeconds: 900,
+  },
+  [JOBS.shareReconcile]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 3000 },
 });
 
 /** Handlers per worker process for `photo.reindex` (docs/plans/step-7.md 2.7). */
@@ -104,12 +122,12 @@ export type ScheduleConfig = Pick<
   WorkerConfig,
   "AI_FLUSH_INTERVAL_CRON" | "AI_POLL_INTERVAL_CRON"
 > &
-  // Optional in the type (always set by `loadConfig`); falls back to the shared default.
-  Partial<Pick<WorkerConfig, "SEARCH_RECONCILE_CRON">>;
+  // Optional in the type (always set by `loadConfig`); fall back to the shared defaults.
+  Partial<Pick<WorkerConfig, "SEARCH_RECONCILE_CRON" | "SHARE_RECONCILE_CRON">>;
 
 /**
- * Every cron this worker schedules: `SCHEDULES` plus `ai.flush` / `ai.poll` and
- * `search.reconcile` from config.
+ * Every cron this worker schedules: `SCHEDULES` plus `ai.flush` / `ai.poll`, `search.reconcile`
+ * and `share.reconcile` from config.
  */
 export function schedules(config: ScheduleConfig): ReadonlyArray<readonly [JobName, string]> {
   return [
@@ -117,6 +135,7 @@ export function schedules(config: ScheduleConfig): ReadonlyArray<readonly [JobNa
     [JOBS.aiFlush, config.AI_FLUSH_INTERVAL_CRON],
     [JOBS.aiPoll, config.AI_POLL_INTERVAL_CRON],
     [JOBS.searchReconcile, config.SEARCH_RECONCILE_CRON ?? SEARCH_DEFAULTS.SEARCH_RECONCILE_CRON],
+    [JOBS.shareReconcile, config.SHARE_RECONCILE_CRON ?? SHARE_DEFAULTS.SHARE_RECONCILE_CRON],
   ];
 }
 
@@ -219,6 +238,34 @@ export async function sendSearchBackfill(
   return boss.send(JOBS.searchBackfill, data, searchBackfillSendOptions(data));
 }
 
+/**
+ * `share.apply` send options: the queue's (`retryLimit 2`, `retryDelay 30`, `expireInSeconds 900`)
+ * with `singletonKey = shareLinkId`. Same as the api's `enqueueShareApply`.
+ */
+export function shareApplySendOptions(shareLinkId: string): SendOptions {
+  return {
+    singletonKey: shareLinkId,
+    retryLimit: 2,
+    retryDelay: 30,
+    expireInSeconds: 900,
+  };
+}
+
+/** Validate and enqueue one `share.apply`. Resolves null when one is already queued for the link. */
+export async function sendShareApply(
+  boss: Pick<PgBoss, "send">,
+  job: ShareApplyJob,
+): Promise<string | null> {
+  const data = shareApplyJobSchema.parse(job);
+  return boss.send(JOBS.shareApply, data, shareApplySendOptions(data.shareLinkId));
+}
+
+/** Same options as the `share.reconcile` queue (run-job `--enqueue`; cron ticks send no data). */
+export const SHARE_RECONCILE_SEND_OPTIONS: SendOptions = Object.freeze({
+  retryLimit: 0,
+  expireInSeconds: 3000,
+});
+
 export interface QueueDeps {
   ingest: IngestDeps;
   purge: PurgeDeps;
@@ -230,6 +277,12 @@ export interface QueueDeps {
    * rows with a NULL vector (keyword search and filters still work) and logs that once.
    */
   indexer: SearchIndexer;
+  /**
+   * Auto-share rules (docs/plans/step-8.md 2.7): the reindex hook, `share.apply`,
+   * `share.reconcile`. `main.ts` always passes it; when omitted (unit tests that do not exercise
+   * sharing) one is created on first use over `ingest.pool`, so no handler ever runs without it.
+   */
+  autoSharer?: AutoSharer;
   log: WorkerLog;
   ingestConcurrency: number;
 }
@@ -379,6 +432,37 @@ export async function handleSearchBackfillJob(
   return deps.indexer.backfill(parsed.data);
 }
 
+type ShareHandlerDeps = { autoSharer: Pick<AutoSharer, "applyLink" | "reconcile">; log: WorkerLog };
+
+/**
+ * `share.apply` handler (`shareApplyJobSchema`): full auto-share sync of one link. A malformed
+ * payload is logged (job id only) and dropped; sync errors propagate so pg-boss retries.
+ */
+export async function handleShareApplyJob(
+  deps: ShareHandlerDeps,
+  job: AiJob,
+): Promise<AutoShareResult | null> {
+  const parsed = shareApplyJobSchema.safeParse(job.data);
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "share.apply: invalid job payload, dropped");
+    return null;
+  }
+  return deps.autoSharer.applyLink(parsed.data.shareLinkId);
+}
+
+/** `share.reconcile` handler (cron tick, no payload). Errors propagate; the next tick retries. */
+export async function handleShareReconcileJob(
+  deps: ShareHandlerDeps,
+  job: AiJob,
+): Promise<AutoShareResult | null> {
+  const parsed = shareReconcileJobSchema.safeParse(job.data ?? {});
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "share.reconcile: invalid job payload, dropped");
+    return null;
+  }
+  return deps.autoSharer.reconcile();
+}
+
 /** The `photo.ingest` handler for one job (exported for run-job and tests). */
 export async function handleIngestJob(
   deps: IngestDeps,
@@ -420,11 +504,28 @@ export async function handleIngestJob(
   }
 }
 
+/** `deps.autoSharer`, or one created lazily over the ingest pool on first use. */
+function autoSharerOf(deps: QueueDeps): AutoSharer {
+  if (deps.autoSharer) return deps.autoSharer;
+  let made: AutoSharer | undefined;
+  const get = () => {
+    made ??= createAutoSharer({ pool: deps.ingest.pool, log: deps.log });
+    return made;
+  };
+  return {
+    evaluatePhotos: (ids) => get().evaluatePhotos(ids),
+    applyLink: (id) => get().applyLink(id),
+    reconcile: () => get().reconcile(),
+  };
+}
+
 /** Register handlers on this worker. */
 export async function startWorkers(
   boss: Pick<PgBoss, "work" | "send">,
   deps: QueueDeps,
 ): Promise<void> {
+  const autoSharer = autoSharerOf(deps);
+  const shareDeps: ShareHandlerDeps = { autoSharer, log: deps.log };
   await boss.work(
     JOBS.ingest,
     {
@@ -465,7 +566,7 @@ export async function startWorkers(
       pollingIntervalSeconds: 2,
     },
     async (jobs) => {
-      await handleReindexJobs({ indexer: deps.indexer, log: deps.log }, jobs);
+      await handleReindexJobs({ indexer: deps.indexer, autoSharer, log: deps.log }, jobs);
     },
   );
   // Step 6 AI batch pipeline (docs/plans/step-6.md 2.6, 2.7). One job at a time per process;
@@ -493,5 +594,14 @@ export async function startWorkers(
   });
   await boss.work(JOBS.searchBackfill, { pollingIntervalSeconds: 10 }, async (jobs) => {
     for (const job of jobs) await handleSearchBackfillJob(deps, job);
+  });
+  // Step 8 auto-share (docs/plans/step-8.md 2.7, 2.8): one full link sync per job (singleton per
+  // link), the reconcile a cron singleton. Inserts are ON CONFLICT DO NOTHING and the gate
+  // re-checks every row, so `--scale worker=3` can only duplicate work, never a wrong row.
+  await boss.work(JOBS.shareApply, { pollingIntervalSeconds: 5 }, async (jobs) => {
+    for (const job of jobs) await handleShareApplyJob(shareDeps, job);
+  });
+  await boss.work(JOBS.shareReconcile, { pollingIntervalSeconds: 10 }, async (jobs) => {
+    for (const job of jobs) await handleShareReconcileJob(shareDeps, job);
   });
 }

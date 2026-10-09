@@ -102,8 +102,8 @@ export function MilestoneAdminControls({ milestone }: { milestone: Milestone }) 
         role="alertdialog"
         aria-label={t("milestones.deleteConfirmTitle")}
       >
-        <p className="font-medium">{t("milestones.deleteConfirmTitle")}</p>
-        <p className="text-sm opacity-80">{t("milestones.deleteConfirmBody")}</p>
+        <p className="font-semibold">{t("milestones.deleteConfirmTitle")}</p>
+        <p className="text-sm text-muted">{t("milestones.deleteConfirmBody")}</p>
         {error ? <Message>{error}</Message> : null}
         <div className="flex gap-2">
           <Button
@@ -130,6 +130,7 @@ export function MilestoneAdminControls({ milestone }: { milestone: Milestone }) 
     <div className="flex gap-2">
       <Button
         variant="secondary"
+        size="sm"
         data-testid={`milestone-rename-${milestone.id}`}
         aria-label={t("milestones.renameLabel", { name: milestone.name })}
         onClick={() => setMode("rename")}
@@ -137,7 +138,8 @@ export function MilestoneAdminControls({ milestone }: { milestone: Milestone }) 
         {t("milestones.rename")}
       </Button>
       <Button
-        variant="secondary"
+        variant="danger"
+        size="sm"
         data-testid={`milestone-delete-${milestone.id}`}
         aria-label={t("milestones.deleteLabel", { name: milestone.name })}
         onClick={() => setMode("delete")}

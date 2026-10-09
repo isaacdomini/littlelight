@@ -1,4 +1,6 @@
+import { IonIcon } from "@ionic/react";
 import type { PhotoSummary } from "@littlelight/shared";
+import { imageOutline } from "ionicons/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../i18n";
 import { type AltTextBaby, photoAltText } from "../lib/altText";
@@ -145,9 +147,13 @@ export function PhotoImage({
         role="img"
         aria-label={altText}
         data-testid={`photo-placeholder-${photo.id}`}
-        className="flex h-full w-full items-center justify-center bg-gray-500/20 text-xs opacity-70"
+        className="flex h-full w-full items-center justify-center bg-fill text-xs text-muted"
       >
-        {photo.thumbUrl === null && photo.status === "uploaded" ? t("timeline.processing") : null}
+        {photo.thumbUrl === null && photo.status === "uploaded" ? (
+          t("timeline.processing")
+        ) : (
+          <IonIcon aria-hidden icon={imageOutline} className="h-6 w-6 opacity-50" />
+        )}
       </div>
     );
   }

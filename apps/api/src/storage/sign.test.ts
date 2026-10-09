@@ -1,7 +1,7 @@
 import { derivativeKey, SIGNED_URL_TTL_SEC } from "@littlelight/shared";
 import { describe, expect, it } from "vitest";
 import { testConfig } from "../testing/support";
-import { clampTtl, createUrlSigner } from "./sign";
+import { clampTtl, createUrlSigner, shareMediaTtlSec } from "./sign";
 
 const BABY = "11111111-1111-4111-8111-111111111111";
 const PHOTO = "22222222-2222-4222-8222-222222222222";
@@ -82,5 +82,51 @@ describe("signUploadPart", () => {
     for (const n of [0, -1, 10_001, 1.5, Number.NaN]) {
       await expect(signer.signUploadPart("k", "u", n)).rejects.toThrow(RangeError);
     }
+  });
+});
+
+// Step 8 (docs/plans/step-8.md 2.9, D6): no shared cache may store a signed photo response.
+describe("signGet cache control (step 8)", () => {
+  const cache = (url: string) => new URL(url).searchParams.get("response-cache-control");
+
+  it("every signed GET says `private, max-age=<ttl>` by default, parents' and viewers' alike", async () => {
+    const key = derivativeKey(BABY, PHOTO, "thumb");
+    expect(cache((await signer.signGet(key)).url)).toBe("private, max-age=3600");
+    expect(cache((await signer.signGet(key, { ttlSec: 300 })).url)).toBe("private, max-age=300");
+    // the TTL is clamped before it reaches the header
+    expect(cache((await signer.signGet(key, { ttlSec: 999_999 })).url)).toBe(
+      "private, max-age=3600",
+    );
+    expect(cache((await signer.signGet(key, { ttlSec: 0 })).url)).toBe("private, max-age=1");
+  });
+
+  it("an override must still be private or no-store", async () => {
+    const key = derivativeKey(BABY, PHOTO, "display");
+    expect(cache((await signer.signGet(key, { cacheControl: "no-store" })).url)).toBe("no-store");
+    expect(cache((await signer.signGet(key, { cacheControl: "private, max-age=5" })).url)).toBe(
+      "private, max-age=5",
+    );
+    for (const bad of [
+      "public, max-age=60",
+      "max-age=60",
+      'private="x"',
+      "s-maxage=60",
+      "",
+      "private\r\nX: y",
+    ]) {
+      await expect(signer.signGet(key, { cacheControl: bad }), bad).rejects.toThrow(RangeError);
+    }
+  });
+});
+
+describe("shareMediaTtlSec", () => {
+  const now = Date.UTC(2026, 9, 8, 12, 0, 0);
+  it("is the setting while the link outlives it, then the time left, never below 1 s", () => {
+    const plus = (sec: number) => new Date(now + sec * 1000);
+    expect(shareMediaTtlSec(300, plus(86_400), now)).toBe(300);
+    expect(shareMediaTtlSec(300, plus(120), now)).toBe(120);
+    expect(shareMediaTtlSec(300, plus(0), now)).toBe(1);
+    expect(shareMediaTtlSec(300, plus(-50), now)).toBe(1);
+    expect(shareMediaTtlSec(99_999, plus(999_999), now)).toBe(3600);
   });
 });

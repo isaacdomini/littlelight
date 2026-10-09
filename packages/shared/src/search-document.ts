@@ -329,7 +329,7 @@ export function buildSearchDocument(rawInput: SearchDocumentInput): SearchDocume
 
   return {
     text,
-    tags: buildTags(ai, milestoneName),
+    tags: searchTagsFor(ai, milestoneName),
     people,
     place: place?.toLowerCase() ?? null,
     milestoneIds: input.milestone ? [input.milestone.id] : [],
@@ -343,8 +343,12 @@ export function buildSearchDocument(rawInput: SearchDocumentInput): SearchDocume
  * `photo_search.tags`: the lower-cased, de-duplicated union of `search_tags` (override-merged),
  * `activities`, `setting.place_type`, `occasion`, `sensitive_content` and the milestone name, in
  * that order, at most `SEARCH_DOC_LIMITS.tags`; values longer than 60 characters are skipped.
+ *
+ * Also the tag set auto-share rules match (`ShareRuleFacts.tags`, docs/plans/step-8.md 2.4), so
+ * the tags an admin sees in search facets are exactly the tags rules see. `ai` must already be
+ * override-merged (`applyAiOverrides`); `milestoneName` is the parent-tagged milestone's name.
  */
-function buildTags(ai: AiDescriptionV1 | null, milestoneName: string | null): string[] {
+export function searchTagsFor(ai: AiDescriptionV1 | null, milestoneName: string | null): string[] {
   const candidates: (string | null | undefined)[] = [
     ...(ai?.search_tags ?? []),
     ...(ai?.activities ?? []),

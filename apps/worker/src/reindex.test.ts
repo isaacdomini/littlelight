@@ -28,7 +28,7 @@ describe("handleReindexJobs (batch handler, step 7)", () => {
     ]) {
       const { deps, log, reindex } = setup();
       const out = await handleReindexJobs(deps, [{ id: "job-1", data }]);
-      expect(out).toEqual({ photoIds: [], invalid: 1, result: null });
+      expect(out).toEqual({ photoIds: [], invalid: 1, result: null, autoShare: null });
       expect(reindex).not.toHaveBeenCalled();
       const warns = log.lines.filter((l) => l.level === "warn");
       expect(warns).toHaveLength(1);
@@ -90,7 +90,12 @@ describe("handleReindexJobs (batch handler, step 7)", () => {
 
   it("an empty batch is a no-op", async () => {
     const { deps, reindex } = setup();
-    expect(await handleReindexJobs(deps, [])).toEqual({ photoIds: [], invalid: 0, result: null });
+    expect(await handleReindexJobs(deps, [])).toEqual({
+      photoIds: [],
+      invalid: 0,
+      result: null,
+      autoShare: null,
+    });
     expect(reindex).not.toHaveBeenCalled();
   });
 
@@ -103,5 +108,75 @@ describe("handleReindexJobs (batch handler, step 7)", () => {
       });
     }
     expect(reindex).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleReindexJobs auto-share hook (step 8, docs/plans/step-8.md 2.8)", () => {
+  const shareResult = { links: 1, photos: 2, added: 1, removed: 0, skipped: 0 };
+
+  it("runs auto-share before indexing, with the same de-duplicated ids, and reports its result", async () => {
+    const order: string[] = [];
+    const evaluatePhotos = vi.fn(async (_ids: string[]) => {
+      order.push("autoshare");
+      return shareResult;
+    });
+    const { log, reindex } = setup();
+    reindex.mockImplementation(async (ids: string[]) => {
+      order.push("index");
+      return { indexed: ids.length } as never;
+    });
+    const out = await handleReindexJobs(
+      { indexer: { reindex }, autoSharer: { evaluatePhotos }, log },
+      [
+        { id: "1", data: valid },
+        { id: "2", data: { ...valid, photoId: PHOTO2, reason: "ai" } },
+        { id: "3", data: valid },
+      ],
+    );
+    expect(order).toEqual(["autoshare", "index"]);
+    expect(evaluatePhotos).toHaveBeenCalledTimes(1);
+    expect(evaluatePhotos).toHaveBeenCalledWith([PHOTO, PHOTO2]);
+    expect(reindex.mock.calls[0]?.[0]).toEqual([PHOTO, PHOTO2]);
+    expect(out.autoShare).toEqual(shareResult);
+  });
+
+  it("an auto-share failure is logged (category only) and never blocks indexing", async () => {
+    const evaluatePhotos = vi.fn(async () => {
+      throw Object.assign(new Error("boom: secret note text"), { code: "57P01" });
+    });
+    const { log, reindex } = setup();
+    const out = await handleReindexJobs(
+      { indexer: { reindex }, autoSharer: { evaluatePhotos }, log },
+      [{ id: "1", data: valid }],
+    );
+    expect(reindex).toHaveBeenCalledTimes(1);
+    expect(out.result).not.toBeNull();
+    expect(out.autoShare).toBeNull();
+    const warns = log.lines.filter((l) => l.level === "warn");
+    expect(warns).toHaveLength(1);
+    expect(JSON.stringify(warns)).not.toContain("secret note text");
+  });
+
+  it("an indexer failure still propagates after auto-share ran", async () => {
+    const evaluatePhotos = vi.fn(async () => shareResult);
+    const { log, reindex } = setup();
+    reindex.mockRejectedValueOnce(new Error("db down"));
+    await expect(
+      handleReindexJobs({ indexer: { reindex }, autoSharer: { evaluatePhotos }, log }, [
+        { id: "1", data: valid },
+      ]),
+    ).rejects.toThrow("db down");
+    expect(evaluatePhotos).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-share is not called when the whole batch is invalid", async () => {
+    const evaluatePhotos = vi.fn(async () => shareResult);
+    const { log, reindex } = setup();
+    const out = await handleReindexJobs(
+      { indexer: { reindex }, autoSharer: { evaluatePhotos }, log },
+      [{ id: "1", data: { nope: true } }],
+    );
+    expect(evaluatePhotos).not.toHaveBeenCalled();
+    expect(out.autoShare).toBeNull();
   });
 });

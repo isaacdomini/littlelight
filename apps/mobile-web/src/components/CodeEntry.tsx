@@ -131,7 +131,7 @@ export function CodeEntry({
         onChange={(e) => setCode(digits(e.target.value))}
         onPaste={onPaste}
         disabled={busy}
-        className="text-center text-2xl tracking-[0.5em]"
+        className="text-center text-2xl font-semibold tracking-[0.5em]"
       />
       <div aria-live="polite">
         {error ? <Message data-testid="verify-error">{error}</Message> : null}

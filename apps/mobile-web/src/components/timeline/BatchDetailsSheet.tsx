@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
 import { useMilestones } from "../../lib/queries/milestones";
-import { Button, Message, TextField } from "../ui";
+import { Button, Message, TextAreaField, TextField } from "../ui";
 import { MilestoneSelect } from "../viewer/MilestoneSelect";
 import { addPeople, PeopleInput } from "../viewer/PeopleInput";
 
@@ -34,6 +34,7 @@ export function BatchDetailsSheet({
       onDidDismiss={onClose}
       data-testid="batch-details-sheet"
       aria-label={t("details.batchTitle", { n: count })}
+      className="ll-sheet"
     >
       <BatchForm count={count} babyId={babyId} onClose={onClose} onSubmit={onSubmit} />
     </IonModal>
@@ -83,15 +84,15 @@ function BatchForm({
 
   return (
     <form
-      className="flex h-full flex-col gap-4 overflow-y-auto p-4"
+      className="flex max-h-[90vh] flex-col gap-4 overflow-y-auto p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
       onSubmit={(e) => {
         e.preventDefault();
         void save();
       }}
     >
-      <h2 className="text-lg font-semibold">{t("details.batchTitle", { n: count })}</h2>
-      <div className="flex flex-col gap-1">
-        <label htmlFor="batch-milestone" className="text-sm font-medium">
+      <h2 className="text-xl font-semibold">{t("details.batchTitle", { n: count })}</h2>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="batch-milestone" className="ll-label">
           {t("details.milestone")}
         </label>
         <MilestoneSelect
@@ -120,21 +121,16 @@ function BatchForm({
         placeholder={t("details.batchKeep")}
         onChange={(e) => setLocation(e.target.value)}
       />
-      <div className="flex flex-col gap-1">
-        <label htmlFor="batch-note" className="text-sm font-medium">
-          {t("details.noteLabel")}
-        </label>
-        <textarea
-          id="batch-note"
-          data-testid="batch-note"
-          rows={3}
-          maxLength={PHOTO_DETAILS_LIMITS.note}
-          value={note}
-          placeholder={t("details.batchKeep")}
-          onChange={(e) => setNote(e.target.value)}
-          className="w-full rounded-lg border border-gray-500/50 bg-transparent px-3 py-2 text-base text-[var(--ion-text-color)]"
-        />
-      </div>
+      <TextAreaField
+        id="batch-note"
+        label={t("details.noteLabel")}
+        data-testid="batch-note"
+        rows={3}
+        maxLength={PHOTO_DETAILS_LIMITS.note}
+        value={note}
+        placeholder={t("details.batchKeep")}
+        onChange={(e) => setNote(e.target.value)}
+      />
       {error ? <Message>{error}</Message> : null}
       <div className="flex gap-2">
         <Button type="submit" className="flex-1" data-testid="batch-save" disabled={busy}>

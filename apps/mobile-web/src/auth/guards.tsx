@@ -1,7 +1,6 @@
-import { IonSpinner } from "@ionic/react";
 import type { ReactNode } from "react";
 import { matchPath, Navigate, useLocation } from "react-router-dom";
-import { t } from "../i18n";
+import { PageSkeleton } from "../components/ui";
 import { pendingInvite } from "../lib/session";
 import { useAuth } from "./AuthProvider";
 import { nextOnboardingRoute, onboardingGate } from "./onboarding";
@@ -22,11 +21,7 @@ export function ActiveNavigate({ path, to }: { path: string; to: string }) {
 }
 
 export function FullPageSpinner() {
-  return (
-    <div className="flex h-full min-h-screen items-center justify-center" role="status">
-      <IonSpinner aria-label={t("common.loading")} />
-    </div>
-  );
+  return <PageSkeleton />;
 }
 
 /** Signed in (consent/profile not required): onboarding screens. */

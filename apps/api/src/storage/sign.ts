@@ -15,6 +15,12 @@ import type { ApiConfig } from "../config";
 // - Users only ever get `thumb`/`display` derivative URLs; `analysis` is never signed; originals
 //   only through the admin route `GET /photos/:id/original`.
 // - Signed URLs are capability tokens: never log them, never persist them.
+// - Step 8 (docs/plans/step-8.md 2.9, D6): every presigned GET carries
+//   `response-cache-control: private, max-age=<ttl>` (parents' and viewers' alike), so MinIO
+//   answers with `Cache-Control: private` and no shared cache (Cloudflare in front of `files.`)
+//   ever stores a photo; a revoked share link leaves nothing to purge. A caller override must
+//   still be `private` or `no-store`. Viewer media URLs use `shareMediaTtlSec` (≤
+//   `SHARE_MEDIA_URL_TTL_SEC` and ≤ the link's expiry).
 
 export interface SignedUrl {
   url: string;
@@ -28,6 +34,12 @@ export interface SignGetOptions {
   contentType?: string;
   /** `response-content-disposition` override (e.g. `attachment; filename="…"`). */
   contentDisposition?: string;
+  /**
+   * `response-cache-control` override. Default `private, max-age=<clamped ttl>`. Must contain the
+   * `private` or `no-store` directive (a shared cache may never store a signed photo response,
+   * D6); anything else, or a value with control characters, throws `RangeError`.
+   */
+  cacheControl?: string;
 }
 
 export interface UrlSigner {
@@ -47,6 +59,38 @@ declare module "fastify" {
 export function clampTtl(ttlSec: number | undefined): number {
   if (ttlSec === undefined || !Number.isFinite(ttlSec)) return SIGNED_URL_TTL_SEC;
   return Math.min(SIGNED_URL_TTL_SEC, Math.max(1, Math.floor(ttlSec)));
+}
+
+/** `Cache-Control` of a signed GET's response when the caller does not override it. */
+export function defaultCacheControl(ttlSec: number): string {
+  return `private, max-age=${ttlSec}`;
+}
+
+// Bare directive only: `private="field"` would let a shared cache store everything else.
+const NO_SHARED_CACHE = /(^|,)\s*(private|no-store)\s*(,|$)/i;
+// Visible ASCII and spaces only: the value becomes a response header.
+const HEADER_VALUE = /^[\x20-\x7e]+$/;
+
+/** Validate a caller's `cacheControl` override (see `SignGetOptions.cacheControl`). Exported for tests. */
+export function assertPrivateCacheControl(value: string): string {
+  if (!HEADER_VALUE.test(value) || !NO_SHARED_CACHE.test(value)) {
+    throw new RangeError("cacheControl must be private or no-store");
+  }
+  return value;
+}
+
+/**
+ * Lifetime of a viewer media URL (step-8 plan 2.6): `SHARE_MEDIA_URL_TTL_SEC` (default 300 s),
+ * never past the share link's expiry, at least 1 s (the session check already refused an expired
+ * link). Pass the result as `ttlSec`; the default cache header then says `private, max-age=<it>`.
+ */
+export function shareMediaTtlSec(
+  maxTtlSec: number,
+  linkExpiresAt: Date,
+  nowMs: number = Date.now(),
+): number {
+  const untilExpiry = Math.floor((linkExpiresAt.getTime() - nowMs) / 1000);
+  return clampTtl(Math.min(maxTtlSec, untilExpiry));
 }
 
 type SignerConfig = Pick<
@@ -81,6 +125,10 @@ export function createUrlSigner(config: SignerConfig, now: () => number = Date.n
   return {
     async signGet(key, opts = {}) {
       const ttl = clampTtl(opts.ttlSec);
+      const cacheControl =
+        opts.cacheControl === undefined
+          ? defaultCacheControl(ttl)
+          : assertPrivateCacheControl(opts.cacheControl);
       const issuedAt = now();
       const url = await getSignedUrl(
         client,
@@ -91,6 +139,7 @@ export function createUrlSigner(config: SignerConfig, now: () => number = Date.n
           ...(opts.contentDisposition
             ? { ResponseContentDisposition: opts.contentDisposition }
             : {}),
+          ResponseCacheControl: cacheControl,
         }),
         { expiresIn: ttl, signingDate: new Date(issuedAt) },
       );

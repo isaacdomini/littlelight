@@ -72,7 +72,7 @@ export function Panes({
         data-testid="panes-tablet"
       >
         <div className="min-h-0 min-w-0">{grid}</div>
-        <aside className="min-h-0 min-w-0 border-l border-gray-500/30">{viewer}</aside>
+        <aside className="min-h-0 min-w-0 border-l border-line">{viewer}</aside>
       </div>
     );
   }
@@ -82,9 +82,9 @@ export function Panes({
       style={{ gridTemplateColumns: "280px minmax(0,1fr) 360px" }}
       data-testid="panes-desktop"
     >
-      <aside className="min-h-0 overflow-auto border-r border-gray-500/30">{chat}</aside>
+      <aside className="min-h-0 overflow-auto border-r border-line">{chat}</aside>
       <div className="min-h-0 min-w-0">{grid}</div>
-      <aside className="min-h-0 min-w-0 border-l border-gray-500/30">{viewer}</aside>
+      <aside className="min-h-0 min-w-0 border-l border-line">{viewer}</aside>
     </div>
   );
 }

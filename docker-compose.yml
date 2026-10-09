@@ -110,6 +110,10 @@ x-app-env: &app-env
   CHAT_MAX_OUTPUT_TOKENS: ${CHAT_MAX_OUTPUT_TOKENS:-800}
   CHAT_HISTORY_MESSAGES: ${CHAT_HISTORY_MESSAGES:-20}
   CHAT_MODEL_TIMEOUT_MS: ${CHAT_MODEL_TIMEOUT_MS:-30000}
+  # Sharing (docs/plans/step-8.md 2.4 shareEnvSchema): viewer presigned-URL lifetime (api) and
+  # the auto-share reconcile cron (worker). No secret: viewer/IP keys derive from JWT_SECRET.
+  SHARE_MEDIA_URL_TTL_SEC: ${SHARE_MEDIA_URL_TTL_SEC:-300}
+  SHARE_RECONCILE_CRON: ${SHARE_RECONCILE_CRON:-41 * * * *}
   # OpenAI key for api (chat + query embeddings) and worker (batches + document embeddings).
   # Empty => AI disabled with one log line in each. Only api and worker merge this anchor, so
   # web, migrate, db-init and backup never get it. AI_ALLOW_FAKE_IN_PRODUCTION and FAKE_* are
