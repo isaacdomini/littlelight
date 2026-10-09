@@ -1,11 +1,16 @@
 import os from "node:os";
 import { PgBoss } from "pg-boss";
-import { createAiPipeline } from "./ai";
-import { aiPipelineConfig, createAiRuntime } from "./ai-runtime";
+import { createAiPipeline, createSearchIndexer } from "./ai";
+import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig } from "./config";
 import { createDiskMonitor } from "./disk";
-import { createAiQueueAgeSampler, startHeartbeat, workerId } from "./heartbeat";
+import {
+  createAiQueueAgeSampler,
+  createSearchStatsSampler,
+  startHeartbeat,
+  workerId,
+} from "./heartbeat";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
 import {
@@ -25,6 +30,9 @@ import { WORKER_VERSION } from "./version";
 // only, never photo bytes, GPS, notes or keys with signatures. Step 6 (docs/plans/step-6.md 2.7):
 // the vision describer is created once here (null without a key: AI flush/poll then skip with one
 // log line and the worker stays healthy), the AI queues are always created and registered.
+// Step 7 (docs/plans/step-7.md 2.7): the embedder is created with it (null without
+// OPENAI_API_KEY: search rows get no vector, keyword search still works) and the search indexer
+// serves `photo.reindex`, `search.reconcile` and `search.backfill`.
 
 function readConfig() {
   try {
@@ -53,8 +61,9 @@ try {
 }
 
 // Room for INGEST_CONCURRENCY handlers (a few short transactions each) plus the heartbeat, the
-// cron jobs and the AI flush/poll/backfill handlers (+2, docs/plans/step-6.md 2.7).
-const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 6);
+// cron jobs and the AI flush/poll/backfill handlers (+2, docs/plans/step-6.md 2.7), and the
+// search reindex/reconcile/backfill handlers (+1, docs/plans/step-7.md 2.7).
+const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 7);
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
 const s3 = createS3Client(config);
 const storage = createStorage(s3, config.S3_BUCKET);
@@ -82,6 +91,13 @@ const aiPipeline = createAiPipeline({
   log,
 });
 
+const indexer = createSearchIndexer({
+  pool,
+  embedder: ai.embedder,
+  config: searchIndexerConfig(config, process.env, ai.embedder),
+  log,
+});
+
 const heartbeat = startHeartbeat(
   {
     db: pool,
@@ -103,6 +119,7 @@ const heartbeat = startHeartbeat(
           }),
         }
       : {}),
+    searchStats: createSearchStatsSampler({ stats: () => indexer.stats(), log }),
   },
   config.HEARTBEAT_INTERVAL_MS,
   log,
@@ -140,6 +157,7 @@ try {
     purge: { pool, storage, log },
     sweep: { pool, storage, log },
     ai: aiPipeline,
+    indexer,
     log,
     ingestConcurrency: config.INGEST_CONCURRENCY,
   });

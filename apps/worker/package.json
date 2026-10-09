@@ -10,8 +10,10 @@
     "healthcheck": "tsx src/healthcheck.ts",
     "run-job": "tsx src/run-job.ts",
     "perf-seed": "tsx src/tools/perf-seed.ts",
+    "search-seed": "tsx src/ai/search-seed.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'"
+    "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'",
+    "search-calibrate": "tsx src/ai/search-calibrate.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1147.0",

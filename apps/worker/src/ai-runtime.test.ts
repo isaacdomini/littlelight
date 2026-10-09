@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aiPipelineConfig, createAiRuntime } from "./ai-runtime";
+import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
 import { recordingLog } from "./testing/stubs";
 
 describe("createAiRuntime", () => {
@@ -8,8 +8,14 @@ describe("createAiRuntime", () => {
     const rt = createAiRuntime({}, log);
     expect(rt.describer).toBeNull();
     expect(rt.disabledReason).toBe("OPENAI_API_KEY not set");
+    expect(rt.embedder).toBeNull();
+    expect(rt.embedDisabledReason).toBe("OPENAI_API_KEY not set");
     expect(log.lines.map((l) => [l.level, l.msg])).toEqual([
       ["info", "AI disabled: OPENAI_API_KEY not set"],
+      [
+        "info",
+        "search: embeddings disabled (OPENAI_API_KEY not set); keyword search and filters still work",
+      ],
     ]);
   });
 
@@ -22,9 +28,57 @@ describe("createAiRuntime", () => {
     const rt = createAiRuntime({ VISION_PROVIDER: "fake" }, log);
     expect(rt.describer?.provider).toBe("fake");
     expect(rt.disabledReason).toBeUndefined();
-    expect(log.lines.some((l) => l.msg === "AI enabled: provider=fake model=gpt-6-luna")).toBe(
-      true,
+    expect(rt.embedder?.model).toBe("fake");
+    expect(rt.embedder?.dims).toBe(1024);
+    expect(
+      log.lines.some(
+        (l) => l.msg === "AI enabled: provider=fake vision=gpt-6-luna embed=fake/1024",
+      ),
+    ).toBe(true);
+    expect(log.lines.some((l) => l.msg.startsWith("search: embeddings disabled"))).toBe(false);
+  });
+
+  it("with an OpenAI key: describer and embedder both exist, one AI enabled line", () => {
+    const log = recordingLog();
+    const rt = createAiRuntime({ OPENAI_API_KEY: "sk-secret-123" }, log);
+    expect(rt.embedder?.model).toBe("text-embedding-3-small");
+    expect(log.lines.map((l) => l.msg)).toContain(
+      "AI enabled: provider=openai vision=gpt-6-luna embed=text-embedding-3-small/1024",
     );
+  });
+
+  it("an Anthropic-only deployment has a describer but no embedder (embeddings are OpenAI only)", () => {
+    const log = recordingLog();
+    const rt = createAiRuntime(
+      {
+        VISION_PROVIDER: "anthropic",
+        ANTHROPIC_API_KEY: "sk-ant-secret",
+        VISION_MODEL: "claude-haiku-5-5",
+      },
+      log,
+    );
+    expect(rt.describer?.provider).toBe("anthropic");
+    expect(rt.embedder).toBeNull();
+    expect(rt.embedDisabledReason).toMatch(/OPENAI_API_KEY/);
+    expect(
+      log.lines.some((l) => l.msg.startsWith("AI enabled") && l.msg.includes("embed=off")),
+    ).toBe(true);
+    expect(JSON.stringify(log.lines)).not.toContain("sk-ant-secret");
+  });
+
+  it("an unpriced EMBED_MODEL disables only the embedder (describer still built), names the field", () => {
+    const log = recordingLog();
+    const rt = createAiRuntime({ OPENAI_API_KEY: "sk-x", EMBED_MODEL: "embed-9" }, log);
+    expect(rt.describer).not.toBeNull();
+    expect(rt.embedder).toBeNull();
+    expect(rt.embedDisabledReason).toMatch(/EMBED_MODEL/);
+    expect(JSON.stringify(log.lines)).not.toMatch(/embed-9|sk-x/);
+  });
+
+  it("an unpriced VISION_MODEL disables only the describer; the embedder survives", () => {
+    const rt = createAiRuntime({ OPENAI_API_KEY: "sk-x", VISION_MODEL: "gpt-9" }, recordingLog());
+    expect(rt.describer).toBeNull();
+    expect(rt.embedder).not.toBeNull();
   });
 
   it("with an OpenAI key: an openai describer; the key never reaches a log line", () => {
@@ -97,5 +151,31 @@ describe("aiPipelineConfig", () => {
     expect(
       aiPipelineConfig(cfg, { VISION_REASONING_EFFORT: "extreme" }).VISION_REASONING_EFFORT,
     ).toBe("none");
+  });
+});
+
+describe("searchIndexerConfig", () => {
+  const cfg = { SEARCH_EMBED_BATCH: 50, AI_BABY_MONTHLY_BUDGET_USD: 2.5 };
+
+  it("uses the embedder's model tag, the doc version and passes the budget through", () => {
+    expect(searchIndexerConfig(cfg, {}, { model: "fake", dims: 1024 })).toEqual({
+      SEARCH_EMBED_BATCH: 50,
+      embedModelTag: "fake/1024",
+      docVersion: "v1",
+      AI_BABY_MONTHLY_BUDGET_USD: 2.5,
+    });
+  });
+
+  it("without an embedder the tag comes from env so rows are re-embedded once a key appears", () => {
+    expect(searchIndexerConfig(cfg, {}, null).embedModelTag).toBe("text-embedding-3-small/1024");
+    expect(
+      searchIndexerConfig(cfg, { EMBED_MODEL: "text-embedding-3-large" }, null).embedModelTag,
+    ).toBe("text-embedding-3-large/1024");
+  });
+
+  it("falls back to the defaults on an invalid AI env", () => {
+    expect(searchIndexerConfig(cfg, { VISION_PROVIDER: "gemini" }, null).embedModelTag).toBe(
+      "text-embedding-3-small/1024",
+    );
   });
 });

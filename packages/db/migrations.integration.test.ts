@@ -11,17 +11,19 @@ import { databaseUrl, env } from "./test/harness";
 // auth.users is created by GoTrue in the dev stack; on a bare pgvector (CI) the harness stubs it.
 // WARNING: reverts every migration, so only point it at a disposable database.
 
-const EXPECTED_MIGRATIONS = 13;
+const EXPECTED_MIGRATIONS = 14;
 const quiet = () => undefined;
 
 const APP_TABLES = [
   "ai_batch_items",
   "ai_batches",
+  "ai_spend",
   "audit_log",
   "babies",
   "baby_members",
   "chat_messages",
   "chat_threads",
+  "chat_turns",
   "invites",
   "measurements",
   "milestones",
@@ -100,7 +102,16 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
       "SELECT DISTINCT tablename FROM pg_policies WHERE schemaname = 'public'",
     );
     const set = new Set(withPolicy.map((r) => r.tablename));
-    for (const table of APP_TABLES) expect(set.has(table), `${table} has no policy`).toBe(true);
+    // chat_turns is deny-all by design (FORCE RLS, no policy, no grant but service_role): it is
+    // reached only through SECURITY DEFINER functions (search-chat.integration.test.ts).
+    const denyAll = new Set(["chat_turns"]);
+    for (const table of APP_TABLES) {
+      if (denyAll.has(table)) {
+        expect(set.has(table), `${table} must stay policy-less (deny-all)`).toBe(false);
+      } else {
+        expect(set.has(table), `${table} has no policy`).toBe(true);
+      }
+    }
     const pub = await rows(
       "SELECT tablename, policyname FROM pg_policies WHERE schemaname = 'public' AND 'public' = ANY(roles)",
     );

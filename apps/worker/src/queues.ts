@@ -10,6 +10,10 @@ import {
   type JobName,
   type ReindexJob,
   reindexJobSchema,
+  SEARCH_DEFAULTS,
+  type SearchBackfillJob,
+  searchBackfillJobSchema,
+  searchReconcileJobSchema,
 } from "@littlelight/shared";
 import type { JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
 import type { AiPipeline, FlushResult, PollResult } from "./ai";
@@ -19,7 +23,7 @@ import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
 import { reconcileIngest } from "./reconcile";
-import { handleReindexJob } from "./reindex";
+import { handleReindexJobs, type ReconcileResult, type SearchIndexer } from "./reindex";
 import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 
 // pg-boss queues, schedules and handlers (docs/plans/step-4.md 2.5, R1). The worker owns queue
@@ -38,6 +42,13 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // retry: the next tick is the retry; expiry just under the 30-minute flush window), scheduled
 // from config (`AI_FLUSH_INTERVAL_CRON`, `AI_POLL_INTERVAL_CRON`). `ai.backfill` is sent on
 // demand with `singletonKey = babyId ?? "all"`, so one backfill per baby (or one global) at a time.
+//
+// Step 7 (docs/plans/step-7.md 2.7): `photo.reindex` runs in pg-boss batches of 25 (one embedding
+// call per batch) through the search indexer. `search.reconcile` is a cron singleton
+// (`SEARCH_RECONCILE_CRON`, no retry: the next tick is the retry). `search.backfill` is sent on
+// demand with `singletonKey = babyId ?? "all"`; an `ai.backfill` with `reason: "upgrade"` sends
+// `search.backfill {babyId, reason: "upgrade"}` once it has completed (FR-5.8: search follows
+// the upgrade). Ten queues in total.
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -68,10 +79,19 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     retryDelay: 60,
     expireInSeconds: 3600,
   },
+  [JOBS.searchReconcile]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 3000 },
+  [JOBS.searchBackfill]: {
+    policy: "exclusive",
+    retryLimit: 2,
+    retryDelay: 60,
+    expireInSeconds: 7200,
+  },
 });
 
-/** Handlers per worker process for `photo.reindex` (docs/plans/step-5.md 2.5). */
-export const REINDEX_CONCURRENCY = 4;
+/** Handlers per worker process for `photo.reindex` (docs/plans/step-7.md 2.7). */
+export const REINDEX_CONCURRENCY = 2;
+/** `photo.reindex` jobs per handler call: one indexer run (one embedding request) per batch. */
+export const REINDEX_BATCH_SIZE = 25;
 
 /** Fixed crons. The AI crons come from config: see `schedules(config)`. */
 export const SCHEDULES: ReadonlyArray<readonly [JobName, string]> = Object.freeze([
@@ -80,14 +100,23 @@ export const SCHEDULES: ReadonlyArray<readonly [JobName, string]> = Object.freez
   [JOBS.uploadsSweep, "23,53 * * * *"],
 ] as const);
 
-export type ScheduleConfig = Pick<WorkerConfig, "AI_FLUSH_INTERVAL_CRON" | "AI_POLL_INTERVAL_CRON">;
+export type ScheduleConfig = Pick<
+  WorkerConfig,
+  "AI_FLUSH_INTERVAL_CRON" | "AI_POLL_INTERVAL_CRON"
+> &
+  // Optional in the type (always set by `loadConfig`); falls back to the shared default.
+  Partial<Pick<WorkerConfig, "SEARCH_RECONCILE_CRON">>;
 
-/** Every cron this worker schedules: `SCHEDULES` plus `ai.flush` / `ai.poll` from config. */
+/**
+ * Every cron this worker schedules: `SCHEDULES` plus `ai.flush` / `ai.poll` and
+ * `search.reconcile` from config.
+ */
 export function schedules(config: ScheduleConfig): ReadonlyArray<readonly [JobName, string]> {
   return [
     ...SCHEDULES,
     [JOBS.aiFlush, config.AI_FLUSH_INTERVAL_CRON],
     [JOBS.aiPoll, config.AI_POLL_INTERVAL_CRON],
+    [JOBS.searchReconcile, config.SEARCH_RECONCILE_CRON ?? SEARCH_DEFAULTS.SEARCH_RECONCILE_CRON],
   ];
 }
 
@@ -165,12 +194,42 @@ export async function sendAiBackfill(
   return boss.send(JOBS.aiBackfill, data, aiBackfillSendOptions(data));
 }
 
+/** Same options as the `search.reconcile` queue (run-job `--enqueue`; cron ticks send no data). */
+export const SEARCH_RECONCILE_SEND_OPTIONS: SendOptions = Object.freeze({
+  retryLimit: 0,
+  expireInSeconds: 3000,
+});
+
+/** `search.backfill` send options: one queued/active backfill per baby, or one global (`"all"`). */
+export function searchBackfillSendOptions(job: Pick<SearchBackfillJob, "babyId">): SendOptions {
+  return {
+    singletonKey: job.babyId ?? "all",
+    retryLimit: 2,
+    retryDelay: 60,
+    expireInSeconds: 7200,
+  };
+}
+
+/** Validate and enqueue one `search.backfill`. Resolves null when one is already queued for the key. */
+export async function sendSearchBackfill(
+  boss: Pick<PgBoss, "send">,
+  job: SearchBackfillJob,
+): Promise<string | null> {
+  const data = searchBackfillJobSchema.parse(job);
+  return boss.send(JOBS.searchBackfill, data, searchBackfillSendOptions(data));
+}
+
 export interface QueueDeps {
   ingest: IngestDeps;
   purge: PurgeDeps;
   sweep: SweepDeps;
   /** Always present: without a provider the pipeline's flush/poll skip with one log line. */
   ai: AiPipeline;
+  /**
+   * The search indexer (docs/plans/step-7.md 2.6). Always present: without an embedder it writes
+   * rows with a NULL vector (keyword search and filters still work) and logs that once.
+   */
+  indexer: SearchIndexer;
   log: WorkerLog;
   ingestConcurrency: number;
 }
@@ -202,7 +261,14 @@ export async function ensureSchedules(
 }
 
 type AiJob = Pick<JobWithMetadata<unknown>, "id" | "data">;
-type AiHandlerDeps = Pick<QueueDeps, "ai" | "log">;
+type AiHandlerDeps = Pick<QueueDeps, "ai" | "log"> & {
+  /**
+   * Enqueues `search.backfill` (the `ai.backfill` upgrade chain). Omitted in tests that do not
+   * exercise the chain; `startWorkers` always sets it.
+   */
+  sendSearchBackfill?: (job: SearchBackfillJob) => Promise<string | null>;
+};
+type SearchHandlerDeps = { indexer: Pick<SearchIndexer, "reconcile" | "backfill">; log: WorkerLog };
 
 /**
  * `ai.flush` handler (cron tick, or run-job `--enqueue` with `{force, babyId}`). A malformed
@@ -235,7 +301,14 @@ export async function handleAiPollJob(deps: AiHandlerDeps, job: AiJob): Promise<
   return deps.ai.poll();
 }
 
-/** `ai.backfill` handler (upgrade, version or manual backfill; `aiBackfillJobSchema`). */
+/**
+ * `ai.backfill` handler (upgrade, version or manual backfill; `aiBackfillJobSchema`). After an
+ * `upgrade` backfill completes it sends `search.backfill {babyId, reason: "upgrade"}` (plan 2.7):
+ * the baby's photos get search rows now, and each `photo.reindex {reason: "ai"}` from the poller
+ * refreshes a row once its description lands. A failed send is logged and does not fail the AI
+ * backfill (re-running it would re-claim photos for nothing); the hourly `search.reconcile`
+ * indexes the baby anyway.
+ */
 export async function handleAiBackfillJob(
   deps: AiHandlerDeps,
   job: AiJob,
@@ -245,7 +318,65 @@ export async function handleAiBackfillJob(
     deps.log.warn({ jobId: job.id }, "ai.backfill: invalid job payload, dropped");
     return null;
   }
-  return deps.ai.backfill(parsed.data);
+  const result = await deps.ai.backfill(parsed.data);
+  await chainSearchBackfill(deps, parsed.data);
+  return result;
+}
+
+/**
+ * The `ai.backfill` → `search.backfill` chain (upgrade only). Exported for run-job, which runs the
+ * AI backfill in-process. Never throws.
+ */
+export async function chainSearchBackfill(
+  deps: Pick<AiHandlerDeps, "log" | "sendSearchBackfill">,
+  job: { reason: string; babyId?: string | undefined },
+): Promise<string | null> {
+  if (job.reason !== "upgrade" || job.babyId === undefined || !deps.sendSearchBackfill) {
+    return null;
+  }
+  try {
+    const jobId = await deps.sendSearchBackfill({ babyId: job.babyId, reason: "upgrade" });
+    deps.log.info(
+      { babyId: job.babyId, searchBackfillJobId: jobId },
+      "ai.backfill: search.backfill sent after upgrade",
+    );
+    return jobId;
+  } catch (err) {
+    deps.log.warn(
+      { babyId: job.babyId, err: errorCategory(err) },
+      "ai.backfill: could not send search.backfill (search.reconcile will index the baby)",
+    );
+    return null;
+  }
+}
+
+/**
+ * `search.reconcile` handler (cron tick, no payload): stale/missing rows of paid babies are
+ * re-indexed and orphans deleted (plan 2.6). Errors propagate; the next tick is the retry.
+ */
+export async function handleSearchReconcileJob(
+  deps: SearchHandlerDeps,
+  job: AiJob,
+): Promise<ReconcileResult | null> {
+  const parsed = searchReconcileJobSchema.safeParse(job.data ?? {});
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "search.reconcile: invalid job payload, dropped");
+    return null;
+  }
+  return deps.indexer.reconcile();
+}
+
+/** `search.backfill` handler (upgrade, model or manual; `searchBackfillJobSchema`). */
+export async function handleSearchBackfillJob(
+  deps: SearchHandlerDeps,
+  job: AiJob,
+): Promise<ReconcileResult | null> {
+  const parsed = searchBackfillJobSchema.safeParse(job.data);
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "search.backfill: invalid job payload, dropped");
+    return null;
+  }
+  return deps.indexer.backfill(parsed.data);
 }
 
 /** The `photo.ingest` handler for one job (exported for run-job and tests). */
@@ -324,12 +455,17 @@ export async function startWorkers(
   await boss.work(JOBS.uploadsSweep, { pollingIntervalSeconds: 10 }, async () => {
     await sweepUploads(deps.sweep);
   });
-  // Step 5: validates and completes (no DB/network call). Step 7 fills in the body.
+  // Step 7 (plan 2.7): one indexer run per pg-boss batch of up to 25 jobs, so a burst of edits
+  // costs one embedding request. The exclusive policy keeps one queued job per photo.
   await boss.work(
     JOBS.reindex,
-    { localConcurrency: REINDEX_CONCURRENCY, batchSize: 1, pollingIntervalSeconds: 2 },
+    {
+      localConcurrency: REINDEX_CONCURRENCY,
+      batchSize: REINDEX_BATCH_SIZE,
+      pollingIntervalSeconds: 2,
+    },
     async (jobs) => {
-      for (const job of jobs) await handleReindexJob({ log: deps.log }, job);
+      await handleReindexJobs({ indexer: deps.indexer, log: deps.log }, jobs);
     },
   );
   // Step 6 AI batch pipeline (docs/plans/step-6.md 2.6, 2.7). One job at a time per process;
@@ -341,7 +477,21 @@ export async function startWorkers(
   await boss.work(JOBS.aiPoll, { pollingIntervalSeconds: 10 }, async (jobs) => {
     for (const job of jobs) await handleAiPollJob(deps, job);
   });
+  const aiBackfillDeps: AiHandlerDeps = {
+    ai: deps.ai,
+    log: deps.log,
+    sendSearchBackfill: (job) => sendSearchBackfill(boss, job),
+  };
   await boss.work(JOBS.aiBackfill, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleAiBackfillJob(deps, job);
+    for (const job of jobs) await handleAiBackfillJob(aiBackfillDeps, job);
+  });
+  // Step 7 search jobs (plan 2.6, 2.7): the reconcile is a cron singleton, the backfill one per
+  // baby (or global). Both upsert idempotently, so `--scale worker=3` only risks a duplicate
+  // embedding call, never a wrong row.
+  await boss.work(JOBS.searchReconcile, { pollingIntervalSeconds: 10 }, async (jobs) => {
+    for (const job of jobs) await handleSearchReconcileJob(deps, job);
+  });
+  await boss.work(JOBS.searchBackfill, { pollingIntervalSeconds: 10 }, async (jobs) => {
+    for (const job of jobs) await handleSearchBackfillJob(deps, job);
   });
 }

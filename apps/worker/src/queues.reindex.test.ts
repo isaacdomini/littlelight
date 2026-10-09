@@ -2,6 +2,7 @@ import { JOBS, reindexJobSchema } from "@littlelight/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   QUEUES,
+  REINDEX_BATCH_SIZE,
   REINDEX_CONCURRENCY,
   reindexSendOptions,
   SCHEDULES,
@@ -14,8 +15,8 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("reindex queue (step 5) in the eight-queue set", () => {
-  it("QUEUES has exactly the eight jobs, all exclusive", () => {
+describe("reindex queue (step 5) in the ten-queue set", () => {
+  it("QUEUES has exactly the ten jobs, all exclusive", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
       [
         "photo.ingest",
@@ -26,6 +27,8 @@ describe("reindex queue (step 5) in the eight-queue set", () => {
         "ai.flush",
         "ai.poll",
         "ai.backfill",
+        "search.reconcile",
+        "search.backfill",
       ].sort(),
     );
     for (const q of Object.values(QUEUES)) expect(q.policy).toBe("exclusive");
@@ -41,7 +44,7 @@ describe("reindex queue (step 5) in the eight-queue set", () => {
     });
   });
 
-  it("reindex is not scheduled (only the three fixed crons are; AI crons come from config)", () => {
+  it("reindex is not scheduled (only the three fixed crons are; AI and search crons come from config)", () => {
     expect(SCHEDULES.map(([n]) => n)).not.toContain(JOBS.reindex);
     expect(SCHEDULES).toHaveLength(3);
   });
@@ -69,7 +72,7 @@ describe("reindex queue (step 5) in the eight-queue set", () => {
     );
   });
 
-  it("startWorkers registers eight handlers; reindex runs at the plan's concurrency without any database call", async () => {
+  it("startWorkers registers ten handlers; reindex runs batches of 25 through one indexer call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;
@@ -84,6 +87,7 @@ describe("reindex queue (step 5) in the eight-queue set", () => {
     };
     const pool = scriptedPool();
     const log = recordingLog();
+    const reindex = vi.fn(async () => ({}));
     await startWorkers(boss as never, {
       ingest: {
         pool,
@@ -95,17 +99,25 @@ describe("reindex queue (step 5) in the eight-queue set", () => {
       purge: {} as never,
       sweep: {} as never,
       ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
+      indexer: { reindex } as never,
       log,
       ingestConcurrency: 2,
     });
     expect(registered.map((r) => r.name).sort()).toEqual(Object.values(JOBS).sort());
-    const reindex = registered.find((r) => r.name === JOBS.reindex);
-    expect(reindex?.options).toMatchObject({ localConcurrency: REINDEX_CONCURRENCY, batchSize: 1 });
-    expect(REINDEX_CONCURRENCY).toBe(4);
-    await reindex?.handler([
+    const worker = registered.find((r) => r.name === JOBS.reindex);
+    expect(worker?.options).toMatchObject({
+      localConcurrency: REINDEX_CONCURRENCY,
+      batchSize: REINDEX_BATCH_SIZE,
+      pollingIntervalSeconds: 2,
+    });
+    expect(REINDEX_CONCURRENCY).toBe(2);
+    expect(REINDEX_BATCH_SIZE).toBe(25);
+    await worker?.handler([
       { id: "1", data: { photoId: PHOTO, babyId: BABY, reason: "details" } },
       { id: "2", data: { bad: true } },
     ]);
+    expect(reindex).toHaveBeenCalledTimes(1);
+    expect(reindex).toHaveBeenCalledWith([PHOTO], "details");
     expect(pool.log).toEqual([]);
     expect(log.lines.filter((l) => l.level === "warn")).toHaveLength(1);
   });

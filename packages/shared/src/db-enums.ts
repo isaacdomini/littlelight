@@ -130,3 +130,17 @@ export type SharedPhotoAddedBy = z.infer<typeof sharedPhotoAddedBySchema>;
 /** `chat_messages.role`. */
 export const chatRoleSchema = z.enum(["user", "assistant", "tool", "system"]);
 export type ChatRole = z.infer<typeof chatRoleSchema>;
+
+/**
+ * `chat_messages.status` (docs/plans/step-7.md 2.3.8): `error` marks an assistant message written
+ * after a model/tool failure (fixed text, no provider message).
+ */
+export const chatMessageStatusSchema = z.enum(["complete", "error"]);
+export type ChatMessageStatus = z.infer<typeof chatMessageStatusSchema>;
+
+/**
+ * `ai_spend.kind` (docs/plans/step-7.md 2.3.6): spend that is not a vision batch item. `embed`
+ * (worker, search documents), `chat` (one row per assistant turn), `rerank` (optional LLM re-rank).
+ */
+export const aiSpendKindSchema = z.enum(["embed", "chat", "rerank"]);
+export type AiSpendKind = z.infer<typeof aiSpendKindSchema>;

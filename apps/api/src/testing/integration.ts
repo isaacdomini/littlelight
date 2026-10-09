@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { appRoleUrl, ensureAuthSchemaStub, runMigrations } from "@littlelight/db";
 import { PRIVACY_VERSION, TERMS_VERSION } from "@littlelight/shared";
-import type { FastifyInstance, LightMyRequestResponse } from "fastify";
+import type { FastifyInstance, FastifyServerOptions, LightMyRequestResponse } from "fastify";
 import pg from "pg";
 import { buildApp } from "../app";
 import type { GoTrueClient } from "../auth/gotrue";
 import type { ApiConfig } from "../config";
 import { type CaptureMailer, captureMailer } from "../email/mailer";
+import type { AiServices } from "../plugins/ai";
 import type { JobQueue } from "../plugins/jobs";
 import type { StorageClient } from "../plugins/storage";
 import type { UrlSigner } from "../storage/sign";
@@ -109,6 +110,10 @@ export interface HarnessOptions {
   /** Job queue stub (default: the real lazy pg-boss, which the tests never trigger). */
   jobs?: JobQueue;
   signer?: UrlSigner;
+  /** Chat model + embedder (fakes). Default: whatever `process.env` builds (no key => none). */
+  ai?: AiServices;
+  /** Fastify logger options, e.g. `{ ...loggerOptions(config), level: "info", stream }`. */
+  logger?: FastifyServerOptions["logger"];
 }
 
 export async function createHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -138,7 +143,8 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     s3: opts.s3 ?? { send: (async () => ({})) as never, destroy: () => undefined },
     ...(opts.jobs ? { jobs: opts.jobs } : {}),
     ...(opts.signer ? { signer: opts.signer } : {}),
-    logger: false,
+    ...(opts.ai ? { ai: opts.ai } : { aiEnv: {} }),
+    logger: opts.logger ?? false,
   });
 
   const users: string[] = [];

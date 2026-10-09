@@ -904,6 +904,11 @@ describe.skipIf(!databaseUrl)("timeline and details (step 5)", () => {
     ];
     it.each(boundary)("the limit itself is accepted: %s", async (_name, sql, params) => {
       await sandbox(async () => {
+        // One thread per (baby, user) since step 7: free the pair the fixture already uses.
+        await a().query("DELETE FROM chat_threads WHERE baby_id = $1 AND user_id = $2", [
+          BABY.A,
+          U.adminA1,
+        ]);
         expect(await fail(a(), sql, params)).toBeNull();
       });
     });

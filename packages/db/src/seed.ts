@@ -578,11 +578,16 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
       if (approved && !p.deleted) {
         const milestoneName = p.milestoneId ? milestoneNames.get(p.milestoneId) : undefined;
         await q(
-          `INSERT INTO public.photo_search (photo_id, baby_id, search_text, taken_at, age_days, milestone_ids, people, tags, is_sensitive)
-           VALUES ($1, $2, $3, $4::timestamptz, $5, $6::uuid[], $7::text[], $8::text[], $9)
+          // No vector, no doc_version, no content_hash: the worker's search.reconcile rebuilds
+          // and embeds these rows (docs/plans/step-7.md 2.3.9). A re-seed resets the bookkeeping
+          // too, so a worker-built row never keeps a hash/vector that no longer matches the text.
+          `INSERT INTO public.photo_search (photo_id, baby_id, search_text, taken_at, age_days, milestone_ids, people, tags,
+             is_sensitive, place)
+           VALUES ($1, $2, $3, $4::timestamptz, $5, $6::uuid[], $7::text[], $8::text[], $9, $10)
            ON CONFLICT (photo_id) DO UPDATE SET search_text = EXCLUDED.search_text, taken_at = EXCLUDED.taken_at,
              age_days = EXCLUDED.age_days, milestone_ids = EXCLUDED.milestone_ids, people = EXCLUDED.people,
-             tags = EXCLUDED.tags, is_sensitive = EXCLUDED.is_sensitive`,
+             tags = EXCLUDED.tags, is_sensitive = EXCLUDED.is_sensitive, place = EXCLUDED.place,
+             embedding = NULL, embed_model = NULL, doc_version = NULL, content_hash = NULL, embedded_at = NULL`,
           [
             id,
             DEMO.baby,
@@ -593,6 +598,8 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
             p.people ?? [],
             p.tags,
             p.sensitive === true,
+            // The FR-7.5 place chip: the parents' label wins over the EXIF label; never coordinates.
+            (p.locationLabel ?? p.gps?.placeLabel)?.toLowerCase() ?? null,
           ],
         );
       }

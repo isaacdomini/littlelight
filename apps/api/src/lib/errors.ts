@@ -1,4 +1,4 @@
-import type { ApiErrorCode, ApiErrorResponse } from "@littlelight/shared";
+import { type ApiErrorCode, type ApiErrorResponse, CHAT_MESSAGES } from "@littlelight/shared";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 
@@ -53,6 +53,13 @@ export const rateLimited = (
   message = "Too many requests, try again later",
 ) => new ApiError(429, "rate_limited", message, undefined, { retryAfterSec });
 export const internalError = () => new ApiError(500, "internal", "Something went wrong");
+
+/**
+ * 403 `plan_required` (docs/plans/step-7.md D13): the baby has no AI entitlement (free tier or
+ * lapsed). The chat/search gate raises its own (`search/access.ts`); this one maps the
+ * `ai_spend_guard` trigger (plan lapsed during a turn).
+ */
+export const planRequired = () => new ApiError(403, "plan_required", CHAT_MESSAGES.planRequired);
 
 /** A node-postgres `DatabaseError` (has a 5-character SQLSTATE). */
 export interface PgErrorLike {
@@ -182,6 +189,28 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
         fields: ["body.locationLabel"],
       }),
   ],
+  // Step 7 (packages/db/migrations/1792000000100_search-and-chat.sql; docs/plans/step-7.md 2.9).
+  // The API never writes `photo_search`; reaching the guard is a state conflict.
+  [
+    "search rows can only be stored",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
+  // The gate checked the plan before the turn; the plan lapsed while it ran.
+  ["AI spend can only be recorded for a paid-tier baby", () => planRequired()],
+  // The user's message: an input error (the route validates 1..1000 chars first).
+  [
+    "chat_messages.content must be",
+    () =>
+      new ApiError(400, "validation_failed", "The message is too long or empty", {
+        fields: ["body.text"],
+      }),
+  ],
+  // Server-built arrays (citations, tool names): an agent bug, never the user's fault. Listed
+  // before the generic `<table>.<column>` rule, which would make them 400s.
+  ["chat_messages.cited_photo_ids holds more than", () => internalError()],
+  ["chat_messages.cited_measurement_ids holds more than", () => internalError()],
+  ["chat_messages.tools_used holds more than", () => internalError()],
+  ["chat_reserve_turn expects a positive limit", () => internalError()],
 ];
 
 /**

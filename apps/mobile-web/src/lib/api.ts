@@ -46,7 +46,7 @@ const API_PREFIX = "/api";
 // Endpoints whose 401/4xx are ordinary form errors, not a lost session.
 const NO_SESSION_EFFECT = ["/auth/otp", "/auth/verify", "/auth/pkce", "/auth/id-token"];
 
-async function headers(hasBody: boolean): Promise<Headers> {
+export async function headers(hasBody: boolean): Promise<Headers> {
   const h = new Headers({ Accept: "application/json", "X-Littlelight-Client": clientKind() });
   if (hasBody) h.set("Content-Type", "application/json");
   if (isNative()) {
@@ -56,7 +56,7 @@ async function headers(hasBody: boolean): Promise<Headers> {
   return h;
 }
 
-async function parseError(res: Response): Promise<ApiError> {
+export async function parseError(res: Response): Promise<ApiError> {
   let body: unknown;
   try {
     body = await res.json();
@@ -73,7 +73,7 @@ async function parseError(res: Response): Promise<ApiError> {
 let refreshInFlight: Promise<boolean> | null = null;
 
 /** Single-flight `POST /api/auth/refresh`; true when a new session was issued. */
-function refreshSession(): Promise<boolean> {
+export function refreshSession(): Promise<boolean> {
   refreshInFlight ??= (async () => {
     try {
       const native = isNative();

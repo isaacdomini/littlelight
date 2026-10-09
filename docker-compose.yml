@@ -29,8 +29,10 @@
 # service gets the whole file (no env_file): each one receives exactly the variables listed in
 # its `environment:` block, so e.g. api/worker never see POSTGRES_PASSWORD, the other services'
 # role passwords or tunnel credentials. SMTP goes to auth (sign-in codes) and api (invites,
-# new-device alerts) only; the worker gets none, and auth gets no API secrets. AI provider keys
-# (OPENAI_API_KEY, ANTHROPIC_API_KEY) go to the worker only. A new app
+# new-device alerts) only; the worker gets none, and auth gets no API secrets. AI provider keys:
+# OPENAI_API_KEY goes to the worker (vision batches, document embeddings) and the api (chat,
+# query embeddings, docs/plans/step-7.md 2.11); ANTHROPIC_API_KEY to the worker only; never
+# to web, migrate, db-init or the backup job. A new app
 # variable must be added to .env.example AND to the x-app-env anchor (or the service's own
 # block) below.
 #
@@ -95,8 +97,28 @@ x-app-env: &app-env
   CHAT_REASONING_EFFORT: ${CHAT_REASONING_EFFORT:-low}
   EMBED_MODEL: ${EMBED_MODEL:-text-embedding-3-small}
   EMBED_DIMS: ${EMBED_DIMS:-1024}
+  # Search (docs/plans/step-7.md 2.4 searchEnvSchema): the api runs hybrid search, the worker
+  # indexes (SEARCH_EMBED_BATCH, SEARCH_RECONCILE_CRON). Defaults = the code defaults.
+  SEARCH_RERANK: ${SEARCH_RERANK:-off}
+  SEARCH_EXACT_MAX: ${SEARCH_EXACT_MAX:-2000}
+  SEARCH_HNSW_EF_SEARCH: ${SEARCH_HNSW_EF_SEARCH:-100}
+  SEARCH_RECONCILE_CRON: ${SEARCH_RECONCILE_CRON:-17 * * * *}
+  SEARCH_EMBED_BATCH: ${SEARCH_EMBED_BATCH:-100}
+  # Chat (docs/plans/step-7.md 2.4 chatEnvSchema; read by the api).
+  CHAT_TURNS_PER_DAY: ${CHAT_TURNS_PER_DAY:-100}
+  CHAT_MAX_TOOL_ROUNDS: ${CHAT_MAX_TOOL_ROUNDS:-4}
+  CHAT_MAX_OUTPUT_TOKENS: ${CHAT_MAX_OUTPUT_TOKENS:-800}
+  CHAT_HISTORY_MESSAGES: ${CHAT_HISTORY_MESSAGES:-20}
+  CHAT_MODEL_TIMEOUT_MS: ${CHAT_MODEL_TIMEOUT_MS:-30000}
+  # OpenAI key for api (chat + query embeddings) and worker (batches + document embeddings).
+  # Empty => AI disabled with one log line in each. Only api and worker merge this anchor, so
+  # web, migrate, db-init and backup never get it. AI_ALLOW_FAKE_IN_PRODUCTION and FAKE_* are
+  # deliberately not passed anywhere, so VISION_PROVIDER=fake can never run in production.
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  # Empty = the real provider API (mock servers in testing only).
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
   # AI batch pipeline (docs/plans/step-6.md 2.10): the worker runs it, the api reports usage
-  # against the same budget/attempt limits. Provider keys are NOT here: worker only.
+  # against the same budget/attempt limits. ANTHROPIC_API_KEY is NOT here: worker only.
   AI_BATCH_FLUSH_MINUTES: ${AI_BATCH_FLUSH_MINUTES:-30}
   AI_BATCH_MAX_PHOTOS: ${AI_BATCH_MAX_PHOTOS:-1000}
   AI_BABY_MONTHLY_BUDGET_USD: ${AI_BABY_MONTHLY_BUDGET_USD:-3}
@@ -385,13 +407,12 @@ services:
       CSAM_MATCHER: ${CSAM_MATCHER:-none}
       PHOTODNA_API_KEY: ${PHOTODNA_API_KEY:-}
       PHOTODNA_ENDPOINT: ${PHOTODNA_ENDPOINT:-}
-      # AI provider keys: this is the only service that gets them. Empty => AI skipped with one
-      # log line. AI_ALLOW_FAKE_IN_PRODUCTION and FAKE_VISION_* are deliberately not passed, so
-      # VISION_PROVIDER=fake can never run here.
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # OPENAI_API_KEY / OPENAI_BASE_URL come from x-app-env (api + worker). The Anthropic
+      # fallback adapter (VISION_PROVIDER=anthropic, vision batches only) is worker-only. Empty
+      # => skipped with one log line. AI_ALLOW_FAKE_IN_PRODUCTION and FAKE_VISION_* are
+      # deliberately not passed, so VISION_PROVIDER=fake can never run here.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Empty = the real provider APIs (mock servers in testing only).
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      # Empty = the real provider API (mock servers in testing only).
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       # Worker-only pipeline tuning; empty => code defaults (packages/shared aiPipelineEnvSchema).
       AI_BATCH_MAX_BYTES: ${AI_BATCH_MAX_BYTES:-}

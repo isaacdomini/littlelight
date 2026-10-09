@@ -1,8 +1,10 @@
 /**
- * In-process OpenAI mock (docs/plans/step-6.md 2.5, D1): `/v1/files` (upload, content, delete),
- * `/v1/batches` (create, retrieve, cancel; completes after N retrieves; can expire or fail
- * validation), `/v1/responses` (one canned structured response), `/v1/embeddings`. Lets the
- * real adapter's wire format be asserted byte-for-byte without network:
+ * In-process OpenAI mock (docs/plans/step-6.md 2.5, D1; docs/plans/step-7.md 2.5): `/v1/files`
+ * (upload, content, delete), `/v1/batches` (create, retrieve, cancel; completes after N
+ * retrieves; can expire or fail validation), `/v1/responses` (one canned structured response;
+ * with `stream: true` a scripted chat turn as SSE in the Responses event names of plan 2.2),
+ * `/v1/embeddings` (bag-of-words vectors, `usage.prompt_tokens`). Lets the real adapters' wire
+ * format be asserted byte-for-byte without network:
  *
  *   const mock = await startOpenAiMockServer({ completeAfterPolls: 1 });
  *   const d = createOpenAiVisionDescriber({ ...opts, apiKey: "test", baseUrl: mock.baseUrl });
@@ -12,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { fakeDescription } from "../fake/describe";
-import { fakeEmbedding } from "../fake/embed";
+import { fakeEmbedding, fakeTokenCount } from "../fake/embed";
 import { type MockServerBase, type RecordedRequest, startMockServer } from "./mock-http";
 
 /**
@@ -41,6 +43,68 @@ export interface OpenAiMockOptions {
   describe?: (customId: string) => unknown;
   /** Usage per answered request. */
   usage?: { input: number; cached: number; output: number; reasoning?: number };
+  /**
+   * Streamed chat (`/v1/responses` with `stream: true`): the output steps of call `callIndex`
+   * (0-based over streamed calls). Default `defaultChatScript`.
+   */
+  chatScript?: (body: Record<string, unknown>, callIndex: number) => OpenAiMockChatStep[];
+}
+
+/**
+ * One step of a streamed chat response. `reasoning` emits a reasoning item with
+ * `encrypted_content`; `function_call` an item whose arguments stream in 3 deltas; `text` a
+ * message whose text streams in deltas of ≤ 12 characters. A trailing `incomplete`, `failed` or
+ * `error` step ends the stream with that event instead of `response.completed`; `truncate` ends
+ * it without any terminal event.
+ */
+export type OpenAiMockChatStep =
+  | { type: "reasoning" }
+  | { type: "function_call"; name: string; arguments: unknown }
+  | { type: "text"; text: string }
+  | { type: "incomplete"; reason: "max_output_tokens" | "content_filter" }
+  | { type: "failed"; code: string }
+  | { type: "error"; code: string }
+  | { type: "truncate" };
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/**
+ * Default chat script: without a `function_call_output` in the input, a reasoning item and one
+ * `search_photos` call (query = the last user text); with one, a reasoning item and a final
+ * answer citing the first uuid found in the tool outputs.
+ */
+export function defaultChatScript(body: Record<string, unknown>): OpenAiMockChatStep[] {
+  const input = Array.isArray(body.input) ? (body.input as Record<string, unknown>[]) : [];
+  const outputs = input.filter((i) => i?.type === "function_call_output");
+  if (outputs.length === 0) {
+    const lastUser = [...input].reverse().find((i) => i?.role === "user");
+    return [
+      { type: "reasoning" },
+      {
+        type: "function_call",
+        name: "search_photos",
+        arguments: {
+          query: typeof lastUser?.content === "string" ? lastUser.content : null,
+          date_from: null,
+          date_to: null,
+          age_from_days: null,
+          age_to_days: null,
+          milestones: [],
+          people: [],
+          tags: [],
+          limit: null,
+        },
+      },
+    ];
+  }
+  const id = outputs
+    .map((o) => String(o.output ?? ""))
+    .join(" ")
+    .match(UUID_RE)?.[0];
+  return [
+    { type: "reasoning" },
+    { type: "text", text: id ? `Here is the bath photo [photo:${id}].` : "Nothing matched." },
+  ];
 }
 
 export interface MockFile {
@@ -86,6 +150,8 @@ export async function startOpenAiMockServer(
   const usage = options.usage ?? { input: 1400, cached: 700, output: 400, reasoning: 0 };
   const outcomeOf = options.outcome ?? (() => "ok" as const);
   const describe = options.describe ?? ((id: string) => fakeDescription(id));
+  const chatScript = options.chatScript ?? defaultChatScript;
+  let chatCalls = 0;
 
   const usageJson = (output = usage.output) => ({
     input_tokens: usage.input,
@@ -260,6 +326,148 @@ export async function startOpenAiMockServer(
     return null;
   }
 
+  /** A streamed Responses turn as SSE text (event names per docs/plans/step-7.md 2.2). */
+  function chatSse(steps: OpenAiMockChatStep[], model: string): string {
+    const id = `resp_${randomUUID().replaceAll("-", "")}`;
+    let seq = 0;
+    const frames: string[] = [];
+    const ev = (type: string, data: Record<string, unknown>) => {
+      frames.push(
+        `event: ${type}\ndata: ${JSON.stringify({ type, ...data, sequence_number: seq++ })}\n\n`,
+      );
+    };
+    const response = (status: string, output: unknown[], extra: Record<string, unknown> = {}) => ({
+      id,
+      object: "response",
+      created_at: now(),
+      status,
+      model,
+      output,
+      ...extra,
+    });
+    const output: unknown[] = [];
+    ev("response.created", { response: response("in_progress", []) });
+    ev("response.in_progress", { response: response("in_progress", []) });
+    let terminal: OpenAiMockChatStep | null = null;
+    for (const step of steps) {
+      const index = output.length;
+      if (step.type === "reasoning") {
+        const item = {
+          type: "reasoning",
+          id: `rs_${randomUUID().replaceAll("-", "")}`,
+          summary: [],
+          encrypted_content: `enc_${randomUUID().replaceAll("-", "")}`,
+        };
+        ev("response.output_item.added", {
+          output_index: index,
+          item: { ...item, encrypted_content: null },
+        });
+        ev("response.output_item.done", { output_index: index, item });
+        output.push(item);
+      } else if (step.type === "function_call") {
+        const args =
+          typeof step.arguments === "string" ? step.arguments : JSON.stringify(step.arguments);
+        const itemId = `fc_${randomUUID().replaceAll("-", "")}`;
+        const callId = `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+        const base = { type: "function_call", id: itemId, call_id: callId, name: step.name };
+        ev("response.output_item.added", {
+          output_index: index,
+          item: { ...base, arguments: "", status: "in_progress" },
+        });
+        const third = Math.ceil(args.length / 3);
+        for (let i = 0; i < args.length; i += third) {
+          ev("response.function_call_arguments.delta", {
+            item_id: itemId,
+            output_index: index,
+            delta: args.slice(i, i + third),
+          });
+        }
+        ev("response.function_call_arguments.done", {
+          item_id: itemId,
+          output_index: index,
+          arguments: args,
+        });
+        const item = { ...base, arguments: args, status: "completed" };
+        ev("response.output_item.done", { output_index: index, item });
+        output.push(item);
+      } else if (step.type === "text") {
+        const itemId = `msg_${randomUUID().replaceAll("-", "")}`;
+        ev("response.output_item.added", {
+          output_index: index,
+          item: {
+            type: "message",
+            id: itemId,
+            status: "in_progress",
+            role: "assistant",
+            content: [],
+          },
+        });
+        ev("response.content_part.added", {
+          item_id: itemId,
+          output_index: index,
+          content_index: 0,
+          part: { type: "output_text", text: "", annotations: [] },
+        });
+        for (let i = 0; i < step.text.length; i += 12) {
+          ev("response.output_text.delta", {
+            item_id: itemId,
+            output_index: index,
+            content_index: 0,
+            delta: step.text.slice(i, i + 12),
+          });
+        }
+        ev("response.output_text.done", {
+          item_id: itemId,
+          output_index: index,
+          content_index: 0,
+          text: step.text,
+        });
+        const part = { type: "output_text", text: step.text, annotations: [] };
+        ev("response.content_part.done", {
+          item_id: itemId,
+          output_index: index,
+          content_index: 0,
+          part,
+        });
+        const item = {
+          type: "message",
+          id: itemId,
+          status: "completed",
+          role: "assistant",
+          content: [part],
+        };
+        ev("response.output_item.done", { output_index: index, item });
+        output.push(item);
+      } else {
+        terminal = step;
+        break;
+      }
+    }
+    if (terminal?.type === "truncate") return frames.join("");
+    if (terminal?.type === "error") {
+      ev("error", { code: terminal.code, message: "mock stream error", param: null });
+      return frames.join("");
+    }
+    if (terminal?.type === "failed") {
+      ev("response.failed", {
+        response: response("failed", output, {
+          error: { code: terminal.code, message: "mock failure" },
+        }),
+      });
+      return frames.join("");
+    }
+    const final = response(terminal?.type === "incomplete" ? "incomplete" : "completed", output, {
+      usage: usageJson(),
+      ...(terminal?.type === "incomplete"
+        ? { incomplete_details: { reason: terminal.reason } }
+        : {}),
+    });
+    ev(terminal?.type === "incomplete" ? "response.incomplete" : "response.completed", {
+      response: final,
+    });
+    return frames.join("");
+  }
+
   const notFound = {
     status: 404,
     json: { error: { message: "No such object", type: "invalid_request_error", code: null } },
@@ -364,6 +572,14 @@ export async function startOpenAiMockServer(
         b.status = "cancelling";
       return { status: 200, json: batchJson(b) };
     }
+    if (m === "POST" && p === "/v1/responses" && (req.body as { stream?: unknown })?.stream) {
+      const body = req.body as Record<string, unknown>;
+      return {
+        status: 200,
+        text: chatSse(chatScript(body, chatCalls++), String(body.model ?? "unknown")),
+        contentType: "text/event-stream",
+      };
+    }
     if (m === "POST" && p === "/v1/responses") {
       const body = req.body as { model?: string } | undefined;
       const outcome = outcomeOf(null);
@@ -394,7 +610,7 @@ export async function startOpenAiMockServer(
           data: inputs
             .map((t, index) => ({ object: "embedding", index, embedding: fakeEmbedding(t, dims) }))
             .reverse(),
-          usage: { prompt_tokens: inputs.length * 10, total_tokens: inputs.length * 10 },
+          usage: { prompt_tokens: fakeTokenCount(inputs), total_tokens: fakeTokenCount(inputs) },
         },
       };
     }

@@ -202,3 +202,113 @@ export const aiPipelineEnvSchema = z.object({
   ),
 });
 export type AiPipelineEnv = z.infer<typeof aiPipelineEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Search and chat (docs/plans/step-7.md 2.4, 2.7, 2.9; PRD "Chat and RAG pipeline", "Cost
+// controls": 100 chat turns per user per day). Read by the api (both) and the worker (search).
+// Model names, provider and keys stay in `aiEnvSchema` (`@littlelight/ai`).
+// ---------------------------------------------------------------------------------------------
+
+/** Defaults of `searchEnvSchema`. */
+export const SEARCH_DEFAULTS = {
+  /** `off` (default, D6) or `llm` (one extra chat-model call re-ranks the top 30 captions). */
+  SEARCH_RERANK: "off",
+  /** Filtered candidate sets up to this size use an exact cosine scan instead of HNSW (D9). */
+  SEARCH_EXACT_MAX: 2000,
+  /** `SET LOCAL hnsw.ef_search` for the HNSW path (pgvector default 40). */
+  SEARCH_HNSW_EF_SEARCH: 100,
+  /** Hourly `search.reconcile`. */
+  SEARCH_RECONCILE_CRON: "17 * * * *",
+  /** Search documents per embedding request. */
+  SEARCH_EMBED_BATCH: 100,
+} as const;
+
+export const SEARCH_RERANK_MODES = ["off", "llm"] as const;
+
+const S = SEARCH_DEFAULTS;
+
+/** Hybrid search and indexer settings (api: rerank/exact/ef_search; worker: cron/batch). */
+export const searchEnvSchema = z.object({
+  SEARCH_RERANK: z.preprocess(
+    emptyAsUndefined,
+    z.enum(SEARCH_RERANK_MODES).default(S.SEARCH_RERANK),
+  ),
+  SEARCH_EXACT_MAX: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(100).max(20_000).default(S.SEARCH_EXACT_MAX),
+  ),
+  SEARCH_HNSW_EF_SEARCH: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(40).max(1000).default(S.SEARCH_HNSW_EF_SEARCH),
+  ),
+  SEARCH_RECONCILE_CRON: z.preprocess(
+    emptyAsUndefined,
+    cronSchema.default(S.SEARCH_RECONCILE_CRON),
+  ),
+  SEARCH_EMBED_BATCH: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(512).default(S.SEARCH_EMBED_BATCH),
+  ),
+  /**
+   * Relevance floor (cosine similarity) for candidates found by the vector leg only; unset ⇒ the
+   * embedding model's default (`defaultMinSimilarity` in apps/api: 0.30 real, 0.60 fake).
+   */
+  SEARCH_MIN_SIMILARITY: z.preprocess(emptyAsUndefined, z.coerce.number().min(0).max(1).optional()),
+});
+export type SearchEnv = z.infer<typeof searchEnvSchema>;
+
+/** Defaults of `chatEnvSchema`. */
+export const CHAT_DEFAULTS = {
+  /** PRD "Cost controls": 100 turns per user per rolling 24 h (across babies). */
+  CHAT_TURNS_PER_DAY: 100,
+  /** Model calls per turn (each may request tools); then a fixed "be more specific" answer. */
+  CHAT_MAX_TOOL_ROUNDS: 4,
+  CHAT_MAX_OUTPUT_TOKENS: 800,
+  /** Earlier user/assistant messages replayed as context (text only; tool traffic is never stored). */
+  CHAT_HISTORY_MESSAGES: 20,
+  /** Per model call; a turn is bounded by `CHAT_MODEL_TIMEOUT_MS × CHAT_MAX_TOOL_ROUNDS`. */
+  CHAT_MODEL_TIMEOUT_MS: 30_000,
+  /**
+   * Find-photos fast path: when the first model call only asks for `search_photos`, the server
+   * writes the short answer itself (one model call instead of two; facts and summaries keep the
+   * model-written answer).
+   */
+  CHAT_FAST_PATH: true,
+} as const;
+
+const C = CHAT_DEFAULTS;
+
+/** Chat endpoint settings (api). */
+export const chatEnvSchema = z.object({
+  CHAT_TURNS_PER_DAY: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(10_000).default(C.CHAT_TURNS_PER_DAY),
+  ),
+  CHAT_MAX_TOOL_ROUNDS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(8).default(C.CHAT_MAX_TOOL_ROUNDS),
+  ),
+  CHAT_MAX_OUTPUT_TOKENS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(128).max(4096).default(C.CHAT_MAX_OUTPUT_TOKENS),
+  ),
+  CHAT_HISTORY_MESSAGES: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(0).max(100).default(C.CHAT_HISTORY_MESSAGES),
+  ),
+  CHAT_MODEL_TIMEOUT_MS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1000).max(300_000).default(C.CHAT_MODEL_TIMEOUT_MS),
+  ),
+  CHAT_FAST_PATH: z.preprocess(emptyAsUndefined, z.stringbool().default(C.CHAT_FAST_PATH)),
+  /**
+   * Fast-path confidence: without a lexical match, the best result's cosine similarity must reach
+   * this for the server-written answer; unset ⇒ the embedding model's default
+   * (`defaultFastPathMinSimilarity` in apps/api: 0.38 real, 0.60 fake).
+   */
+  CHAT_FAST_PATH_MIN_SIMILARITY: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().min(0).max(1).optional(),
+  ),
+});
+export type ChatEnv = z.infer<typeof chatEnvSchema>;

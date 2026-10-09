@@ -48,7 +48,7 @@ export function useOnline(): boolean {
 
 /**
  * Pane layout: phone = the grid only (the viewer is a modal); tablet = grid | viewer
- * (`minmax(360px, 45%)`); desktop = chat placeholder (280 px) | grid | details (360 px).
+ * (`minmax(360px, 45%)`); desktop = chat pane (280 px) | grid | details (360 px).
  */
 export function Panes({
   breakpoint,

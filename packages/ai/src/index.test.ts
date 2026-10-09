@@ -68,9 +68,23 @@ describe("real adapters (step 6)", () => {
     expect(createEmbedder({ OPENAI_API_KEY: "x" }).dims).toBe(1024);
   });
 
-  it("only createChatModel is still not implemented (step 7)", () => {
-    expect(() => createChatModel({ OPENAI_API_KEY: "x" })).toThrow(AiNotImplementedError);
-    expect(() => createChatModel({ OPENAI_API_KEY: "x" })).toThrow(AiNotConfiguredError);
+  it("createChatModel: openai with a key, fake without one, anthropic not implemented (step 7)", () => {
+    const o = createChatModel({ OPENAI_API_KEY: "x" });
+    expect(o.provider).toBe("openai");
+    expect(o.model).toBe("gpt-6-luna");
+    const f = createChatModel({ VISION_PROVIDER: "fake" });
+    expect(f.provider).toBe("fake");
+    const env = { VISION_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "x" };
+    expect(() => createChatModel(env)).toThrow(AiNotImplementedError);
+  });
+
+  it("createChatModel: an unpriced CHAT_MODEL and a bad timeout are config errors", () => {
+    expect(() => createChatModel({ VISION_PROVIDER: "fake", CHAT_MODEL: "gpt-9" })).toThrow(
+      /CHAT_MODEL/,
+    );
+    expect(() => createChatModel({ OPENAI_API_KEY: "x", CHAT_MODEL_TIMEOUT_MS: "1" })).toThrow(
+      AiConfigError,
+    );
   });
 });
 

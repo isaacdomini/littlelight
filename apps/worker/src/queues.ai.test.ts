@@ -18,6 +18,15 @@ import { recordingLog } from "./testing/stubs";
 
 const BABY = "11111111-1111-4111-8111-111111111111";
 
+function indexerStub() {
+  return {
+    reindex: vi.fn(),
+    reconcile: vi.fn(),
+    backfill: vi.fn(),
+    stats: vi.fn(),
+  } as never;
+}
+
 function pipeline() {
   const result = {
     claimed: 0,
@@ -60,17 +69,19 @@ describe("AI queue definitions (step 6)", () => {
     });
   });
 
-  it("there are exactly eight queues, one per job name", () => {
+  it("there are exactly ten queues, one per job name", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(Object.values(JOBS).sort());
-    expect(Object.keys(QUEUES)).toHaveLength(8);
+    expect(Object.keys(QUEUES)).toHaveLength(10);
   });
 
-  it("schedules(config) adds the two AI crons from config to the three fixed ones (5 total)", () => {
+  it("schedules(config) adds the two AI crons and the search reconcile to the three fixed ones (6 total)", () => {
     const all = schedules({
       AI_FLUSH_INTERVAL_CRON: "*/10 * * * *",
       AI_POLL_INTERVAL_CRON: "*/2 * * * *",
+      SEARCH_RECONCILE_CRON: "5 * * * *",
     });
-    expect(all).toHaveLength(5);
+    expect(all).toHaveLength(6);
+    expect(Object.fromEntries(all)[JOBS.searchReconcile]).toBe("5 * * * *");
     expect(Object.fromEntries(all)).toMatchObject({
       [JOBS.aiFlush]: "*/10 * * * *",
       [JOBS.aiPoll]: "*/2 * * * *",
@@ -200,6 +211,7 @@ describe("startWorkers registers the AI handlers", () => {
       purge: {} as never,
       sweep: {} as never,
       ai,
+      indexer: indexerStub(),
       log,
       ingestConcurrency: 1,
     });

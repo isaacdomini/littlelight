@@ -92,9 +92,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 13 migrations applied"
+step "3a. database: all 14 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "13" ] || fail "expected 13 applied migrations, found $MIGS"
+[ "$MIGS" = "14" ] || fail "expected 14 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -204,18 +204,18 @@ LEAK="$("${DC[@]}" logs api worker 2>&1 | grep -Eci 'X-Amz-Signature|GPSLatitude
 echo "api/worker use their own MinIO service accounts; worker queues ready; logs clean"
 
 
-step "5e. step 6: AI wiring (8 queues, provider line), seeded bath description, paid-tier gate, no keys in clients"
-grep -Eq 'queues: 8' <<<"$WLOG" || fail "worker log does not show 8 queues"
+step "5e. step 6: AI wiring (10 queues, provider line), seeded bath description, paid-tier gate, no keys in clients"
+grep -Eq 'queues: 10' <<<"$WLOG" || fail "worker log does not show 10 queues"
 W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
 W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
 if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
   grep -q 'AI disabled: OPENAI_API_KEY not set' <<<"$WLOG" || fail "worker log has no 'AI disabled: OPENAI_API_KEY not set' (no key configured)"
 else
-  grep -Eq 'AI enabled: provider=(openai|anthropic|fake)' <<<"$WLOG" || fail "a provider is configured but the worker log has no 'AI enabled' line"
+  grep -Eq 'AI enabled: provider=(openai|anthropic|fake) vision=' <<<"$WLOG" || fail "a provider is configured but the worker log has no 'AI enabled' line"
 fi
-for name in api web migrate; do
+for name in web migrate; do
   K="$("${DC[@]}" exec -T "$name" printenv OPENAI_API_KEY 2>/dev/null | tr -d '\r' || true)"
-  [ -z "$K" ] || fail "$name has OPENAI_API_KEY set (only the worker may hold a provider key)"
+  [ -z "$K" ] || fail "$name has OPENAI_API_KEY set (only the worker and the api may hold a provider key)"
 done
 [ "$("${PSQL[@]}" -c "select count(*) from ai_batch_items i join babies b on b.id=i.baby_id where b.plan='free'")" = "0" ] \
   || fail "a free-tier baby has ai_batch_items"
@@ -251,6 +251,37 @@ BATH="$(curl -fsS -b "$MOM_JAR" "$BASE/api/photos/00000000-0000-4000-8000-000000
 [ "$(printf '%s' "$BATH" | json 'j.ai.raw!==null')" = "true" ] || fail "admin does not get ai.raw"
 grep -Eqi 'latitude|longitude|raw_json|analysis\.jpg' <<<"$BATH" && fail "bath photo response leaks GPS/raw_json/analysis key"
 echo "AI wiring and seeded description ok"
+
+step "5f. step 7: search and chat (paid, admin-only), search rows only for paid babies, no secrets in logs"
+MAYA_ID="00000000-0000-4000-8000-000000000100"
+SEARCH="$(curl -fsS -b "$MOM_JAR" "$BASE/api/babies/$MAYA_ID/search?q=bath")" || fail "GET search as demo-mom failed"
+[ "$(printf '%s' "$SEARCH" | json 'j.photos[0]?.id')" = "00000000-0000-4000-8000-000000000304" ] || fail "q=bath did not rank the bath photo first: $SEARCH"
+# JSON keys of the hidden document / coordinates / vectors, or a long numeric array (a vector);
+# the legitimate "degraded":"no_embeddings" label must not trip it
+LEAK_RE='"(search_text|embedding|latitude|longitude|raw_json)"|(-?[0-9]+\.[0-9]+,){8,}'
+grep -Eq "$LEAK_RE" <<<"$SEARCH" && fail "search response leaks the document, GPS or a vector"
+curl -fsS -o /dev/null -b "$MOM_JAR" "$BASE/api/babies/$MAYA_ID/search/facets" || fail "GET search facets failed"
+CHAT_CODE="$(curl -s -o "$TMP/chat.json" -w '%{http_code}' -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/chat/messages" -H 'content-type: application/json' -H 'accept: application/json' -H 'X-Littlelight-Client: web' \
+  -d '{"text":"Show me bath time photos"}')"
+CHAT="$(cat "$TMP/chat.json")"
+if [ "$(printf '%s' "$SEARCH" | json 'j.degraded')" = "no_embeddings" ]; then
+  # zero-setup stack (no key, no fake provider): keyword search still works, chat says it is not configured
+  [ "$CHAT_CODE" = "409" ] || fail "no provider: chat should answer 409 (not configured), got $CHAT_CODE: $CHAT"
+  grep -q 'not configured' <<<"$CHAT" || fail "no provider: chat 409 does not say it is not configured: $CHAT"
+  echo "no provider configured: keyword search ranks the bath photo, chat answers 'not configured'"
+else
+  [ "$CHAT_CODE" = "200" ] || fail "POST chat message as demo-mom answered $CHAT_CODE: $CHAT"
+  [ "$(printf '%s' "$CHAT" | json 'j.message.citations.photoIds.includes("00000000-0000-4000-8000-000000000304")')" = "true" ] || fail "chat answer does not cite the bath photo: $CHAT"
+  grep -Eq '\[photo:' <<<"$CHAT" && fail "chat answer carries a citation marker"
+fi
+curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/babies/$MAYA_ID/chat/thread" -H 'X-Littlelight-Client: web' || fail "DELETE chat thread failed"
+[ "$("${PSQL[@]}" -c "select count(*) from photo_search s join babies b on b.id=s.baby_id where b.deleted_at is null and not baby_ai_enabled(b.id)")" = "0" ] \
+  || fail "photo_search rows exist for a live baby without the entitlement (trashed babies keep theirs until the purge)"
+[ "$("${PSQL[@]}" -c "select count(*) from ai_spend s join babies b on b.id=s.baby_id where b.plan='free'")" = "0" ] \
+  || fail "ai_spend rows exist for a free-tier baby"
+LOGS_NOW="$("${DC[@]}" logs --no-color --since 10m api worker 2>&1 || true)"
+grep -Eqi 'Note from parent|Show me bath time photos|X-Amz-Signature|latitude' <<<"$LOGS_NOW" && fail "api/worker logs carry a search document, a chat question, a signed URL or a coordinate"
+echo "search, chat, tier gates and log hygiene ok"
 
 if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   step "5c. stopping storage degrades the api (503) and the worker (unhealthy)"

@@ -1,29 +1,35 @@
 # Littlelight CI (docs/plans/step-1.md task 1.10; PRD "Build order" step 1: "CI builds every image").
 #
 #   check            install (frozen lockfile), lint, a no-metadata grep over the worker source,
-#                    the step-6 AI hygiene greps (.github/scripts/ai-hygiene.sh: no provider key
-#                    names in the client/shared, no provider SDK, no dataKey in the AI pipeline),
-#                    typecheck (workspace + e2e/), unit tests (incl. packages/ai adapters against
-#                    local mock servers), integration tests (db-integration:
-#                    RLS matrix etc.; api-integration: auth, invites, babies, uploads, photos via
-#                    Fastify inject with a stubbed GoTrue and S3; worker-integration: ingest,
-#                    purge, sweep and the AI batch pipeline with the in-process fake vision
-#                    provider against a standalone MinIO) on a pgvector service container
-#                    (auth.* is stubbed by the test harness) with a guard that fails the job if
-#                    any project silently skipped, a generated-DB-types drift check
-#                    against a database migrated in production order (bootstrap -> GoTrue
-#                    migrate -> app migrations), and `docker compose config` for both files.
+#                    the step-6/7 AI hygiene greps (.github/scripts/ai-hygiene.sh: no provider key
+#                    names in the client/shared, no provider SDK, no dataKey in the AI pipeline,
+#                    no ANTHROPIC_API_KEY in the api, no search_text in the chat/search/shared API
+#                    code), typecheck (workspace + e2e/), unit tests (incl. packages/ai adapters
+#                    against local mock servers), integration tests (db-integration: RLS matrix,
+#                    search + chat tables etc.; api-integration: auth, invites, babies, uploads,
+#                    photos, search, chat via Fastify inject with a stubbed GoTrue and S3 and the
+#                    fake chat model / embedder; worker-integration: ingest, purge, sweep, the AI
+#                    batch pipeline and the search indexer with the in-process fake provider
+#                    against a standalone MinIO) on a pgvector service container (auth.* is
+#                    stubbed by the test harness) with a guard that fails the job if any project
+#                    or named suite silently skipped, a generated-DB-types drift check against a
+#                    database migrated in production order (bootstrap -> GoTrue migrate -> app
+#                    migrations), and `docker compose config` for both files plus a canary check
+#                    of which services receive which provider key.
 #   images           builds every production image (api, worker, web, migrate) with buildx + GHA
 #                    cache. Nothing is pushed.
-#   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout, runs
-#                    e2e/smoke/dev-stack.sh (step-1..5 acceptance checks), then the Playwright
-#                    e2e suite (step-3 auth, step-4 upload, step-5 timeline edits specs; the edits
-#                    spec uses the demo family that `migrate` seeds via .env.dev
+#   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout (no .env, the step-1
+#                    check), then pins api + worker to the keyless fake AI provider with a CI-only
+#                    project .env (VISION_PROVIDER=fake; no provider key exists in CI) and runs
+#                    e2e/smoke/dev-stack.sh (step-1..7 acceptance checks), then the Playwright
+#                    e2e suite (step-3 auth, step-4 upload, step-5 timeline edits, step-7 search
+#                    and chat specs; the demo family is seeded by `migrate` via .env.dev
 #                    SEED_DEMO_FAMILY=true) in Chromium, then the step-4 upload gate
 #                    (docs/plans/step-4.md 4.1: `pnpm e2e:upload-gate`), then the step-5 perf gate
 #                    (docs/plans/step-5.md 4.1: `pnpm perf:seed` + `PERF_CI=1 pnpm e2e:perf`),
-#                    then the step-6 AI gate with the keyless fake provider
-#                    (docs/plans/step-6.md 4.1: `pnpm e2e:ai-gate --provider fake`).
+#                    then the step-6 AI gate (docs/plans/step-6.md 4.1: `pnpm e2e:ai-gate
+#                    --provider fake`), then the step-7 search gate (docs/plans/step-7.md 4.1:
+#                    `pnpm e2e:search-gate --provider fake --count 2000`).
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
 name: CI
@@ -103,10 +109,12 @@ jobs:
           fi
           [ "$rc" -eq 1 ] || { echo "::error::grep failed (exit $rc)"; exit 1; }
 
-      # docs/plans/step-6.md 4.4 / 2.10: provider keys never in apps/mobile-web/src or
-      # packages/shared/src, no provider SDK in apps/, packages/ or the lockfile, no dataKey in
-      # apps/worker/src/ai. Same script runs locally.
-      - name: AI hygiene (keys, provider SDKs, data key)
+      # docs/plans/step-6.md 4.4 / 2.10 and step-7.md 2.11 / 4.5: provider keys never in
+      # apps/mobile-web/src or packages/shared/src, no provider SDK in apps/, packages/ or the
+      # lockfile, no dataKey in apps/worker/src/ai, no ANTHROPIC_API_KEY in apps/api/src, no
+      # search_text in packages/shared/src/api or the api's chat/search code. Same script runs
+      # locally.
+      - name: AI hygiene (keys, provider SDKs, data key, search document)
         run: bash .github/scripts/ai-hygiene.sh
 
       - name: Typecheck
@@ -119,7 +127,8 @@ jobs:
         run: >-
           pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
           --target es2022 --strict --types node
-          e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts e2e/fixtures/*.ts
+          e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts
+          e2e/search/*.ts e2e/chat/*.ts e2e/fixtures/*.ts
           e2e/playwright.config.ts e2e/playwright.perf.config.ts
 
       - name: Unit tests
@@ -185,9 +194,11 @@ jobs:
           S3_BUCKET: littlelight-test
           S3_REGION: us-east-1
           S3_FORCE_PATH_STYLE: "true"
-          # Step-6 AI suites (docs/plans/step-6.md 2.10/4.4): the worker pipeline test builds the
-          # fake describer in-process and never reads a key; this pins any config loaded from
-          # process.env to the keyless provider too. CI has no provider keys and never will.
+          # Step-6/7 AI suites (docs/plans/step-6.md 2.10/4.4, step-7.md 2.12): the worker
+          # pipeline and search-index tests build the fake describer / embedder in-process and
+          # the api search/chat tests inject the fake chat model + embedder, so none reads a key;
+          # this pins any config loaded from process.env to the keyless provider too. CI has no
+          # provider keys and never will.
           VISION_PROVIDER: fake
           REPORT: ${{ runner.temp }}/integration-report.json
         run: |
@@ -195,13 +206,18 @@ jobs:
           pnpm test:integration \
             --reporter=default --reporter=github-actions \
             --reporter=json --outputFile.json="$REPORT"
-          # Project dirs, plus the step-6 AI suites by name so a rename cannot drop them silently.
+          # Project dirs, plus the step-6 AI and step-7 search/chat suites by name so a rename
+          # cannot drop them silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
             packages/db/set-plan.integration.test.ts \
             apps/api/src/photos/ai.integration.test.ts \
-            apps/worker/src/ai/pipeline.integration.test.ts
+            apps/worker/src/ai/pipeline.integration.test.ts \
+            packages/db/search-chat.integration.test.ts \
+            apps/api/src/search/search.integration.test.ts \
+            apps/api/src/chat/chat.integration.test.ts \
+            apps/worker/src/ai/search-index.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -249,6 +265,30 @@ jobs:
             docker compose -f docker-compose.yml config -q
           rm -f .env
 
+      # Provider-key placement (docs/plans/step-7.md 2.11): OPENAI_API_KEY reaches worker + api,
+      # ANTHROPIC_API_KEY the worker only, neither reaches migrate/web/anything else. Rendered
+      # with throwaway canary values (not secrets; .github/scripts/check-compose-keys.mjs prints
+      # service names only): dev via a temporary .env.local (its env_file), production via the
+      # shell environment (x-app-env interpolation). The checkout has neither file; both are
+      # removed again.
+      - name: Provider keys reach only the allowed services (canary)
+        env:
+          CANARY_OPENAI: ci-canary-openai-key-not-a-secret
+          CANARY_ANTHROPIC: ci-canary-anthropic-key-not-a-secret
+        run: |
+          set -euo pipefail
+          test ! -e .env.local && test ! -e .env
+          trap 'rm -f .env.local .env' EXIT
+          printf 'OPENAI_API_KEY=%s\nANTHROPIC_API_KEY=%s\n' "$CANARY_OPENAI" "$CANARY_ANTHROPIC" > .env.local
+          docker compose -f docker-compose.dev.yml config --format json \
+            | node .github/scripts/check-compose-keys.mjs dev
+          rm -f .env.local
+          cp .env.example .env
+          OPENAI_API_KEY="$CANARY_OPENAI" ANTHROPIC_API_KEY="$CANARY_ANTHROPIC" \
+            STORAGE_PATH="$RUNNER_TEMP/storage" BACKUP_PATH="$RUNNER_TEMP/backups" \
+            docker compose -f docker-compose.yml config --format json \
+            | node .github/scripts/check-compose-keys.mjs prod
+
   images:
     name: Build image (${{ matrix.image }})
     runs-on: ubuntu-24.04
@@ -294,10 +334,11 @@ jobs:
   dev-stack-smoke:
     name: Dev stack smoke + e2e
     runs-on: ubuntu-24.04
-    # Image builds + up (~10 min cold), smoke, Chromium download, e2e with one retry, four api
-    # restarts, upload gate (~3-4 min), perf seed + perf run on two viewports (~2-4 min), AI gate
-    # (~1 min, capped at 10).
-    timeout-minutes: 75
+    # Image builds + up (~10 min cold), fake-provider recreate of api + worker (~1 min), smoke,
+    # Chromium download, e2e with one retry, five api restarts, upload gate (~3-4 min), perf
+    # seed + perf run on two viewports (~2-4 min), AI gate (~1 min, capped at 10), search gate
+    # (2,000-photo seed + 50 search and 50 chat queries, a few minutes, capped at 15).
+    timeout-minutes: 95
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -322,7 +363,41 @@ jobs:
       - name: Start dev stack
         run: docker compose -f docker-compose.dev.yml up -d --build --wait --wait-timeout 600
 
-      - name: Smoke test (step-1..3 acceptance checks)
+      # From here on the stack runs the keyless fake AI provider, like a dev machine with the
+      # git-ignored project .env `VISION_PROVIDER=fake`: the smoke's step-7 chat check and the
+      # chat/search e2e specs need a chat model, and CI has no provider key (the compose default
+      # `openai` without a key means "AI disabled; chat unavailable"). A project .env (Compose
+      # interpolation only, never passed to containers) rather than a step/job env var, because
+      # the AI and search gates deliberately drop VISION_PROVIDER from their environment when
+      # they restore api/worker "to the stack default": with this file that default is `fake`
+      # for every later compose call. Written after the zero-setup start above, so that start
+      # still proves a fresh clone needs no env file.
+      - name: Pin api + worker to the keyless fake provider (CI-only project .env)
+        run: |
+          set -euo pipefail
+          printf '# CI only (not committed): keyless fake AI provider for the gates.\nVISION_PROVIDER=fake\n' > .env
+          docker compose -f docker-compose.dev.yml up -d --no-deps --wait --wait-timeout 180 api worker
+          for svc in api worker; do
+            ok=""
+            for _ in $(seq 1 30); do
+              # Captured first: `logs | grep -q` can SIGPIPE the producer, failing under pipefail.
+              log="$(docker compose -f docker-compose.dev.yml logs --no-color "$svc" 2>&1 || true)"
+              if grep -q 'AI enabled: provider=fake' <<<"$log"; then
+                ok=1
+                break
+              fi
+              sleep 2
+            done
+            [ -n "$ok" ] || { echo "::error::$svc did not log 'AI enabled: provider=fake'"; exit 1; }
+          done
+          key="$(docker compose -f docker-compose.dev.yml exec -T worker printenv OPENAI_API_KEY || true)"
+          if [ -n "$(printf '%s' "$key" | tr -d '[:space:]')" ]; then
+            echo "::error::worker has an OPENAI_API_KEY in CI"
+            exit 1
+          fi
+          echo "api + worker on the fake provider, no provider key"
+
+      - name: Smoke test (step-1..7 acceptance checks)
         env:
           SMOKE_SKIP_UP: "1"
         run: bash e2e/smoke/dev-stack.sh
@@ -365,7 +440,7 @@ jobs:
       - name: Reset API rate limits (restart api)
         run: bash .github/scripts/restart-api.sh
 
-      - name: e2e (Playwright, PRD step-3 and step-4 specs)
+      - name: e2e (Playwright, PRD step-3..7 specs)
         env:
           # e2e/playwright.config.ts: retries 1 and HTML report on CI.
           CI: "1"
@@ -444,9 +519,10 @@ jobs:
       # recorded; free-tier photos are never submitted" (docs/plans/step-6.md 4.1, e2e/ai/gate.ts),
       # keyless. The gate itself recreates the worker with `VISION_PROVIDER=fake
       # AI_BATCH_FLUSH_MINUTES=0` (compose interpolation on the worker's environment block,
-      # decision D6) and recreates it without overrides in a finally. Deliberately NOT set in this
-      # step's env: the gate merges process.env into that restore, which would then keep the fake
-      # provider. No provider key exists in CI. Also shells out to `docker compose exec`/`run`
+      # decision D6) and recreates it without overrides in a finally, i.e. back to the stack
+      # default, which is the CI project .env written above (fake, default flush interval). The
+      # gate drops VISION_PROVIDER from its own environment for that restore, so it is not set
+      # here either. No provider key exists in CI. Also shells out to `docker compose exec`/`run`
       # (db, worker, migrate `pnpm db:plan`). `--timeout-min 7` makes the gate's own wait expire
       # (writing e2e/ai-gate/results.json and restoring the worker) before the step timeout.
       - name: AI gate (PRD step-6 check, fake provider)
@@ -466,6 +542,49 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || true
           exit "$rc"
+
+      # The search gate signs demo-mom in (OTP via Mailpit); earlier steps spent sign-in codes.
+      # (The gate also recreates api itself, which resets the counter too.)
+      - name: Reset API rate limits before the search gate (restart api)
+        run: bash .github/scripts/restart-api.sh
+
+      # PRD step-7 check, "golden set of 50 queries on seed data finds the right photo in the top
+      # 5 at least 85% of the time; answers cite photo IDs" (docs/plans/step-7.md 4.1,
+      # e2e/search/gate.ts), keyless. The gate seeds the Golden baby with 2,000 photos
+      # (`pnpm search:seed`, host-side, Postgres superuser on localhost), recreates api + worker
+      # with VISION_PROVIDER=fake, runs the 50 golden queries through search and chat plus the
+      # role/tier/log probes, writes e2e/search-gate/results.json and restores api + worker to
+      # the stack default (the CI project .env above: fake). `--timeout-min 10` bounds the
+      # gate's own embedding wait inside the 15-minute step timeout.
+      - name: Search gate (PRD step-7 check, fake provider)
+        timeout-minutes: 15
+        env:
+          SEARCH_GATE_LOG: ${{ runner.temp }}/search-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$SEARCH_GATE_LOG")"
+          rc=0
+          pnpm e2e:search-gate --provider fake --count 2000 --timeout-min 10 2>&1 \
+            | tee "$SEARCH_GATE_LOG" || rc=$?
+          {
+            echo '### Search gate (fake provider, 2,000 photos)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$SEARCH_GATE_LOG" \
+              | awk '/^SEARCH GATE \(/{on=1; print; next} on && /^  /{print; next} {on=0}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Upload search gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: search-gate
+          path: |
+            e2e/search-gate/
+            ${{ runner.temp }}/search-gate
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload AI gate output
         if: failure()

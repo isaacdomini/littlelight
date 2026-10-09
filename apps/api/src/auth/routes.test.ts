@@ -33,6 +33,8 @@ async function make(gotrue = stubGoTrue(), config: Partial<ApiConfig> = {}) {
     s3: okS3,
     gotrue,
     mailer,
+    // Never build provider clients from the developer's real environment in a unit test.
+    aiEnv: {},
     logger: false,
   });
   return { app, gotrue, mailer };

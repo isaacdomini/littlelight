@@ -205,3 +205,68 @@ export const PERF_IDS = {
     return `00000000-0000-4000-8000-0000000009${String(20 + n)}`;
   },
 } as const;
+
+// ---------------------------------------------------------------------------------------------
+// Search and chat (docs/plans/step-7.md 2.4, 2.8; PRD "Chat and RAG pipeline": "SQL filters → top
+// 50 by vector cosine + top 50 by full-text → merged by Reciprocal Rank Fusion → optional re-rank
+// of top 30 by the LLM reading captions → top 12 returned"). Env-tunable settings live in
+// `SEARCH_DEFAULTS` / `CHAT_DEFAULTS` (env.ts); these are fixed.
+// ---------------------------------------------------------------------------------------------
+
+/** Reciprocal Rank Fusion constant: `score = Σ 1 / (SEARCH_RRF_K + rank)`, rank from 1. */
+export const SEARCH_RRF_K = 60;
+/** Candidates per ranked leg (vector, full-text, tag/people boost). */
+export const SEARCH_CANDIDATES = 50;
+/** Fused candidates the optional LLM re-rank reads (captions only). */
+export const SEARCH_RERANK_CANDIDATES = 30;
+/** Results returned by `search_photos` when the model passes `limit: null`. */
+export const SEARCH_RESULT_LIMIT = 12;
+/** Most results `search_photos` may return (its `limit` maximum). */
+export const SEARCH_TOOL_MAX_RESULTS = 24;
+/** Default and maximum `limit` of `GET /babies/:id/search`. */
+export const SEARCH_PAGE_DEFAULT = 24;
+export const SEARCH_PAGE_MAX = 50;
+/** Tags listed by `GET /babies/:id/search/facets` (most frequent first). */
+export const SEARCH_FACET_TAGS_MAX = 30;
+
+/** PRD "Cost controls": chat turns per user per rolling 24 hours (default of `CHAT_TURNS_PER_DAY`). */
+export const CHAT_TURNS_PER_DAY = 100;
+
+/**
+ * Estimated cost of one chat turn on the default model (gpt-6-luna standard tier, ~2 calls of
+ * ~1,500 input / ~150 output tokens). The pre-turn budget check uses it; recorded costs come from
+ * the price table in `packages/ai`.
+ */
+export const CHAT_COST_PER_TURN_ESTIMATE_USD = 0.001;
+/**
+ * Estimated cost of embedding one search document (~250 tokens × $0.02 / 1M). The indexer's
+ * budget check uses it; recorded costs come from the provider's usage.
+ */
+export const EMBED_COST_PER_DOC_ESTIMATE_USD = 0.000005;
+
+/** Upper bound of `SEARCH_SEED_IDS.photo(i)` (the gate uses 2,000; the perf target is 50,000). */
+export const SEARCH_SEED_MAX_PHOTOS = 100_000;
+/** Measurements the search seed creates (`SEARCH_SEED_IDS.measurement(0..59)`). */
+export const SEARCH_SEED_MEASUREMENT_COUNT = 60;
+
+/**
+ * Fixed ids of the dev-only search seed (`pnpm search:seed`, docs/plans/step-7.md 2.6): the
+ * "Golden" baby (plan `plus`, no plan owner, admins = the demo mom and dad, born 2025-03-15) with
+ * up to `SEARCH_SEED_MAX_PHOTOS` photos and 60 measurements. Photo indices `0..49` are the golden
+ * targets. These rows exist only where the seed was run by hand or by the search gate on a dev
+ * machine / CI (never in production).
+ */
+export const SEARCH_SEED_IDS = {
+  /** "Golden". */
+  baby: "00000000-0000-4000-8000-000000000a00",
+  /** Photo `i`: `00000000-0000-4000-8000-02` + `i` as 10 zero-padded digits. */
+  photo(i: number): string {
+    const n = perfIndex(i, SEARCH_SEED_MAX_PHOTOS, "photo");
+    return `00000000-0000-4000-8000-02${String(n).padStart(10, "0")}`;
+  },
+  /** Measurement `i` (0..59): `00000000-0000-4000-8000-03` + `i` as 10 zero-padded digits. */
+  measurement(i: number): string {
+    const n = perfIndex(i, SEARCH_SEED_MEASUREMENT_COUNT, "measurement");
+    return `00000000-0000-4000-8000-03${String(n).padStart(10, "0")}`;
+  },
+} as const;

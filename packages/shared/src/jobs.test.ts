@@ -8,6 +8,9 @@ import {
   JOBS,
   REINDEX_REASONS,
   reindexJobSchema,
+  SEARCH_BACKFILL_REASONS,
+  searchBackfillJobSchema,
+  searchReconcileJobSchema,
 } from "./jobs";
 
 const ids = {
@@ -26,8 +29,10 @@ describe("JOBS", () => {
       aiFlush: "ai.flush",
       aiPoll: "ai.poll",
       aiBackfill: "ai.backfill",
+      searchReconcile: "search.reconcile",
+      searchBackfill: "search.backfill",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(8);
+    expect(new Set(Object.values(JOBS)).size).toBe(10);
   });
 });
 
@@ -150,5 +155,39 @@ describe("aiBackfillJobSchema", () => {
     ["a non-uuid baby", { reason: "manual", babyId: "b" }],
   ])("rejects %s", (_n, data) => {
     expect(aiBackfillJobSchema.safeParse(data).success).toBe(false);
+  });
+});
+
+describe("searchReconcileJobSchema", () => {
+  it("accepts only an empty object", () => {
+    expect(searchReconcileJobSchema.safeParse({}).success).toBe(true);
+    expect(searchReconcileJobSchema.safeParse({ babyId: ids.babyId }).success).toBe(false);
+  });
+});
+
+describe("searchBackfillJobSchema", () => {
+  it("lists the reasons", () => {
+    expect([...SEARCH_BACKFILL_REASONS]).toEqual(["upgrade", "model", "manual"]);
+  });
+
+  it("an upgrade needs a babyId; model and manual do not", () => {
+    expect(searchBackfillJobSchema.safeParse({ reason: "upgrade" }).success).toBe(false);
+    expect(
+      searchBackfillJobSchema.safeParse({ reason: "upgrade", babyId: ids.babyId }).success,
+    ).toBe(true);
+    expect(searchBackfillJobSchema.safeParse({ reason: "model" }).success).toBe(true);
+    expect(
+      searchBackfillJobSchema.safeParse({ reason: "manual", babyId: ids.babyId }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["an unknown reason", { reason: "because" }],
+    ["a missing reason", {}],
+    ["an extra key", { reason: "manual", note: "x" }],
+    ["a non-uuid baby", { reason: "manual", babyId: "b" }],
+    ["null", null],
+  ])("rejects %s", (_n, data) => {
+    expect(searchBackfillJobSchema.safeParse(data).success).toBe(false);
   });
 });

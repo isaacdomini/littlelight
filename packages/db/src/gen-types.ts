@@ -93,6 +93,7 @@ export function tsType(pgType: string): string {
       return "number";
     case "bigint":
     case "numeric":
+    case "xid8":
       return "string";
     case "boolean":
       return "boolean";

@@ -3,9 +3,9 @@
 #
 # The sign-in-code limit is in memory, 30 per hour per IP (docs/plans/step-3.md 2.9), and every
 # CI request comes from the same IP, so the job restarts api between suites that sign in
-# (smoke -> Playwright e2e -> upload gate -> perf gate). `up --no-deps --no-recreate --wait` only waits for
-# api to be healthy again (no one-shot re-runs), then the web proxy is polled because that is
-# the path the browser and the gate use.
+# (smoke -> Playwright e2e -> upload gate -> perf gate -> AI gate -> search gate).
+# `up --no-deps --no-recreate --wait` only waits for api to be healthy again (no one-shot
+# re-runs), then the web proxy is polled because that is the path the browser and the gate use.
 #
 #   bash .github/scripts/restart-api.sh        (from the repo root; WEB_PORT honoured)
 set -euo pipefail

@@ -44,6 +44,7 @@ export {
   type SetPlanArgs,
   type SetPlanOptions,
   type SetPlanResult,
+  searchBackfillHint,
   setPlan,
   UsageError,
 } from "./tools/set-plan.js";

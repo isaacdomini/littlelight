@@ -49,6 +49,12 @@ export interface HttpRequest {
   timeoutMs?: number;
   /** Statuses returned to the caller instead of thrown (e.g. 404 on delete). */
   allowStatuses?: readonly number[];
+  /**
+   * Caller cancellation, combined with the per-attempt timeout. An aborted caller is never
+   * retried (`AiProviderError` code `aborted`). For `openStream` the timeout also bounds reading
+   * the body.
+   */
+  signal?: AbortSignal;
 }
 
 export interface HttpResponse {
@@ -149,6 +155,25 @@ export class HttpClient {
     yield* splitLines(res.body);
   }
 
+  /**
+   * Opens a streaming response (SSE) and returns it once the status is 2xx; the caller reads
+   * `res.body`. Non-2xx statuses throw `AiProviderError` with the provider's short code (the body
+   * is read for the code only). Retries (per `req.retry`) apply to obtaining the response only.
+   */
+  async openStream(req: HttpRequest): Promise<Response> {
+    const res = await this.send(req);
+    if (!res.ok) {
+      let body: unknown;
+      try {
+        body = JSON.parse(await res.text());
+      } catch {
+        body = undefined;
+      }
+      throw this.error(req, res.status, providerErrorCode(body, res.status), false);
+    }
+    return res;
+  }
+
   private error(req: HttpRequest, status: number, code: string, retryable: boolean) {
     return new AiProviderError(this.provider, req.op, status, code, retryable);
   }
@@ -167,14 +192,17 @@ export class HttpClient {
       }
       let res: Response | undefined;
       let netCode: string | undefined;
+      if (req.signal?.aborted) throw this.error(req, 0, "aborted", false);
+      const timeout = AbortSignal.timeout(req.timeoutMs ?? this.timeoutMs);
       try {
         res = await this.fetchImpl(`${this.baseUrl}${req.path}`, {
           method: req.method,
           headers,
           body,
-          signal: AbortSignal.timeout(req.timeoutMs ?? this.timeoutMs),
+          signal: req.signal ? AbortSignal.any([timeout, req.signal]) : timeout,
         });
       } catch (err) {
+        if (req.signal?.aborted) throw this.error(req, 0, "aborted", false);
         netCode =
           err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")
             ? "timeout"

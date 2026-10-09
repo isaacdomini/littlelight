@@ -345,3 +345,65 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Still open: production credentials, Apple/Google IDs, Turnstile, legal text, CSAM provider; ~1.1 GB
     unused Docker volumes (`docker volume prune -f` with the user's OK).
 - **Commit**: step 6: AI batch pipeline
+
+## Step 7: Search and chat
+
+- **Built**: Shared `buildSearchDocument` (no baby name, no coordinates, overrides win, versioned),
+  search/chat DTOs, chat tool schemas, citation markers, SSE event format. Migration 14:
+  `photo_search` content hash / embed model / doc version / place, read policy on
+  `search_baby_ids()` (ARRAY form), guard so only paid, approved, live photos get rows, immediate
+  cleanup on trash/quarantine/unapprove, stale marking, `search_stale_photos()`, SECURITY DEFINER
+  full-text and tag/people candidate functions (GIN usable under RLS), `ai_spend` ledger folded into
+  the monthly budget, one chat thread per user per baby, `chat_turns` ledger with atomic
+  `chat_reserve_turn` (clearing history doesn't reset the 100/day limit). `packages/ai`: OpenAI chat
+  adapter (Responses API, strict tools, streaming, `reasoning.effort: low`, `store:false`), fake
+  embedder (hashed bag-of-words, 1024 dims), rule-based fake chat model, chat prompt v1 (sha pinned).
+  Worker: search indexer on `photo.reindex` (batches of 25, hash-skip), `search.reconcile` hourly,
+  `search.backfill` after upgrade, `pnpm search:seed` (2k–50k photos with 50 planted golden targets),
+  `pnpm search:calibrate`. API: hybrid search (filters → vector/HNSW + full-text + tag/people → RRF k=60
+  → relevance floor → top 12), facets, chat SSE with 4 permission-scoped tools, citation validation,
+  measurement answers include the linked photo, comparison grids interleaved, age/date windows widened
+  ±15 days (one ±45 retry), find-photos fast path when results are confident, thread history and
+  clear, plan/budget/rate-limit errors. Web: Chat home tab (suggested prompts, streaming answer, photo
+  grid → viewer, history, clear), desktop chat pane, search bar + filter chips, Plus upsell,
+  contributor notice. nginx streams the chat endpoint unbuffered. Tests: 1,702 unit, 968 integration
+  (db, api, worker), 36 Playwright e2e, `pnpm e2e:search-gate` (fake + real), smoke works with and
+  without a provider; CI runs the fake search gate, compose key-placement and hygiene checks.
+- **Gate**: orchestrator ran lint, typecheck (incl. e2e), hygiene, unit (1,702), integration (968)
+  on fresh pgvector + MinIO; from a clean copy: `pnpm e2e` 36/36, upload gate passed, perf passed
+  (phone jank 0.38 %, desktop 2.73 %, p95 frame 16.8 ms), AI gate (fake) passed, search gate (fake)
+  passed (search 50/50, chat 50/50, citations 50/50, grounded 50/50, "zebra submarine" finds nothing);
+  zero-setup smoke (no key) and fake-provider smoke both passed.
+  **Real-model runs (user's key, ~$0.08 total across step 6/7 runs):** step-6 AI gate on gpt-6-luna
+  Batch: 50/50 described and schema-valid, $0.005005 (≈ $0.0001/photo), reasoning tokens 0, provider
+  files deleted, 0 free-tier items. Step-7 search gate (text-embedding-3-small + gpt-6-luna, 2,000
+  photos), final runs: search hit@5 50/50, **chat hit@5 49/50 (98 %)**, citations 50/50 valid,
+  chat ≈ $0.00009/turn, first token p50 ≈ 1.5 s / p95 2.3–4.0 s (varies by run), turn p95 2.3–4.4 s.
+- **Decisions**:
+  - **User decisions (2026-10-09):** the key now lives in git-ignored `.env.local`; a git-ignored
+    project `.env` pins `VISION_PROVIDER=fake` so the dev stack never spends unless a real run is
+    triggered (`VISION_PROVIDER=openai` on the command line, then restore). Weekly Fable limit hit:
+    architect/security-engineer run on Opus until it resets; the final review waits for Fable.
+    Find-photos fast path approved (template answer instead of the second model call).
+  - Relevance floor: 0.30 for text-embedding-3-small (real calibration: noise p95 0.299 / max 0.364,
+    paraphrase p50 0.315; 0.38 would drop 14/16 meaning-only matches), 0.60 for the fake. The fast path
+    only fires on confident results (word match, filter-only, 0 results, or similarity ≥ 0.38);
+    otherwise the model writes the answer and can say nothing matched.
+  - No baby name in embedded text; free tier has no search bar or chat; one thread per user per baby;
+    marker citations validated server-side; re-rank off; Anthropic chat adapter deferred; turn ledger
+    separate from messages; candidate functions instead of LEAKPROOF catalog changes.
+- **Open issues**:
+  - Real-model: the search bar still shows weak results for the noisiest nonsense queries
+    ("zebra submarine" scores 0.364 > 0.30 floor; chat correctly says nothing matched); first-token p95
+    can exceed 2 s (2.3–4.0 s in real runs); one golden miss ("the puddle at 12 months") — diagnose with
+    the new `chat tool search_photos` fields (`textCandidates`, `retryLexical`) on the next real run
+    (capture `docker compose logs -f api` during the run; the gate recreates the api container).
+    Paraphrase recall is only partially measured (11/20 in vector top 5).
+  - 50k-photo search p95: text+facet class ~224 ms (max 281) vs the 300 ms target — thin margin.
+  - For the final review: trashed babies keep `photo_search` rows until purge (unreachable via
+    `search_baby_ids()` — confirm); `chat_turns` is deny-all by design; `log_error_verbosity = terse`
+    in production still recommended; search text travels in the GET query string (nginx drops query
+    strings from logs); the fake chat has no "Anthropic" path; CI hasn't run on GitHub yet.
+  - Still open: production credentials, Apple/Google IDs, Turnstile, legal text, CSAM provider,
+    ~1.1 GB unused Docker volumes.
+- **Commit**: step 7: search and chat

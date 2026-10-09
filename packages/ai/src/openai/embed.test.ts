@@ -21,7 +21,9 @@ describe("OpenAI embedder", () => {
       dims: 1024,
       baseUrl: mock.baseUrl,
     });
-    const out = await e.embed(["alpha", "beta", "gamma"]);
+    const { vectors: out, usage } = await e.embed(["alpha", "beta", "gamma"]);
+    expect(usage.inputTokens).toBeGreaterThan(0);
+    expect(usage.costUsd).toBeGreaterThanOrEqual(0);
     expect(out).toHaveLength(3);
     expect(out.every((v) => v.length === 1024)).toBe(true);
     expect(out[0]).toEqual(fakeEmbedding("alpha", 1024));
@@ -51,7 +53,7 @@ describe("OpenAI embedder", () => {
   it("factory: fake provider gives fake embedder with EMBED_DIMS; openai needs the OpenAI key", async () => {
     const f = createEmbedder({ VISION_PROVIDER: "fake" });
     expect(f.dims).toBe(1024);
-    expect((await f.embed(["x"]))[0]).toHaveLength(1024);
+    expect((await f.embed(["x"])).vectors[0]).toHaveLength(1024);
     expect(() => createEmbedder({ VISION_PROVIDER: "fake", EMBED_DIMS: "256" }).dims).not.toThrow();
   });
 });

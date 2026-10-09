@@ -43,7 +43,7 @@ const okS3 = { send: (async () => ({})) as never, destroy: () => undefined };
 
 describe("GET /healthz", () => {
   it("returns 200 ok when db and storage are reachable", async () => {
-    app = await buildApp({ config, db: okDb, s3: okS3, logger: false });
+    app = await buildApp({ config, db: okDb, s3: okS3, logger: false, aiEnv: {} });
     const res = await app.inject({ method: "GET", url: "/healthz" });
     expect(res.statusCode).toBe(200);
     const body = healthzResponseSchema.parse(res.json());
@@ -63,7 +63,7 @@ describe("GET /healthz", () => {
       }) as never,
       destroy: () => undefined,
     };
-    app = await buildApp({ config, db: okDb, s3, logger: false });
+    app = await buildApp({ config, db: okDb, s3, logger: false, aiEnv: {} });
     const res = await app.inject({ method: "GET", url: "/healthz" });
     expect(res.statusCode).toBe(503);
     const body = healthzResponseSchema.parse(res.json());
@@ -94,7 +94,7 @@ describe("GET /healthz", () => {
       },
       end: async () => undefined,
     };
-    app = await buildApp({ config, db, s3: okS3, logger: false });
+    app = await buildApp({ config, db, s3: okS3, logger: false, aiEnv: {} });
     const res = await app.inject({ method: "GET", url: "/healthz" });
     expect(res.statusCode).toBe(503);
     const body = healthzResponseSchema.parse(res.json());
@@ -122,7 +122,7 @@ describe("GET /healthz detail by caller (production)", () => {
   const prod: ApiConfig = { ...config, NODE_ENV: "production" };
 
   it("gives a non-loopback caller {status} only, with the same status code", async () => {
-    app = await buildApp({ config: prod, db: okDb, s3: okS3, logger: false });
+    app = await buildApp({ config: prod, db: okDb, s3: okS3, logger: false, aiEnv: {} });
     const res = await app.inject({ method: "GET", url: "/healthz", remoteAddress: "10.1.2.3" });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ status: "ok" });
@@ -135,7 +135,7 @@ describe("GET /healthz detail by caller (production)", () => {
       },
       end: async () => undefined,
     };
-    app = await buildApp({ config: prod, db, s3: okS3, logger: false });
+    app = await buildApp({ config: prod, db, s3: okS3, logger: false, aiEnv: {} });
     const res = await app.inject({ method: "GET", url: "/healthz", remoteAddress: "203.0.113.4" });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ status: "degraded" });
@@ -143,7 +143,7 @@ describe("GET /healthz detail by caller (production)", () => {
   });
 
   it("ignores a spoofed X-Forwarded-For: 127.0.0.1 from a remote socket", async () => {
-    app = await buildApp({ config: prod, db: okDb, s3: okS3, logger: false });
+    app = await buildApp({ config: prod, db: okDb, s3: okS3, logger: false, aiEnv: {} });
     const res = await app.inject({
       method: "GET",
       url: "/healthz",
@@ -154,7 +154,7 @@ describe("GET /healthz detail by caller (production)", () => {
   });
 
   it("gives loopback callers (the container healthcheck) the full body", async () => {
-    app = await buildApp({ config: prod, db: okDb, s3: okS3, logger: false });
+    app = await buildApp({ config: prod, db: okDb, s3: okS3, logger: false, aiEnv: {} });
     for (const remoteAddress of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "127.8.9.10"]) {
       const res = await app.inject({ method: "GET", url: "/healthz", remoteAddress });
       const body = healthzResponseSchema.parse(res.json());
@@ -164,7 +164,7 @@ describe("GET /healthz detail by caller (production)", () => {
   });
 
   it("gives everyone the full body outside production", async () => {
-    app = await buildApp({ config, db: okDb, s3: okS3, logger: false });
+    app = await buildApp({ config, db: okDb, s3: okS3, logger: false, aiEnv: {} });
     const res = await app.inject({ method: "GET", url: "/healthz", remoteAddress: "10.1.2.3" });
     expect(healthzResponseSchema.parse(res.json()).checks.db.ok).toBe(true);
   });

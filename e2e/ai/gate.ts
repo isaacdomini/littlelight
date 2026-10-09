@@ -9,7 +9,7 @@
  * AI_BATCH_FLUSH_MINUTES=0` and restores it (no overrides) when done. `--provider real`: needs
  * OPENAI_API_KEY in the git-ignored `.env.local` (refuses to run without it); restarts the worker
  * with `AI_BATCH_FLUSH_MINUTES=0`, prints the spend estimate before uploading, waits up to
- * `--timeout-min` (default 120) for the provider, and also checks tokens, cost per photo and that
+ * `--timeout-min` (default 1440 = 24 h, polling every 5 min; fake: 15) for the provider, and also checks tokens, cost per photo and that
  * the provider's input file is gone.
  *
  * What it does: signs a fresh user in (OTP from Mailpit), creates a "Paid" and a "Free" baby, sets
@@ -24,6 +24,12 @@
  * real: the submitted custom ids are the item photo ids); no GPS, notes, keys or image data in the
  * worker/api logs. Prints a table and exits 1 on any miss. The summary is also written to
  * `e2e/ai-gate/results.json` (git-ignored output dir) for CI artifacts.
+ *
+ * Real runs can outlive the timeout (the Batch API has a 24 h window). On timeout the gate prints
+ * what it knows, keeps the babies and writes `e2e/ai-gate/state.json`; finish later without
+ * re-uploading with `pnpm e2e:ai-gate --provider real --resume <batchId>` (the provider batch id
+ * or the `ai_batches.id`). The worker is always restored to the stack default (the project `.env`
+ * `VISION_PROVIDER`), never to what the caller's environment says.
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -41,8 +47,8 @@ const DC = ["compose", "-f", "docker-compose.dev.yml"];
 const OUT_DIR = path.join(ROOT, "e2e/ai-gate");
 const PERF_BABY = "00000000-0000-4000-8000-000000000900";
 const FAKE_DIR = "/tmp/littlelight-fake-vision";
-const NOTE = `GATE-NOTE-${Math.random().toString(36).slice(2, 10)}`;
-const PLACE = `GatePlace${Math.random().toString(36).slice(2, 7)}`;
+let NOTE = `GATE-NOTE-${Math.random().toString(36).slice(2, 10)}`;
+let PLACE = `GatePlace${Math.random().toString(36).slice(2, 7)}`;
 
 // ---------------------------------------------------------------------------------------------
 // args
@@ -54,6 +60,8 @@ interface Args {
   freeCount: number;
   timeoutMin: number;
   keep: boolean;
+  /** `ai_batches.id` or provider batch id of a timed-out real run to finish. */
+  resume?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -67,12 +75,23 @@ function parseArgs(argv: string[]): Args {
   if (provider !== "fake" && provider !== "real") throw new Error("--provider is fake or real");
   const count = Number(get("count") ?? 50);
   const freeCount = Number(get("free-count") ?? 5);
-  const timeoutMin = Number(get("timeout-min") ?? (provider === "real" ? 120 : 15));
+  const timeoutMin = Number(get("timeout-min") ?? (provider === "real" ? 1440 : 15));
   if (!Number.isInteger(count) || count < 1 || count > 500) throw new Error("--count is 1..500");
   if (!Number.isInteger(freeCount) || freeCount < 1 || freeCount > 50) {
     throw new Error("--free-count is 1..50");
   }
-  return { provider, count, freeCount, timeoutMin, keep: a.includes("--keep") };
+  const resume = get("resume");
+  if (resume !== undefined && !/^[A-Za-z0-9_-]{6,80}$/.test(resume)) {
+    throw new Error("--resume needs a batch id (ai_batches.id or the provider batch id)");
+  }
+  return {
+    provider,
+    count,
+    freeCount,
+    timeoutMin,
+    keep: a.includes("--keep"),
+    ...(resume ? { resume } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -90,9 +109,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
 async function dc(args: string[], env: Record<string, string> = {}) {
+  // The caller's VISION_PROVIDER must not leak into compose: the stack default comes from the
+  // project .env (fake); a run that needs another provider passes it explicitly.
+  const { VISION_PROVIDER: _inherited, ...inherited } = process.env;
   return sh("docker", [...DC, ...args], {
     cwd: ROOT,
-    env: { ...process.env, ...env },
+    env: { ...inherited, ...env },
     maxBuffer: 256 * 1024 * 1024,
   });
 }
@@ -320,9 +342,9 @@ async function main() {
   try {
     await restartWorker(
       real
-        ? { AI_BATCH_FLUSH_MINUTES: "0" }
+        ? { VISION_PROVIDER: "openai", AI_BATCH_FLUSH_MINUTES: "0" }
         : { VISION_PROVIDER: "fake", AI_BATCH_FLUSH_MINUTES: "0" },
-      real ? /AI enabled: provider=openai model=gpt-6-luna/ : /AI enabled: provider=fake/,
+      real ? /AI enabled: provider=openai vision=gpt-6-luna/ : /AI enabled: provider=fake vision=/,
     );
     await run(args, startedAt, apiKey);
   } finally {
@@ -338,75 +360,144 @@ async function main() {
   console.log("\nAI GATE PASSED");
 }
 
-async function run(args: Args, startedAt: Date, apiKey: string | undefined) {
+const STATE_FILE = path.join(OUT_DIR, "state.json");
+
+interface GateState {
+  email: string;
+  paid: string;
+  free: string;
+  paidIds: string[];
+  freeIds: string[];
+  coords: string[];
+  note: string;
+  place: string;
+  count: number;
+  freeCount: number;
+  startedAt: string;
+}
+
+async function run(argsIn: Args, startedAtIn: Date, apiKey: string | undefined) {
+  let args = argsIn;
+  let startedAt = startedAtIn;
   const real = args.provider === "real";
-  console.log(`generating ${args.count} + ${args.freeCount} synthetic photos ...`);
-  const paidSamples = await makeSamples(args.count, 710_000, true);
-  const freeSamples = await makeSamples(args.freeCount, 720_000, false);
+  let api: ApiClient;
+  let paid: string;
+  let free: string;
+  let paidIds: string[];
+  let freeIds: string[];
+  let coords: string[];
 
-  const email = uniqueEmail("aigate");
-  const api = await ApiClient.create(email);
-  await api.onboard("AI Gate Parent");
-  const paid = await api.createBaby("Paid");
-  const free = await api.createBaby("Free");
-  console.log(`paid baby ${paid}, free baby ${free}`);
-  const plan = await dc(["run", "--rm", "migrate", "pnpm", "db:plan", paid, "plus"]);
-  check(/plan free -> plus/.test(plan.stdout), "db:plan did not report free -> plus");
-  check(
-    (await psql(`select plan from babies where id='${paid}'`)) === "plus",
-    "paid baby is not plus",
-  );
-  check(
-    (await psql(`select plan from babies where id='${free}'`)) === "free",
-    "free baby is not free",
-  );
+  if (args.resume) {
+    // Finish a timed-out real run: no new upload, no new flush.
+    const st = JSON.parse(readFileSync(STATE_FILE, "utf8")) as GateState;
+    const owner = await psql(
+      `select distinct i.baby_id from ai_batch_items i join ai_batches b on b.id=i.batch_id where b.id::text='${args.resume}' or b.provider_batch_id='${args.resume}'`,
+    );
+    if (owner !== st.paid) {
+      throw new Error(`batch ${args.resume} does not belong to the paid baby of ${STATE_FILE}`);
+    }
+    args = { ...args, count: st.count, freeCount: st.freeCount };
+    startedAt = new Date(st.startedAt);
+    paid = st.paid;
+    free = st.free;
+    paidIds = st.paidIds;
+    freeIds = st.freeIds;
+    coords = st.coords;
+    NOTE = st.note;
+    PLACE = st.place;
+    api = await ApiClient.create(st.email);
+    console.log(`resuming: paid baby ${paid}, batch ${args.resume}`);
+  } else {
+    console.log(`generating ${args.count} + ${args.freeCount} synthetic photos ...`);
+    const paidSamples = await makeSamples(args.count, 710_000, true);
+    const freeSamples = await makeSamples(args.freeCount, 720_000, false);
+    coords = paidSamples.flatMap((x) =>
+      x.gps ? [x.gps.lat.toFixed(4), x.gps.lng.toFixed(4)] : [],
+    );
 
-  console.log("uploading ...");
-  const t0 = Date.now();
-  const paidIds = await uploadAll(api, paid, paidSamples);
-  const freeIds = await uploadAll(api, free, freeSamples);
-  console.log(`uploaded in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-  check(paidIds.length === args.count, `${paidIds.length} paid photos, expected ${args.count}`);
-  check(
-    freeIds.length === args.freeCount,
-    `${freeIds.length} free photos, expected ${args.freeCount}`,
-  );
+    const email = uniqueEmail("aigate");
+    api = await ApiClient.create(email);
+    await api.onboard("AI Gate Parent");
+    paid = await api.createBaby("Paid");
+    free = await api.createBaby("Free");
+    console.log(`paid baby ${paid}, free baby ${free}`);
+    const plan = await dc(["run", "--rm", "migrate", "pnpm", "db:plan", paid, "plus"]);
+    check(/plan free -> plus/.test(plan.stdout), "db:plan did not report free -> plus");
+    check(
+      (await psql(`select plan from babies where id='${paid}'`)) === "plus",
+      "paid baby is not plus",
+    );
+    check(
+      (await psql(`select plan from babies where id='${free}'`)) === "free",
+      "free baby is not free",
+    );
 
-  // parent notes on some paid photos: they reach the model (real) but must never reach logs
-  for (const id of paidIds.slice(0, 8)) {
-    const r = await api.call("PATCH", `/photos/${id}/details`, {
-      note: `${NOTE} first splash`,
-      people: ["Grandma"],
-      locationLabel: PLACE,
-    });
-    check(r.status === 200, `details PATCH answered ${r.status}`);
+    console.log("uploading ...");
+    const t0 = Date.now();
+    paidIds = await uploadAll(api, paid, paidSamples);
+    freeIds = await uploadAll(api, free, freeSamples);
+    console.log(`uploaded in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    check(paidIds.length === args.count, `${paidIds.length} paid photos, expected ${args.count}`);
+    check(
+      freeIds.length === args.freeCount,
+      `${freeIds.length} free photos, expected ${args.freeCount}`,
+    );
+    const state: GateState = {
+      email,
+      paid,
+      free,
+      paidIds,
+      freeIds,
+      coords,
+      note: NOTE,
+      place: PLACE,
+      count: args.count,
+      freeCount: args.freeCount,
+      startedAt: startedAt.toISOString(),
+    };
+    writeFileSync(STATE_FILE, JSON.stringify(state));
+
+    // parent notes on some paid photos: they reach the model (real) but must never reach logs
+    for (const id of paidIds.slice(0, 8)) {
+      const r = await api.call("PATCH", `/photos/${id}/details`, {
+        note: `${NOTE} first splash`,
+        people: ["Grandma"],
+        locationLabel: PLACE,
+      });
+      check(r.status === 200, `details PATCH answered ${r.status}`);
+    }
   }
 
-  // every photo ingested with an analysis copy
-  const wantAnalysis = args.count + args.freeCount;
-  const analysisSql = `select count(*) from photos p where p.baby_id in ('${paid}','${free}') and p.status='ingested' and exists (select 1 from photo_derivatives d where d.photo_id=p.id and d.kind='analysis')`;
-  for (const end = Date.now() + 120_000; Date.now() < end; ) {
-    if (Number(await psql(analysisSql)) === wantAnalysis) break;
-    await sleep(1000);
+  if (!args.resume) {
+    // every photo ingested with an analysis copy
+    const wantAnalysis = args.count + args.freeCount;
+    const analysisSql = `select count(*) from photos p where p.baby_id in ('${paid}','${free}') and p.status='ingested' and exists (select 1 from photo_derivatives d where d.photo_id=p.id and d.kind='analysis')`;
+    for (const end = Date.now() + 120_000; Date.now() < end; ) {
+      if (Number(await psql(analysisSql)) === wantAnalysis) break;
+      await sleep(1000);
+    }
+    check(
+      Number(await psql(analysisSql)) === wantAnalysis,
+      `not all ${wantAnalysis} photos reached ingested + analysis`,
+    );
   }
-  check(
-    Number(await psql(analysisSql)) === wantAnalysis,
-    `not all ${wantAnalysis} photos reached ingested + analysis`,
-  );
 
   // ---- flush and poll through the worker container
   const timeoutMs = args.timeoutMin * 60_000;
-  const flush = await runJob("ai.flush", { force: true });
-  console.log(`ai.flush: ${JSON.stringify(flush)}`);
-  const freeFlush = await runJob("ai.flush", { force: true, babyId: free });
-  check(
-    freeFlush.claimed === 0,
-    `forced flush for the free baby claimed ${String(freeFlush.claimed)}`,
-  );
+  if (!args.resume) {
+    const flush = await runJob("ai.flush", { force: true });
+    console.log(`ai.flush: ${JSON.stringify(flush)}`);
+    const freeFlush = await runJob("ai.flush", { force: true, babyId: free });
+    check(
+      freeFlush.claimed === 0,
+      `forced flush for the free baby claimed ${String(freeFlush.claimed)}`,
+    );
+  }
 
   const openSql = `select count(*) from ai_batch_items where baby_id='${paid}' and state in ('pending','submitted')`;
   const doneAt = Date.now() + timeoutMs;
   let polls = 0;
+  let timedOut = false;
   for (;;) {
     const poll = await runJob("ai.poll");
     polls++;
@@ -422,11 +513,29 @@ async function run(args: Args, startedAt: Date, apiKey: string | undefined) {
     if (open === 0) break;
     if (Date.now() > doneAt) {
       check(false, `batch not terminal after ${args.timeoutMin} minutes (open items: ${open})`);
+      timedOut = true;
       break;
     }
     // a failed first attempt is retried by the next flush; keep the pipeline moving
-    await sleep(real ? 60_000 : 3_000);
+    await sleep(real ? 300_000 : 3_000);
     if (!real && polls % 4 === 0) await runJob("ai.flush", { force: true });
+  }
+  if (timedOut) {
+    const open = await psql(
+      `select coalesce(string_agg(distinct b.provider_batch_id || ' (' || b.status || ')', ', '), 'none') from ai_batches b join ai_batch_items i on i.batch_id=b.id where i.baby_id='${paid}' and i.state in ('pending','submitted')`,
+    );
+    console.log(`\nAI GATE (${args.provider}): TIMED OUT, nothing was lost`);
+    console.log(`  open batches                 ${open}`);
+    console.log(`  paid baby / free baby        ${paid} / ${free} (kept)`);
+    console.log(
+      `  finish later with            pnpm e2e:ai-gate --provider real --resume <batchId>   (state: ${STATE_FILE})`,
+    );
+    writeFileSync(
+      path.join(OUT_DIR, "results.json"),
+      JSON.stringify({ args, timedOut: true, failures }, null, 2),
+    );
+    await api.dispose();
+    return;
   }
   // photos whose first attempt failed (none expected) get their second pass here
   for (let round = 0; round < 3; round++) {
@@ -451,18 +560,18 @@ async function run(args: Args, startedAt: Date, apiKey: string | undefined) {
   let apiValid = 0;
   let apiLeak = 0;
   for (const id of paidIds) {
-    const r = await api.call<{ ai: { status: string; description: unknown; raw: unknown } }>(
+    const r = await api.call<{ ai?: { status: string; description: unknown; raw: unknown } }>(
       "GET",
       `/photos/${id}`,
     );
-    if (r.body.ai.status === "ready") apiReady++;
-    if (aiDescriptionV1Schema.safeParse(r.body.ai.description).success) apiValid++;
+    if (r.body.ai?.status === "ready") apiReady++;
+    if (aiDescriptionV1Schema.safeParse(r.body.ai?.description).success) apiValid++;
     const text = JSON.stringify(r.body);
     if (/latitude|longitude|raw_json|analysis\.jpg/i.test(text) || text.includes(NOTE)) {
       // The photo's own `details.note` may carry the note; only `ai.*` must not.
       if (
         /latitude|longitude|raw_json|analysis\.jpg/i.test(text) ||
-        JSON.stringify(r.body.ai).includes(NOTE)
+        JSON.stringify(r.body.ai ?? {}).includes(NOTE)
       )
         apiLeak++;
     }
@@ -630,9 +739,6 @@ async function run(args: Args, startedAt: Date, apiKey: string | undefined) {
   // 6. logs: no GPS, notes, keys, signed URLs or image data
   const since = startedAt.toISOString();
   const logs = (await dc(["logs", "--no-color", "--since", since, "worker", "api"])).stdout;
-  const coords = paidSamples.flatMap((s) =>
-    s.gps ? [s.gps.lat.toFixed(4), s.gps.lng.toFixed(4)] : [],
-  );
   const leaks: string[] = [];
   if (logs.includes(NOTE)) leaks.push("parent note");
   if (logs.includes(PLACE)) leaks.push("location label");

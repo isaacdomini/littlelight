@@ -211,36 +211,60 @@ export interface VisionDescriber {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Chat (agentic RAG, real-time)
+// Chat (agentic RAG, real-time; docs/plans/step-7.md 2.5)
 // ---------------------------------------------------------------------------------------------
 
 export interface ChatToolCall {
+  /** Provider call id (OpenAI `call_id`); echoed back as `toolCallId` of the tool message. */
   id: string;
   name: string;
-  /** Unvalidated arguments as produced by the model; validate with zod before executing. */
+  /**
+   * Unvalidated arguments as produced by the model: the parsed JSON object, or the raw string
+   * when it was not valid JSON. Validate with `parseChatToolArguments` (`@littlelight/shared`)
+   * before executing. Never log (they contain the user's query).
+   */
   arguments: unknown;
 }
 
 export type ChatMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string; toolCalls?: ChatToolCall[] }
+  | {
+      role: "assistant";
+      content: string;
+      toolCalls?: ChatToolCall[];
+      /**
+       * Opaque provider output items of the call that produced this message
+       * (`ChatCompletion.providerItems`). Pass them back unchanged on the next call of the same
+       * turn: OpenAI needs its `reasoning` items (with `encrypted_content`) and `function_call`
+       * items echoed because requests use `store: false`. Never persisted, never logged.
+       */
+      providerItems?: unknown[];
+    }
   /** Tool output is data, never instructions (prompt-injection guardrail). */
   | { role: "tool"; toolCallId: string; content: string };
 
 export interface ChatToolDefinition {
   name: string;
   description: string;
-  /** JSON Schema for the arguments (generated from the tool's zod schema). */
-  parameters: Record<string, unknown>;
+  /** Strict JSON Schema for the arguments (`CHAT_TOOL_JSON_SCHEMAS` in `@littlelight/shared`). */
+  parameters: Readonly<Record<string, unknown>>;
 }
 
 export interface ChatOptions {
-  /** Defaults to `CHAT_REASONING_EFFORT`. */
+  /** Defaults to the adapter's configured effort (`CHAT_REASONING_EFFORT`, `low`). */
   reasoningEffort?: ReasoningEffort;
+  /** Defaults to the adapter's configured `CHAT_MAX_OUTPUT_TOKENS`. */
   maxOutputTokens?: number;
   /** Force or forbid tool use for this turn. Default `"auto"`. */
   toolChoice?: "auto" | "none" | "required";
+  /**
+   * Strict structured output instead of free text (the optional LLM re-rank): OpenAI
+   * `text.format = {type: "json_schema", name, schema, strict: true}`. `text` of the completion
+   * is then the JSON string; validate it with zod.
+   */
+  jsonSchema?: { name: string; schema: Readonly<Record<string, unknown>> };
+  /** Caller's cancellation (client went away); combined with the adapter's timeout. */
   signal?: AbortSignal;
 }
 
@@ -248,13 +272,23 @@ export type ChatFinishReason = "stop" | "tool_calls" | "length" | "content_filte
 
 export interface ChatCompletion {
   model: string;
+  /** Final assistant text (with citation markers as the model wrote them). Never log. */
   text: string;
   toolCalls: ChatToolCall[];
   finishReason: ChatFinishReason;
+  /** `costUsd` from the pinned price table, standard (real-time) tier. */
   usage: ModelUsage;
   latencyMs: number;
+  /** Opaque output items to echo back in `ChatMessage.providerItems` (see there). */
+  providerItems?: unknown[];
+  /** Provider response id (safe to log). */
+  responseId?: string;
 }
 
+/**
+ * Streaming events. `text_delta`s concatenate to `completion.text`; each `tool_call` is emitted
+ * once its arguments are complete; the last event is always `done`.
+ */
 export type ChatStreamEvent =
   | { type: "text_delta"; delta: string }
   | { type: "tool_call"; toolCall: ChatToolCall }
@@ -263,15 +297,19 @@ export type ChatStreamEvent =
 export interface ChatModel {
   readonly provider: VisionProvider;
   readonly model: string;
+  /** Non-streaming variant (the stream drained). */
   complete(
     messages: ChatMessage[],
-    tools: ChatToolDefinition[],
+    tools: readonly ChatToolDefinition[],
     options?: ChatOptions,
   ): Promise<ChatCompletion>;
-  /** Streaming variant; the last event is always `done` with the full completion. */
+  /**
+   * Streaming variant; the last event is always `done` with the full completion. Throws
+   * `AiProviderError` (status + short code, never a body) on provider failure or timeout.
+   */
   stream(
     messages: ChatMessage[],
-    tools: ChatToolDefinition[],
+    tools: readonly ChatToolDefinition[],
     options?: ChatOptions,
   ): AsyncIterable<ChatStreamEvent>;
 }
@@ -280,10 +318,25 @@ export interface ChatModel {
 // Embeddings
 // ---------------------------------------------------------------------------------------------
 
+/** Usage of one `embed` call (for the `ai_spend` ledger). */
+export interface EmbedUsage {
+  /** Billed input tokens (OpenAI `usage.prompt_tokens`; fake: `ceil(chars / 4)`). */
+  inputTokens: number;
+  /** From the pinned price table (standard tier); the fake prices like `text-embedding-3-small`. */
+  costUsd: number;
+}
+
+export interface EmbedResult {
+  /** One unit-length vector of `dims` per input, same order. */
+  vectors: number[][];
+  usage: EmbedUsage;
+}
+
 export interface Embedder {
+  /** `text-embedding-3-small`, or `fake` for the deterministic fake. */
   readonly model: string;
   /** Vector length; must equal the `photo_search.embedding` column (1024). */
   readonly dims: number;
-  /** One vector per input, same order. Inputs are search documents (~250 tokens each). */
-  embed(texts: string[]): Promise<number[][]>;
+  /** Inputs are search documents (~250 tokens each) or queries. Never log them. */
+  embed(texts: string[]): Promise<EmbedResult>;
 }

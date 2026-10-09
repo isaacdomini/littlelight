@@ -6,8 +6,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { useRouteActive } from "../auth/guards";
 import { AppHeader } from "../components/AppHeader";
-import { ChatPanePlaceholder } from "../components/ChatPanePlaceholder";
+import { ChatPanel } from "../components/chat/ChatPanel";
 import { Panes, useBreakpoint, useOnline } from "../components/layout/Panes";
+import { FilterChips } from "../components/search/FilterChips";
+import { SearchBar } from "../components/search/SearchBar";
+import { SearchResults } from "../components/search/SearchResults";
 import { BatchDetailsSheet } from "../components/timeline/BatchDetailsSheet";
 import { Scrubber } from "../components/timeline/Scrubber";
 import { TimelineGrid } from "../components/timeline/TimelineGrid";
@@ -28,6 +31,13 @@ import {
   useTimeline,
   useTimelineSummary,
 } from "../lib/queries/photos";
+import {
+  EMPTY_SEARCH,
+  hasSearch,
+  type SearchParams,
+  useSearch,
+  useSearchFacets,
+} from "../lib/queries/search";
 import { useProfileTimeZone } from "../lib/units";
 import { uploadManager } from "../lib/upload/manager";
 
@@ -48,6 +58,18 @@ export function TimelinePage() {
 
   const viewer = useViewerParam("/timeline");
   const milestoneId = viewer.params.get("milestone") ?? undefined;
+
+  // Search and filter chips (FR-7.5): admins only; paid babies search, free babies see the upsell.
+  const canSearch = FEATURES.chat && isAdmin;
+  const searchPaid = canSearch && baby?.plan !== "free";
+  const [searchParams, setSearchParams] = useState<SearchParams>(EMPTY_SEARCH);
+  const searching = searchPaid && hasSearch(searchParams);
+  const searchQuery = useSearch(babyId, searchParams, searching);
+  const facets = useSearchFacets(babyId, searchPaid);
+  const searchPhotos = useMemo(
+    () => (searching ? (searchQuery.data?.photos ?? []) : []),
+    [searching, searchQuery.data],
+  );
 
   const [view, setView] = useState<PhotosView>("album");
   const [jump, setJump] = useState<{ cursor?: string; nonce: number }>({ nonce: 0 });
@@ -202,7 +224,7 @@ export function TimelinePage() {
           <p className="text-sm opacity-80" data-testid="timeline-total" aria-live="polite">
             {baby ? tn("timeline.photoCount", total) : ""}
           </p>
-          {photos.length > 0 ? (
+          {photos.length > 0 && !searching ? (
             <Button
               variant={selectMode ? "primary" : "secondary"}
               data-testid="select-mode"
@@ -214,7 +236,30 @@ export function TimelinePage() {
           ) : null}
         </div>
 
-        {isAdmin ? (
+        {canSearch ? (
+          <div className="flex flex-col gap-2" data-testid="search-section">
+            <SearchBar
+              value={searchParams.q}
+              disabled={!searchPaid}
+              onChange={(q) => setSearchParams((p) => ({ ...p, q }))}
+            />
+            {searchPaid ? (
+              <FilterChips params={searchParams} facets={facets.data} onChange={setSearchParams} />
+            ) : null}
+            {searching ? (
+              <Button
+                variant="link"
+                className="self-start"
+                data-testid="search-clear-all"
+                onClick={() => setSearchParams(EMPTY_SEARCH)}
+              >
+                {t("search.clearAll")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {isAdmin && !searching ? (
           <div role="tablist" className="flex flex-wrap gap-2">
             <Button
               role="tab"
@@ -271,18 +316,29 @@ export function TimelinePage() {
         {!baby ? <p className="opacity-70">{t("timeline.noBaby")}</p> : null}
       </div>
 
-      {empty ? (
+      {searching ? (
+        <SearchResults
+          data={searchQuery.data}
+          loading={searchQuery.isFetching}
+          error={searchQuery.isError}
+          baby={baby ?? null}
+          timeZone={timeZone}
+          onOpen={onOpen}
+        />
+      ) : null}
+
+      {empty && !searching ? (
         <p className="px-3 opacity-70" data-testid="timeline-empty">
           {effectiveView === "pending" ? t("timeline.pendingEmpty") : t("timeline.empty")}
         </p>
       ) : null}
-      {baby && timeline.isPending && !timeline.isError ? (
+      {baby && timeline.isPending && !timeline.isError && !searching ? (
         <div className="flex justify-center p-6" role="status">
           <IonSpinner aria-label={t("common.loading")} />
         </div>
       ) : null}
 
-      {photos.length > 0 ? (
+      {photos.length > 0 && !searching ? (
         <div className="flex min-h-0 flex-1">
           <div className="min-h-0 min-w-0 flex-1">
             <TimelineGrid
@@ -373,14 +429,14 @@ export function TimelinePage() {
   const showViewer = active && !!viewer.photoId;
   const viewerNode = viewer.photoId ? (
     <PhotoViewer
-      photos={photos}
+      photos={searching ? searchPhotos : photos}
       photoId={viewer.photoId}
-      positionOffset={positionOffset}
-      total={total}
+      positionOffset={searching ? 0 : positionOffset}
+      total={searching ? searchPhotos.length : total}
       layout={breakpoint === "phone" ? "modal" : "inline"}
       onChange={viewer.change}
       onClose={viewer.close}
-      onEndReached={fetchNext}
+      onEndReached={searching ? undefined : fetchNext}
     />
   ) : null;
 
@@ -390,7 +446,7 @@ export function TimelinePage() {
       <IonContent scrollY={false}>
         <Panes
           breakpoint={breakpoint}
-          chat={<ChatPanePlaceholder />}
+          chat={<ChatPanel variant="pane" />}
           grid={grid}
           viewer={showViewer ? viewerNode : <ViewerEmpty />}
         />

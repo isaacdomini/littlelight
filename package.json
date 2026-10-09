@@ -19,6 +19,7 @@
     "e2e": "playwright test -c e2e/playwright.config.ts",
     "e2e:upload-gate": "tsx e2e/upload/gate.ts",
     "e2e:ai-gate": "tsx e2e/ai/gate.ts",
+    "e2e:search-gate": "tsx e2e/search/gate.ts",
     "e2e:perf": "playwright test -c e2e/playwright.perf.config.ts",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @littlelight/db db:migrate",
@@ -27,8 +28,11 @@
     "db:bootstrap": "pnpm --filter @littlelight/db db:bootstrap",
     "db:plan": "pnpm --filter @littlelight/db db:plan",
     "perf:seed": "pnpm --filter @littlelight/worker perf-seed",
+    "search:seed": "pnpm --filter @littlelight/worker search-seed",
+    "search:bench": "pnpm --filter @littlelight/api search-bench",
     "bakeoff": "pnpm --filter @littlelight/ai bakeoff",
-    "smoke": "bash e2e/smoke/dev-stack.sh"
+    "smoke": "bash e2e/smoke/dev-stack.sh",
+    "search:calibrate": "pnpm --filter @littlelight/worker search-calibrate"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "3.1147.0",

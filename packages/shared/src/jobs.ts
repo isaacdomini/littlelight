@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-// pg-boss job names (queues) and payloads (docs/plans/step-4.md 2.5, docs/plans/step-5.md 2.5).
+// pg-boss job names (queues) and payloads (docs/plans/step-4.md 2.5, docs/plans/step-5.md 2.5,
+// docs/plans/step-6.md 2.4, docs/plans/step-7.md 2.4).
 // The worker owns queue creation and scheduling; the API sends `photo.ingest` and
 // `photo.reindex`. Names live here so every producer
 // and consumer refers to one constant, never a string literal. Payloads carry ids and a time
@@ -31,6 +32,18 @@ export const JOBS = {
   aiPoll: "ai.poll",
   /** On demand: upgrade backfill, prompt/schema version backfill or a manual forced flush (`aiBackfillJobSchema`). */
   aiBackfill: "ai.backfill",
+  /**
+   * Cron `SEARCH_RECONCILE_CRON` (default `17 * * * *`), singleton, no payload
+   * (`searchReconcileJobSchema`): re-indexes stale/missing `photo_search` rows of paid babies
+   * (`search_stale_photos()`) and deletes orphans (docs/plans/step-7.md 2.6).
+   */
+  searchReconcile: "search.reconcile",
+  /**
+   * On demand (`searchBackfillJobSchema`, singleton key `babyId ?? "all"`): after a plan upgrade
+   * (sent when the `ai.backfill` upgrade completes), after an embedding model / search document
+   * version change, or by an operator.
+   */
+  searchBackfill: "search.backfill",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -142,3 +155,32 @@ export const aiBackfillJobSchema = z
     message: "required for an upgrade backfill",
   });
 export type AiBackfillJob = z.infer<typeof aiBackfillJobSchema>;
+
+/** `search.reconcile` payload: none (cron ticks send no data; handlers parse `job.data ?? {}`). */
+export const searchReconcileJobSchema = z.strictObject({});
+export type SearchReconcileJob = z.infer<typeof searchReconcileJobSchema>;
+
+/**
+ * `search.backfill` reasons: `upgrade` (FR-5.8: search follows a plan upgrade; names the baby),
+ * `model` (every row whose `embed_model`/`doc_version` differ from the current ones, after an
+ * `EMBED_MODEL` or `SEARCH_DOC_VERSION` change), `manual` (operator/gate: a plain reconcile, for one
+ * baby or all).
+ */
+export const SEARCH_BACKFILL_REASONS = ["upgrade", "model", "manual"] as const;
+export const searchBackfillReasonSchema = z.enum(SEARCH_BACKFILL_REASONS);
+export type SearchBackfillReason = z.infer<typeof searchBackfillReasonSchema>;
+
+/**
+ * `search.backfill` payload: an optional baby id and a reason (strict). The indexer still checks
+ * `baby_ai_enabled` per photo in SQL: this payload can never index a free-tier baby.
+ */
+export const searchBackfillJobSchema = z
+  .strictObject({
+    babyId: z.uuid().optional(),
+    reason: searchBackfillReasonSchema,
+  })
+  .refine((job) => job.reason !== "upgrade" || job.babyId !== undefined, {
+    path: ["babyId"],
+    message: "required for an upgrade backfill",
+  });
+export type SearchBackfillJob = z.infer<typeof searchBackfillJobSchema>;

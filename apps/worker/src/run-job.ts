@@ -6,19 +6,29 @@ import {
   JOBS,
   type JobName,
   reindexJobSchema,
+  searchBackfillJobSchema,
+  searchReconcileJobSchema,
 } from "@littlelight/shared";
 import { PgBoss } from "pg-boss";
-import { createAiPipeline } from "./ai";
-import { aiPipelineConfig, createAiRuntime } from "./ai-runtime";
+import { createAiPipeline, createSearchIndexer } from "./ai";
+import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig } from "./config";
 import { ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
 import { purgeTrash } from "./purge";
-import { sendAiBackfill, sendAiFlush, sendIngest, sendReindex } from "./queues";
+import {
+  chainSearchBackfill,
+  SEARCH_RECONCILE_SEND_OPTIONS,
+  sendAiBackfill,
+  sendAiFlush,
+  sendIngest,
+  sendReindex,
+  sendSearchBackfill,
+} from "./queues";
 import { reconcileIngest } from "./reconcile";
-import { handleReindexJob } from "./reindex";
+import { handleReindexJobs } from "./reindex";
 import { createStorage } from "./storage";
 import { sweepUploads } from "./uploads-sweep";
 
@@ -28,15 +38,20 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job uploads.sweep
 //   pnpm --filter @littlelight/worker run-job ingest.reconcile
 //   pnpm --filter @littlelight/worker run-job photo.ingest '{"photoId":"…","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"details"}'
+//   pnpm --filter @littlelight/worker run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"backfill"}'
 //   pnpm --filter @littlelight/worker run-job ai.flush ['{"force":true,"babyId":"…"}']
 //   pnpm --filter @littlelight/worker run-job ai.poll
 //   pnpm --filter @littlelight/worker run-job ai.backfill '{"babyId":"…","reason":"upgrade"}'
+//   pnpm --filter @littlelight/worker run-job search.reconcile
+//   pnpm --filter @littlelight/worker run-job search.backfill '{"babyId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
 //   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
+//   pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
 //
 // The AI jobs run in-process with this process's AI env (`VISION_PROVIDER`, keys): without a
-// provider, flush/poll print `{skipped: true}`. Run them inside the worker container
+// provider, flush/poll print `{skipped: true}`, and the search jobs (`photo.reindex`,
+// `search.reconcile`, `search.backfill`) write rows without vectors (keyword-only). An in-process
+// `ai.backfill` with `reason: "upgrade"` enqueues the `search.backfill` follow-up like the worker. Run them inside the worker container
 // (`docker compose exec -T worker pnpm --silent --filter @littlelight/worker run-job ai.poll`) to
 // share its env, e.g. the fake provider's `FAKE_VISION_DIR` state across processes.
 //
@@ -122,6 +137,16 @@ async function main(argv: string[]): Promise<number> {
         case JOBS.aiPoll:
           result = { jobId: await b.send(name, aiPollJobSchema.parse(payload)) };
           break;
+        case JOBS.searchReconcile:
+          result = {
+            jobId: await b.send(name, searchReconcileJobSchema.parse(payload), {
+              ...SEARCH_RECONCILE_SEND_OPTIONS,
+            }),
+          };
+          break;
+        case JOBS.searchBackfill:
+          result = { jobId: await sendSearchBackfill(b, searchBackfillJobSchema.parse(payload)) };
+          break;
         default:
           result = { jobId: await b.send(name, {}) };
       }
@@ -147,10 +172,26 @@ async function main(argv: string[]): Promise<number> {
           );
           break;
         }
-        case JOBS.reindex: {
+        case JOBS.reindex:
+        case JOBS.searchReconcile:
+        case JOBS.searchBackfill: {
           // Strict parse first so a bad payload is a usage error (exit 1), not a silent drop.
-          const job = reindexJobSchema.parse(payload);
-          result = await handleReindexJob({ log }, { id: "run-job", data: job });
+          const reindexJob = name === JOBS.reindex ? reindexJobSchema.parse(payload) : undefined;
+          const backfillJob =
+            name === JOBS.searchBackfill ? searchBackfillJobSchema.parse(payload) : undefined;
+          if (name === JOBS.searchReconcile) searchReconcileJobSchema.parse(payload);
+          const ai = createAiRuntime(process.env, log);
+          const indexer = createSearchIndexer({
+            pool,
+            embedder: ai.embedder,
+            config: searchIndexerConfig(config, process.env, ai.embedder),
+            log,
+          });
+          result = reindexJob
+            ? await handleReindexJobs({ indexer, log }, [{ id: "run-job", data: reindexJob }])
+            : backfillJob
+              ? await indexer.backfill(backfillJob)
+              : await indexer.reconcile();
           break;
         }
         case JOBS.aiFlush:
@@ -171,11 +212,19 @@ async function main(argv: string[]): Promise<number> {
             sendReindex: async (job) => sendReindex(await getBoss(), job),
             log,
           });
-          result = flushJob
-            ? await pipeline.flush(flushJob)
-            : backfillJob
-              ? await pipeline.backfill(backfillJob)
-              : await pipeline.poll();
+          if (flushJob) {
+            result = await pipeline.flush(flushJob);
+          } else if (backfillJob) {
+            const backfill = await pipeline.backfill(backfillJob);
+            const searchBackfillJobId = await chainSearchBackfill(
+              { log, sendSearchBackfill: async (job) => sendSearchBackfill(await getBoss(), job) },
+              backfillJob,
+            );
+            result =
+              backfillJob.reason === "upgrade" ? { ...backfill, searchBackfillJobId } : backfill;
+          } else {
+            result = await pipeline.poll();
+          }
           break;
         }
       }

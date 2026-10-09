@@ -45,10 +45,20 @@
 #   GOTRUE_EXTERNAL_GOOGLE_ENABLED=true GOOGLE_CLIENT_ID=<web client id> \
 #   GOOGLE_CLIENT_SECRET=<secret> docker compose -f docker-compose.dev.yml up
 # (register http://localhost:${WEB_PORT:-8080}/auth/callback as the client's redirect URI).
-# AI (docs/plans/step-6.md 2.10): paid tier only. Put OPENAI_API_KEY (and optionally
-# ANTHROPIC_API_KEY) in the git-ignored .env.local; only the worker receives them (blanked on
-# migrate, api and web). No key => the worker logs "AI disabled: OPENAI_API_KEY not set" and
-# stays healthy. Keyless full pipeline: VISION_PROVIDER=fake, see the worker service.
+# AI (docs/plans/step-6.md 2.10, docs/plans/step-7.md 2.11): paid tier only. Put OPENAI_API_KEY
+# (and optionally ANTHROPIC_API_KEY) in the git-ignored .env.local. The worker (vision batches,
+# document embeddings) and the api (chat, query embeddings) hold OPENAI_API_KEY;
+# ANTHROPIC_API_KEY reaches the worker only; migrate and web get neither (blanked). No key =>
+# both log "AI disabled: ..." and stay healthy; search falls back to keyword + filters and chat
+# answers "not configured". Keyless full stack (fake vision, fake chat model, fake embedder):
+#   VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0 \
+#     docker compose -f docker-compose.dev.yml up -d --no-deps api worker
+# VISION_PROVIDER is the single provider switch for both services (step-7 D12); a plain `up`
+# afterwards puts both back on openai.
+# Chat streams over SSE (POST /api/babies/<id>/chat/messages, text/event-stream). The Vite dev
+# proxy (apps/mobile-web/vite.config.ts, frontend-owned) streams proxied responses unbuffered by
+# default, so dev needs no proxy setting; production nginx disables buffering on that path only
+# (docker/nginx/default.conf).
 name: littlelight-dev
 
 x-dev: &dev
@@ -124,12 +134,18 @@ x-dev-app-env: &dev-app-env
   S3_PUBLIC_ENDPOINT: *dev-s3-public-endpoint
   DATA_ENCRYPTION_KEY: *dev-data-encryption-key
 
-# AI provider keys (docs/plans/step-6.md 2.1, 2.10): only the worker may hold them. .env.local is
-# an env_file of migrate, api, worker and web, so a key put there would reach all four; these
-# blanks (`environment:` beats env_file) strip it from every service except the worker. The apps
-# treat "" as unset.
+# AI provider keys (docs/plans/step-6.md 2.1, docs/plans/step-7.md 2.11). .env.local is an
+# env_file of migrate, api, worker and web, so a key put there would reach all four; these
+# blanks (`environment:` beats env_file) strip it where it does not belong. The apps treat "" as
+# unset.
+#   worker  OPENAI_API_KEY + ANTHROPIC_API_KEY   (no blanks)
+#   api     OPENAI_API_KEY only                  (*dev-no-anthropic-key)
+#   migrate, web: neither                        (*dev-no-ai-keys)
 x-dev-no-ai-keys: &dev-no-ai-keys
   OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+
+x-dev-no-anthropic-key: &dev-no-anthropic-key
   ANTHROPIC_API_KEY: ""
 
 services:
@@ -354,7 +370,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/api", "dev"]
     init: true
     environment:
-      <<: [*dev-app-env, *dev-no-ai-keys]
+      <<: [*dev-app-env, *dev-no-anthropic-key]
       DATABASE_URL: *dev-api-db-url
       # Bucket-scoped MinIO user (no delete, no versions, no admin); see storage-init.
       S3_ACCESS_KEY: *dev-s3-api-access-key
@@ -375,6 +391,14 @@ services:
       SMTP_PORT: *dev-smtp-port
       SMTP_SECURE: "false"
       MAIL_FROM: *dev-mail-from
+      # Search + chat (docs/plans/step-7.md 2.9, 2.11). OPENAI_API_KEY comes from .env.local (no
+      # key => "AI disabled: ..." at boot, keyword-only search, chat answers 409 "not
+      # configured"); CHAT_*, EMBED_* and SEARCH_* come from .env.dev / .env.local.
+      # VISION_PROVIDER is the same Compose INTERPOLATION variable as on the worker (shell or the
+      # git-ignored project `.env`, not .env.local); `fake` selects the fake chat model and the
+      # fake embedder here (no key, no network):
+      #   VISION_PROVIDER=fake docker compose -f docker-compose.dev.yml up -d --no-deps api worker
+      VISION_PROVIDER: ${VISION_PROVIDER:-openai}
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -421,16 +445,18 @@ services:
       # tsx, so only the imported source graph is polled. Override from the shell if needed.
       CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-1}
       CHOKIDAR_INTERVAL: ${CHOKIDAR_INTERVAL:-500}
-      # AI batch pipeline (docs/plans/step-6.md 2.10, D6). The worker is the only service that
-      # gets OPENAI_API_KEY / ANTHROPIC_API_KEY (from .env.local; without one AI is skipped with a
-      # log line and nothing fails). The other AI_* settings come from .env.dev / .env.local.
-      # These two are Compose INTERPOLATION variables (like INGEST_CONCURRENCY): export them in
-      # the shell or put them in the git-ignored project `.env`; .env.local cannot change them,
-      # because `environment:` beats env_file even when the value is empty. Keyless full run
-      # (fake provider, flush on every 5-minute tick), restarting only the worker:
+      # AI batch pipeline + search indexer (docs/plans/step-6.md 2.10, D6; docs/plans/step-7.md
+      # 2.11). The worker gets OPENAI_API_KEY / ANTHROPIC_API_KEY from .env.local (the api gets
+      # OPENAI_API_KEY too; without a key AI and embeddings are skipped with a log line and
+      # nothing fails). The other AI_* / EMBED_* / SEARCH_* settings come from .env.dev /
+      # .env.local. These two are Compose INTERPOLATION variables (like INGEST_CONCURRENCY):
+      # export them in the shell or put them in the git-ignored project `.env`; .env.local cannot
+      # change them, because `environment:` beats env_file even when the value is empty. Keyless
+      # full run (fake provider, flush on every 5-minute tick); recreate the api too so chat and
+      # query embeddings use the same fake provider:
       #   VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0 \
-      #     docker compose -f docker-compose.dev.yml up -d --no-deps worker
-      # A plain `up` afterwards puts the worker back on openai / 30 minutes.
+      #     docker compose -f docker-compose.dev.yml up -d --no-deps api worker
+      # A plain `up` afterwards puts both back on openai (and the worker on 30 minutes).
       VISION_PROVIDER: ${VISION_PROVIDER:-openai}
       AI_BATCH_FLUSH_MINUTES: ${AI_BATCH_FLUSH_MINUTES:-30}
       # Fake provider only: request lines minus image bytes (photo ids, context field lengths),

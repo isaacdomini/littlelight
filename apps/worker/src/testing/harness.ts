@@ -134,6 +134,11 @@ export interface Harness {
   startMultipart(key: string): Promise<string>;
   openMultipartIds(prefix: string): Promise<string[]>;
   one<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | undefined>;
+  /** Insert a `photo_exif` row with encrypted GPS (the data key stays inside the harness). */
+  insertEncryptedExif(
+    photoId: string,
+    o: { takenAt: string; tzOffsetMinutes: number; lat: number; lng: number; placeLabel: string },
+  ): Promise<void>;
   /** Decrypt a stored coordinate ciphertext as the superuser with the data key set. */
   decrypt(
     table: "photo_exif",
@@ -326,6 +331,22 @@ export async function createHarness(): Promise<Harness> {
         new ListMultipartUploadsCommand({ Bucket: env.bucket, Prefix: prefix }),
       );
       return (r.Uploads ?? []).flatMap((u) => (u.UploadId ? [u.UploadId] : []));
+    },
+
+    async insertEncryptedExif(photoId, o) {
+      await admin.query("BEGIN");
+      try {
+        await admin.query("SELECT set_config('app.data_key', $1, true)", [env.dataKey]);
+        await admin.query(
+          `INSERT INTO public.photo_exif (photo_id, taken_at, tz_offset_minutes, gps_lat_enc, gps_lng_enc, place_label)
+           VALUES ($1, $2, $3, public.encrypt_coord($4::float8), public.encrypt_coord($5::float8), $6)`,
+          [photoId, o.takenAt, o.tzOffsetMinutes, o.lat, o.lng, o.placeLabel],
+        );
+        await admin.query("COMMIT");
+      } catch (err) {
+        await admin.query("ROLLBACK");
+        throw err;
+      }
     },
 
     async decrypt(_table, photoId) {

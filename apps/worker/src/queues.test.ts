@@ -198,8 +198,10 @@ describe("queue definitions", () => {
       AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
       AI_POLL_INTERVAL_CRON: "*/10 * * * *",
     });
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(6);
     for (const c of calls) expect(c[3]).toEqual({ tz: "UTC" });
+    // Search reconcile falls back to the shared default when the config omits it.
+    expect(calls.map((c) => [c[0], c[1]])).toContainEqual([JOBS.searchReconcile, "17 * * * *"]);
     expect(calls.map((c) => [c[0], c[1]])).toContainEqual([JOBS.aiFlush, "*/5 * * * *"]);
     expect(calls.map((c) => [c[0], c[1]])).toContainEqual([JOBS.aiPoll, "*/10 * * * *"]);
   });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { STRICT_JSON_SCHEMA_FORBIDDEN_KEYWORDS, toStrictJsonSchema } from "./json-schema";
 
 // Structured photo description, schema v1 (PRD "AI pipeline" → "Structured description schema
 // (v1)", FR-5.3; docs/plans/step-6.md 2.4). Browser-safe: only `zod`.
@@ -216,65 +217,12 @@ const aiDescriptionV1SchemaForProviders = z.strictObject(buildShape("provider"))
 // Provider JSON Schema (strict structured output)
 // ---------------------------------------------------------------------------------------------
 
-/** Keywords neither strict mode accepts (or that we keep out to stay portable). */
-export const AI_JSON_SCHEMA_FORBIDDEN_KEYWORDS = [
-  "minLength",
-  "maxLength",
-  "minimum",
-  "maximum",
-  "exclusiveMinimum",
-  "exclusiveMaximum",
-  "multipleOf",
-  "pattern",
-  "format",
-  "maxItems",
-  "uniqueItems",
-  "default",
-] as const;
-
-type JsonObject = { [key: string]: unknown };
-
-function isJsonObject(v: unknown): v is JsonObject {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-/** `anyOf: [{type: T, ...}, {type: "null"}]` → `{type: [T, "null"], ...}` (zod 4.6 already does this). */
-function collapseNullableAnyOf(node: JsonObject): JsonObject {
-  const anyOf = node.anyOf;
-  if (!Array.isArray(anyOf) || anyOf.length !== 2) return node;
-  const nullIdx = anyOf.findIndex((s) => isJsonObject(s) && s.type === "null");
-  if (nullIdx < 0) return node;
-  const other = anyOf[1 - nullIdx];
-  if (!isJsonObject(other) || typeof other.type !== "string" || "enum" in other) return node;
-  const { anyOf: _drop, ...rest } = node;
-  return { ...rest, ...other, type: [other.type, "null"] };
-}
-
-function postProcess(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(postProcess);
-  if (!isJsonObject(node)) return node;
-  let out: JsonObject = collapseNullableAnyOf(node);
-  out = Object.fromEntries(
-    Object.entries(out)
-      .filter(([k]) => k !== "$schema" && k !== "$id")
-      .filter(([k]) => !(AI_JSON_SCHEMA_FORBIDDEN_KEYWORDS as readonly string[]).includes(k))
-      .map(([k, val]) => [k, postProcess(val)]),
-  );
-  if (typeof out.minItems === "number" && out.minItems > 1) out.minItems = 1;
-  if (out.type === "object" && isJsonObject(out.properties)) {
-    out.required = Object.keys(out.properties);
-    out.additionalProperties = false;
-  }
-  return out;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value === "object" && value !== null) {
-    for (const v of Object.values(value)) deepFreeze(v);
-    Object.freeze(value);
-  }
-  return value;
-}
+/**
+ * Keywords neither strict mode accepts (or that we keep out to stay portable). Alias of
+ * `STRICT_JSON_SCHEMA_FORBIDDEN_KEYWORDS` (the post-processor lives in `json-schema.ts` since
+ * step 7; behaviour and output bytes unchanged).
+ */
+export const AI_JSON_SCHEMA_FORBIDDEN_KEYWORDS = STRICT_JSON_SCHEMA_FORBIDDEN_KEYWORDS;
 
 /**
  * JSON Schema (draft 2020-12 subset) for providers' strict structured output: OpenAI
@@ -282,13 +230,8 @@ function deepFreeze<T>(value: T): T {
  * and Anthropic `output_config.format = {type: "json_schema", schema}`. Generated once at module
  * load, deep-frozen. Keep it byte-identical across requests (it is part of the cached prefix).
  */
-export const AI_DESCRIPTION_V1_JSON_SCHEMA: Readonly<Record<string, unknown>> = deepFreeze(
-  postProcess(
-    z.toJSONSchema(aiDescriptionV1SchemaForProviders, {
-      target: "draft-2020-12",
-      unrepresentable: "any",
-    }),
-  ) as Record<string, unknown>,
+export const AI_DESCRIPTION_V1_JSON_SCHEMA: Readonly<Record<string, unknown>> = toStrictJsonSchema(
+  aiDescriptionV1SchemaForProviders,
 );
 
 // ---------------------------------------------------------------------------------------------

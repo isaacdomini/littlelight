@@ -126,6 +126,16 @@ export function backfillHint(babyId: string): string {
 }
 
 /**
+ * Hint printed after an upgrade (docs/plans/step-7.md 2.7): the search index follows the plan.
+ * The `ai.backfill` upgrade job chains `search.backfill` itself once it completes; this line
+ * indexes the baby's photos right away (documents without AI descriptions are refreshed again
+ * when the descriptions land).
+ */
+export function searchBackfillHint(babyId: string): string {
+  return `pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"${babyId}","reason":"upgrade"}'`;
+}
+
+/**
  * Apply the plan change. Throws (after ROLLBACK) when the baby is missing/trashed, when the
  * owner is not an admin of the baby, or when the resulting row does not carry the requested plan.
  */
@@ -211,6 +221,8 @@ export async function setPlan(
         "db:plan: AI eligibility is on; the regular flush describes existing photos within one batch window, or enqueue the backfill now:",
       );
       log(`  ${backfillHint(args.babyId)}`);
+      log("db:plan: search follows the AI backfill automatically; to index the photos now:");
+      log(`  ${searchBackfillHint(args.babyId)}`);
     } else {
       log(
         "db:plan: AI, search and chat are off for this baby (baby_ai_enabled = false); existing photo_ai rows stay but no photo can enter a batch.",

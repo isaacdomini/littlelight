@@ -12,7 +12,9 @@ import { errorCategory } from "./clients";
 // Runs directly as `littlelight_worker` (direct grant + policy on this table; no SET ROLE).
 // Step 6 (docs/plans/step-6.md 2.6, 2.7): `details.aiQueueAgeMin` from an optional sampler
 // (`createAiQueueAgeSampler`, at most one query per minute) that also raises the PRD's
-// "queue age > 2 h" alert as a `warn` once, and an `info` when it clears.
+// "queue age > 2 h" alert as a `warn` once, and an `info` when it clears. Step 7
+// (docs/plans/step-7.md 2.7): `details.searchStale` / `details.searchUnembedded` from the search
+// indexer's `stats()`, sampled at most once per 5 minutes (`createSearchStatsSampler`).
 
 /** Unique per container (`--scale worker=3` gives each replica its own hostname). */
 export function workerId(): string {
@@ -48,6 +50,17 @@ export interface HeartbeatDeps {
    * `details.aiQueueAgeMin` (docs/plans/step-6.md 2.7).
    */
   aiQueueAge?: () => Promise<number | undefined>;
+  /**
+   * Photos whose search row is missing/stale and rows without a vector (counts only);
+   * undefined = the sample failed. Reported as `details.searchStale` / `details.searchUnembedded`
+   * (docs/plans/step-7.md 2.7).
+   */
+  searchStats?: () => Promise<SearchStats | undefined>;
+}
+
+export interface SearchStats {
+  stale: number;
+  unembedded: number;
 }
 
 export interface HeartbeatResult {
@@ -57,6 +70,8 @@ export interface HeartbeatResult {
   storageLatencyMs: number;
   diskUsedPct?: number;
   aiQueueAgeMin?: number;
+  searchStale?: number;
+  searchUnembedded?: number;
 }
 
 /** Storage reachable: refresh `last_seen_at`. */
@@ -134,11 +149,19 @@ export async function beatOnce(deps: HeartbeatDeps): Promise<HeartbeatResult> {
     ? await deps.aiQueueAge().catch(() => undefined)
     : undefined;
   if (aiQueueAgeMin !== undefined) result.aiQueueAgeMin = aiQueueAgeMin;
+  const search = deps.searchStats ? await deps.searchStats().catch(() => undefined) : undefined;
+  if (search !== undefined) {
+    result.searchStale = search.stale;
+    result.searchUnembedded = search.unembedded;
+  }
   const details = {
     storageLatencyMs: result.storageLatencyMs,
     ...(result.storageOk ? {} : { storageError: result.storageError }),
     ...(diskUsedPct !== undefined ? { diskUsedPct } : {}),
     ...(aiQueueAgeMin !== undefined ? { aiQueueAgeMin } : {}),
+    ...(search !== undefined
+      ? { searchStale: search.stale, searchUnembedded: search.unembedded }
+      : {}),
   };
   await deps.db.query(result.storageOk ? UPSERT_OK_SQL : UPSERT_STORAGE_DOWN_SQL, [
     deps.workerId,
@@ -263,6 +286,44 @@ export function createAiQueueAgeSampler(
       return cached;
     } catch (err) {
       opts.log.debug({ db: errorCategory(err) }, "ai: queue age sample failed");
+      cached = undefined;
+      return undefined;
+    }
+  };
+}
+
+export interface SearchStatsSamplerOptions {
+  /** `createSearchIndexer(...).stats()` (docs/plans/step-7.md 2.6). */
+  stats: () => Promise<SearchStats>;
+  log: Pick<HeartbeatLogger, "debug">;
+  /** Minimum time between two queries (default 5 minutes); the cached value is returned in between. */
+  minIntervalMs?: number;
+  now?: () => number;
+}
+
+/**
+ * Heartbeat dep for `details.searchStale` / `details.searchUnembedded`: calls `stats()` at most
+ * once per `minIntervalMs` (default 5 min; the heartbeat beats every 10 s and the stale query
+ * scans the baby's photos). A failed sample resolves undefined (logged at debug by category)
+ * until the next sample.
+ */
+export function createSearchStatsSampler(
+  opts: SearchStatsSamplerOptions,
+): () => Promise<SearchStats | undefined> {
+  const minIntervalMs = opts.minIntervalMs ?? 300_000;
+  const now = opts.now ?? Date.now;
+  let sampledAt = Number.NEGATIVE_INFINITY;
+  let cached: SearchStats | undefined;
+
+  return async () => {
+    if (now() - sampledAt < minIntervalMs) return cached;
+    sampledAt = now();
+    try {
+      const s = await opts.stats();
+      cached = { stale: s.stale, unembedded: s.unembedded };
+      return cached;
+    } catch (err) {
+      opts.log.debug({ db: errorCategory(err) }, "search: stats sample failed");
       cached = undefined;
       return undefined;
     }

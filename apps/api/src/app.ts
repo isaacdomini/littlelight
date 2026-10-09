@@ -1,4 +1,6 @@
 import cookie from "@fastify/cookie";
+import type { AiEnvInput } from "@littlelight/ai";
+import { AI_PIPELINE_DEFAULTS } from "@littlelight/shared";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import {
   serializerCompiler,
@@ -7,19 +9,22 @@ import {
 } from "fastify-type-provider-zod";
 import pkg from "../package.json" with { type: "json" };
 import { createGoTrueClient, type GoTrueClient, registerAuth } from "./auth";
-import type { ApiConfig } from "./config";
+import { chatRoutes } from "./chat";
+import { type ApiConfig, chatSettings, searchSettings } from "./config";
 import { createSmtpMailer, type Mailer } from "./email/mailer";
 import { registerErrorHandling } from "./lib/errors";
 import { measurementsRoutes } from "./measurements/routes";
 import { milestonesRoutes } from "./milestones/routes";
 import { aiRoutes } from "./photos/ai-routes";
 import { photosRoutes } from "./photos/routes";
+import { type AiServices, createAiServices, registerAi } from "./plugins/ai";
 import { createPool, type DbClient, registerDb } from "./plugins/db";
 import { createJobQueue, type JobQueue, registerJobs, sendOnlyBoss } from "./plugins/jobs";
 import { createS3Client, registerStorage, type StorageClient } from "./plugins/storage";
 import { babiesRoutes } from "./routes/babies";
 import { healthzRoutes } from "./routes/healthz";
 import { meRoutes } from "./routes/me";
+import { type SearchChatDeps, searchRoutes } from "./search";
 import { createUrlSigner, type UrlSigner } from "./storage/sign";
 import { uploadsRoutes } from "./uploads/routes";
 
@@ -48,6 +53,13 @@ export interface BuildAppOptions {
   mailer?: Mailer;
   /** Override the GoTrue client (tests pass a stub). */
   gotrue?: GoTrueClient;
+  /**
+   * Override the chat model / embedder (tests pass fakes). Default: built once from `aiEnv` by
+   * `@littlelight/ai`'s factories (docs/plans/step-7.md 2.9).
+   */
+  ai?: AiServices;
+  /** Env for the AI factories when `ai` is not given (default `process.env`). */
+  aiEnv?: AiEnvInput;
   /** Override logger options (tests usually pass `false`). */
   logger?: FastifyServerOptions["logger"];
 }
@@ -102,6 +114,13 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         "req.body.caption",
         "req.body.detailed_description",
         "req.body.search_tags",
+        // Step 7: chat messages and search queries (docs/plans/step-7.md 2.8, 2.9). The request
+        // serializer below already drops bodies and query strings; these keep it that way if a
+        // handler ever logs `req` with its body or parsed query.
+        "req.body.text",
+        "req.body.content",
+        "req.body.question",
+        "req.query.q",
       ],
       censor: "[redacted]",
     },
@@ -142,6 +161,19 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
   measurementsRoutes(app);
   // Step 6: AI overrides, retry, usage (docs/plans/step-6.md 2.8).
   aiRoutes(app);
+  // Step 7: hybrid search + facets, chat (docs/plans/step-7.md 2.8). Both gate on admin + paid
+  // tier before any model or embedding call; `app.ai` holds the (possibly null) clients.
+  const searchChat: SearchChatDeps = {
+    ai: app.ai,
+    settings: {
+      ...searchSettings(config),
+      ...chatSettings(config),
+      AI_BABY_MONTHLY_BUDGET_USD:
+        config.AI_BABY_MONTHLY_BUDGET_USD ?? AI_PIPELINE_DEFAULTS.AI_BABY_MONTHLY_BUDGET_USD,
+    },
+  };
+  searchRoutes(app, searchChat);
+  chatRoutes(app, searchChat);
 }
 
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */
@@ -151,6 +183,10 @@ export async function buildApp(opts: BuildAppOptions) {
     logger: opts.logger ?? loggerOptions(config),
     // nginx (prod) / Vite (dev) are the only hops in front of us; port 3000 is never public.
     trustProxy: true,
+    // Longer than nginx's upstream keepalive and cloudflared's idle limits, so the proxy (not
+    // the API) always closes an idle connection first (docs/plans/step-7.md 2.9, R6). Fastify's
+    // `requestTimeout` stays 0: a chat SSE turn is bounded by CHAT_MODEL_TIMEOUT_MS × rounds.
+    keepAliveTimeout: 125_000,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -170,6 +206,7 @@ export async function buildApp(opts: BuildAppOptions) {
     opts.jobs ?? createJobQueue({ log: app.log, createBoss: () => sendOnlyBoss(config) }),
   );
   app.decorate("mailer", opts.mailer ?? createSmtpMailer(config, app.log));
+  registerAi(app, opts.ai ?? createAiServices(opts.aiEnv ?? process.env, app.log));
 
   registerAuth(app, {
     gotrue: opts.gotrue ?? createGoTrueClient(config),

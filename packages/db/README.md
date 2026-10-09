@@ -494,7 +494,8 @@ on a free row so that trigger cannot turn the new grant back into `free`) and
 `entitlement_expires_at`; appends `audit_log` `baby.plan_changed` (`actor_user_id` NULL, metadata
 `{plan}` + `target_user_id` when an owner was named); prints ids and the plan only, plus the
 backfill hint `pnpm --filter @littlelight/worker run-job --enqueue ai.backfill
-'{"babyId":"…","reason":"upgrade"}'`. Exit 0 done, 1 refused/failed, 2 usage. `src/tools/set-plan.ts`
+'{"babyId":"…","reason":"upgrade"}'` (step 7 adds the `search.backfill` line, `searchBackfillHint`;
+the `ai.backfill` upgrade job also chains it). Exit 0 done, 1 refused/failed, 2 usage. `src/tools/set-plan.ts`
 imports only `pg` and this package's `env`/`redact` helpers (the migrate image holds nothing
 else); `setPlan` / `parseSetPlanArgs` are exported for tests.
 
@@ -504,6 +505,145 @@ demo `ai_batches` row (`…-000000000500`: 1,400/700/400 tokens, `cost_usd 0.000
 `files_deleted_at` set) with one `succeeded` `ai_batch_items` row, so the API's `ai` block and the
 usage endpoint have data; that photo is seeded with `status = 'ready'` (the other eleven stay
 `ingested`). Still idempotent.
+
+## Search and chat (step 7)
+
+Migration `1792000000100_search-and-chat.sql` (docs/plans/step-7.md 2.3). RLS stays ENABLE + FORCE
+on every table (two new ones: `ai_spend`, `chat_turns`). `viewer` gains nothing; `pipeline` gains
+only `ai_spend` (embed rows), EXECUTE on `search_stale_photos` / `photo_search_orphans` /
+`lower_text_array`, and needs no data key for any of it. Every error message below is fixed text.
+
+**`photo_search` columns.** `doc_version` (`SEARCH_DOC_VERSION`), `content_hash` (sha256 hex of
+`search_text`; equal hash ⇒ no embedding call; NULL ⇒ rebuild), `embedded_at`, `place` (lower-cased
+`photo_details.location_label`, else `photo_exif.place_label`; never coordinates). `taken_at` is
+`photos.sort_at` at index time. Unchanged from step 2: `embedding vector(1024)` with HNSW
+`vector_cosine_ops` (m 16, ef_construction 64), GIN on `tsv` and `tags`. New indexes:
+`photo_search_unembedded_idx (baby_id) WHERE embedding IS NULL`, `photo_search_baby_id_place_idx`,
+`photo_search_people_lower_idx USING gin (lower_text_array(people))`. `lower_text_array(text[])` is
+IMMUTABLE (lower() per element, order kept, `{}` for empty).
+
+**Who may read `photo_search` (policy rewrite, plan D8).** `search_baby_ids()` (SETOF uuid, STABLE,
+SECURITY DEFINER, `authenticated`/`service_role`) = `admin_baby_ids()` filtered by
+`baby_ai_enabled`. The SELECT policy is `baby_id = ANY (ARRAY(SELECT public.search_baby_ids()))`:
+admins of a paid baby see its rows; contributors, viewers (no grant), strangers, admins of a free
+baby or an expired entitlement see 0. Why the ARRAY form rather than step 5's `IN (SELECT ...)`: a
+hashed SubPlan is estimated at 50 % selectivity, which made the planner prefer a sequential scan +
+sort over the HNSW index; the InitPlan array gives a real estimate and `uuid = ANY(array)` is
+leakproof, so it is also a btree Index Cond. `photo_visible(photo_id)` left the policy (three
+SECURITY DEFINER calls per row); liveness is a write-time rule instead (guard + cleanup below) and
+the API still joins `photos` (its own RLS). The down migration restores the step-2 policy verbatim.
+
+**The GIN legs under RLS: candidate functions.** Postgres never turns a non-leakproof user qual into
+an index qual on a table with RLS (`restriction_is_securely_promotable`), and `tsvector @@ tsquery`
+(`ts_match_vq`) and `anyarray && anyarray` (`arrayoverlap`) are not leakproof. As `authenticated`
+the full-text and tag/people legs therefore scan every row of the baby (measured at 50k rows:
+`Bitmap Index Scan on photo_search_baby_id_place_idx` + `Filter: tsv @@ …`). Marking the built-ins
+LEAKPROOF was rejected (a global catalog change, lost on dump/restore and extension updates, and
+unsound for `arrayoverlap` over element types with leaky equality). Instead two SECURITY DEFINER
+functions (plpgsql, no dynamic SQL, `authenticated`/`service_role`) run those legs:
+
+```sql
+photo_search_text_candidates(p_baby_id uuid, p_query tsquery, p_limit integer,
+  p_taken_from timestamptz DEFAULT NULL, p_taken_to timestamptz DEFAULT NULL,
+  p_age_from integer DEFAULT NULL, p_age_to integer DEFAULT NULL, p_milestone_ids uuid[] DEFAULT NULL,
+  p_people text[] DEFAULT NULL, p_tags text[] DEFAULT NULL, p_place text DEFAULT NULL)
+  RETURNS TABLE (photo_id uuid, rank real)          -- ts_rank_cd, best first
+photo_search_term_candidates(p_baby_id uuid, p_terms text[], p_limit integer, <same filters>)
+  RETURNS TABLE (photo_id uuid, hits integer)       -- matching tags + 2 x matching people
+```
+
+Authorisation inside: `p_baby_id` must be in `search_baby_ids()`, else the result is empty (what RLS
+would return). Output is ids and scores of live, approved, unquarantined photos of that baby only:
+never `search_text`, a note or any other column. Filters mirror the API's `filterSql` (NULL/empty =
+off; dates `[from, to)`, ages inclusive, people case-insensitive, tags lower-case, `place =
+lower(p_place)`); `p_limit` clamped to 1..200. Measured at 50k rows as `authenticated`: text leg
+uses `Bitmap Index Scan on photo_search_tsv_idx` (selective query 2 ms vs 25 ms under RLS; broad
+query 22 ms vs 62 ms), term leg uses `BitmapOr` of `photo_search_tags_idx` and
+`photo_search_people_lower_idx` (21–28 ms for 2.5k–5k matches). To EXPLAIN them, load
+`auto_explain` with `log_nested_statements` as the superuser. The **vector leg needs no helper**: an
+index ORDER BY is not a qual, and with the ARRAY policy the planner picks `Index Scan using
+photo_search_embedding_idx` + nested loop to `photos_pkey` under RLS (50k rows, joined to `photos`
+like `hybrid.ts`: 16 ms warm, `hnsw.iterative_scan = relaxed_order`, `ef_search` 100). Below
+~15k candidates it may choose seq scan + top-N sort instead (73 ms at 5k), which stays under the
+300 ms target.
+
+**Write rules.** `photo_search_guard` (BEFORE INSERT OR UPDATE OF `photo_id, baby_id, search_text,
+embedding`; SECURITY DEFINER; every role incl. pipeline and the seed): the photo exists, `baby_id` is
+its own, `approval = 'approved'`, not trashed, not quarantined, not `failed`/`duplicate`,
+`baby_ai_enabled` ⇒ else `check_violation` "search rows can only be stored for approved live photos
+of a paid-tier baby". Free-tier babies get no search rows and no vectors (FR-5.8, D3) as a database
+rule. Bookkeeping-only updates (`content_hash`, `updated_at`) pass, so stale markers work for
+downgraded babies, whose rows are kept (hidden by RLS) for a re-upgrade. `photos_search_cleanup`
+(AFTER UPDATE OF `deleted_at, approval, quarantined_at, status` on `photos`) deletes the row the
+moment the photo is trashed, un-approved, quarantined, failed or a duplicate marker (a quarantined
+photo exists for nobody; restoring from trash makes it "missing"). `photo_search_mark_stale` (AFTER
+DELETE on `photo_details`, `photo_ai`, `photo_ai_overrides`, `measurements`; AFTER UPDATE OF
+`photo_id` on `measurements`) clears `content_hash`, because `updated_at` comparisons cannot see a
+deletion; it skips photos that are themselves being deleted (cascades stay clean).
+
+**Reindex helpers (SECURITY INVOKER, `pipeline`/`service_role`).**
+`search_stale_photos(p_limit, p_embed_model, p_doc_version, p_baby_id DEFAULT NULL) RETURNS TABLE
+(photo_id, baby_id, reason)`: live approved unquarantined photos with status
+`ingested|queued|analyzing|ready` of `baby_ai_enabled` babies where reason = `missing` (no row),
+`unembedded` (no vector), `version` (`embed_model`/`doc_version` differ) or `stale` (`content_hash`
+NULL, or `photo_search.updated_at` older than any of `photos`, `photo_exif`, `photo_details`,
+`photo_ai`, the tagged milestone, the newest override, the newest linked measurement); oldest first,
+`p_limit NULL` = no limit; reads only `updated_at` from `photo_exif` (no GPS column).
+`photo_search_orphans(p_limit) RETURNS SETOF uuid`: rows whose photo is trashed, not approved,
+quarantined, failed, a duplicate marker or of another baby (safety net behind the cleanup trigger).
+
+**`ai_spend` (plan D7).** Ledger for spend that is not a vision batch item: `kind` `embed | chat |
+rerank`, `user_id` (chat actor; NULL for embeddings; `ON DELETE SET NULL`), `ref_id` (assistant
+message id; no FK so clearing history keeps the spend), `model`, token columns, `item_count`,
+`cost_usd numeric(12,8) ≥ 0`, `created_at`. Numbers only, so plain CHECKs. Grants/policies:
+`service_role` ALL; `pipeline` INSERT (no `id`/`created_at`) `WITH CHECK (kind = 'embed' AND user_id
+IS NULL AND ref_id IS NULL)` and SELECT of every row (`ai_baby_month_cost_usd` is SECURITY INVOKER
+and the worker's budget check must include chat spend); `authenticated` INSERT (no `created_at`)
+`WITH CHECK (is_baby_admin(baby_id) AND user_id = auth_uid() AND baby_ai_enabled(baby_id) AND kind
+IN ('chat','rerank'))` and SELECT `USING (baby_id = ANY (ARRAY(SELECT admin_baby_ids())))`; nobody
+below `service_role` may UPDATE or DELETE. `ai_spend_guard` (BEFORE INSERT, every role incl. the
+superuser): no row for a baby that is not `baby_ai_enabled`.
+
+**`ai_baby_month_cost_usd(p_baby_id, p_month)`** keeps its signature and grants and now returns
+`SUM(ai_batch_items.cost_usd) + SUM(ai_spend.cost_usd)` for the UTC month (down: the step-6 body
+verbatim). The step-6 budget check, usage endpoint and alert cover embeddings and chat unchanged.
+
+**Chat tables.** Policies unchanged from step 2: every row is the caller's own and requires
+`is_baby_admin`; inserting a thread or message also requires `baby_ai_enabled` (FR-7.7). Reading and
+clearing one's own history stays possible after a downgrade (the API answers `plan_required` before
+any read). Contributors, viewers and the pipeline have no access. New: unique
+`chat_threads_baby_id_user_id_key (baby_id, user_id)` (one thread per user per baby, D4);
+`chat_messages.cited_measurement_ids uuid[]`, `cost_usd numeric(12,8)`, `tools_used text[]`,
+`status text DEFAULT 'complete' CHECK (status IN ('complete','error'))` with matching `authenticated`
+INSERT/UPDATE column grants; `chat_messages_shape` trigger: `content` 1..8000 chars, ≤ 50 cited photo
+ids, ≤ 50 cited measurement ids, ≤ 16 tool names, every tool name in `search_photos |
+get_measurements | get_milestones | get_photo` (never arguments), `cost_usd ≥ 0`.
+
+**100 turns/day/user (`chat_turns`).** Counted in a ledger that clearing the history does not reset
+(rows: `user_id` (CASCADE with the profile), `reserved_xid xid8`, `claimed_at`, `created_at`; no
+conversation data; ENABLE + FORCE RLS, no grant below `service_role`). Contract for the API, all in
+the transaction that inserts the user message:
+
+1. `SELECT turns, oldest_at, allowed FROM chat_reserve_turn($limit)` (SECURITY DEFINER,
+   `authenticated`): takes a transaction-scoped advisory lock on the user (concurrent turns of one
+   user queue here), prunes the user's rows older than 24 h and unclaimed reservations of other
+   transactions, counts claimed turns in the rolling 24 h, and when `turns < $limit` reserves one for
+   this transaction (idempotent). `allowed = false` ⇒ 429, `Retry-After = oldest_at + 24 h - now()`.
+2. `INSERT` the `role = 'user'` message: the AFTER INSERT trigger `chat_messages_claim_turn` claims
+   the reservation (the turn now counts). From `authenticated`, a user message with no reservation in
+   its transaction is refused (`check_violation`), so the limit holds even if the API skips step 1;
+   inserts by `service_role` or the superuser (fixtures) are counted without one.
+
+A reservation that is never claimed (e.g. the budget refusal path commits without a message) does
+not count. `chat_user_turns_24h()` (STABLE, SECURITY DEFINER, `authenticated`) returns the claimed
+count for `turnsLeftToday`. Verified: 100 turns then the 101st refused; two concurrent turns at 99
+used ⇒ exactly one allowed; clearing the thread leaves the count at 100.
+
+**Residual (project-wide).** A `col IN (...)` CHECK (allowed by "Writing a migration") still logs
+`Failing row contains (...)` when the writer bypasses RLS (superuser, `service_role`); for
+`authenticated` and `pipeline` Postgres omits the row. `chat_messages.status`/`role` are such
+CHECKs; chat is written only as `authenticated`. Production should run the db with
+`log_error_verbosity = terse`.
 
 ## Environment
 
@@ -556,7 +696,9 @@ Mom), `demo-dad@…` (admin, Dad), `demo-nanny@…` (contributor); baby `…-000
 "Grandparents" (dev token `demo-grandparents-share-token`, re-upserted so it always expires 24 h
 after the last seed run, rule `milestones`); 12 photos `…-0000000003NN`: 8 approved, 1 approved
 and sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny;
-3 shared photos; 3 measurements; `photo_search` rows for the 9 live approved photos; one audit row.
+3 shared photos; 3 measurements; `photo_search` rows for the 9 live approved photos (with `place`;
+`embedding`, `embed_model`, `doc_version`, `content_hash` and `embedded_at` NULL, also reset on every
+re-seed, so the worker's `search.reconcile` rebuilds and embeds them); one audit row.
 Storage keys are placeholders; no image bytes exist.
 
 A separate, dev-only **performance seed** (`pnpm perf:seed`, lives in
@@ -635,3 +777,4 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1791700000100_uploads-and-ingest.sql` | `photos.status` gains `duplicate`, `photos.quarantined_at` (pipeline-only UPDATE), `quarantined_at IS NULL` on the user SELECT/UPDATE policies and in `photo_editable` / `babies_avatar_guard`, `photos_pipeline_delete` = trash > 30 d and not quarantined OR `status = 'duplicate'`; `free_tier_photo_count` helper + `photos_free_tier_cap` no longer counts failed/duplicate/quarantined rows; `baby_has_quarantined_photos` helper + `babies_pipeline_delete` refuses a baby holding a quarantined photo; `upload_sessions`, `upload_files` (+ `upload_session_visible`, `upload_files_session_owner` trigger, RLS, column grants); `home_place_label` (×2, pipeline/service_role) | drop functions, trigger, tables; restore `babies_pipeline_delete` and the step-2 cap trigger body, drop the two helpers; restore the four photos policies and two functions; drop column; `DELETE … WHERE status = 'duplicate'` then restore the old CHECK |
 | `1791900000100_ai-pipeline.sql` | `photos.ai_retry_requested_at` (+ `UPDATE` grant to `authenticated`); `ai_batches` provider file ids, `files_deleted_at`, versions, `reasoning_tokens`/`image_tokens`, `request_counts`, `last_polled_at`, `expires_at`, `submitted_bytes`, `ai_batches_open_idx`; `ai_batch_items` (ENABLE+FORCE RLS, pipeline/service_role ALL, authenticated column-limited SELECT via `photo_visible`, `ai_batch_items_guard`, 3 indexes); `ai_eligible_photos(...)` (pipeline/service_role); `ai_baby_month_cost_usd(...)` (authenticated/pipeline/service_role); `record_ai_budget_exceeded(uuid, text)` (SECURITY DEFINER, pipeline/service_role; inserts the `ai.budget_exceeded` audit row for a baby + `YYYY-MM` once, advisory-locked per (baby, month), returns whether it inserted; `pipeline` still has no SELECT on `audit_log`); `photo_ai_overrides_shape` extended to field/value shape (trigger now also `UPDATE OF value`) | restore the step-5 shape function/trigger verbatim; drop the three helpers, the table + guard, the index and columns; revoke + drop `ai_retry_requested_at` |
 | `1791800000100_timeline-and-details.sql` | `photos_baby_id_sort_idx` (replaces `photos_baby_id_taken_at_idx`) + `photos_baby_id_age_days_idx`; `age_group(integer)` (IMMUTABLE; authenticated/viewer/pipeline/service_role); `milestones.updated_at` + trigger, `UPDATE (updated_at)` grant, `milestones_cap` (200 custom per baby), `milestones_name_guard` (1..80 chars, no preset names ⇒ 23505); `photo_details_milestone_id_photo_id_idx` (replaces `photo_details_milestone_id_idx`); `measurements_photo_same_baby` trigger, `measurements_photo_id_idx`; 14 CHECK constraints on parent-entered text dropped and re-stated as shape triggers (`photo_details_shape`, `measurements_shape`, `babies_shape`, `upload_sessions_shape`, `share_links_shape`, `chat_threads_shape`, `invites_shape`, `photo_ai_overrides_shape`; see "Shape triggers") | drop the new indexes/triggers/functions/column, recreate the two step-2 indexes and every dropped CHECK verbatim |
+| `1792000000100_search-and-chat.sql` | `photo_search.doc_version/content_hash/embedded_at/place` + unembedded, (baby_id, place) and `lower_text_array(people)` GIN indexes; `lower_text_array(text[])`; `search_baby_ids()` and the `photo_search_authenticated_select` rewrite to `baby_id = ANY (ARRAY(SELECT search_baby_ids()))`; `photo_search_guard`, `photos_search_cleanup`, `photo_search_mark_stale` (5 triggers); `search_stale_photos(...)`, `photo_search_orphans(...)` (pipeline/service_role); `photo_search_text_candidates(...)`, `photo_search_term_candidates(...)` (SECURITY DEFINER, authenticated/service_role); `ai_spend` (ENABLE+FORCE RLS, `ai_spend_guard`); `ai_baby_month_cost_usd` = items + spend; `chat_threads (baby_id, user_id)` unique; `chat_messages.cited_measurement_ids/cost_usd/tools_used/status` + `chat_messages_shape`; `chat_turns` + `chat_reserve_turn(integer)`, `chat_user_turns_24h()`, `chat_messages_claim_turn` | drop all of it; restore the step-2 `photo_search` SELECT policy and the step-6 `ai_baby_month_cost_usd` body verbatim |

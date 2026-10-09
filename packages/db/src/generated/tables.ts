@@ -127,6 +127,38 @@ export interface AiBatchesInsert {
   submitted_bytes?: string | null;
 }
 
+export interface AiSpendRow {
+  id: string;
+  baby_id: string;
+  user_id: string | null;
+  kind: "embed" | "chat" | "rerank";
+  ref_id: string | null;
+  model: string;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_tokens: number | null;
+  item_count: number | null;
+  cost_usd: string;
+  created_at: Date;
+}
+
+export interface AiSpendInsert {
+  id?: string;
+  baby_id: string;
+  user_id?: string | null;
+  kind: "embed" | "chat" | "rerank";
+  ref_id?: string | null;
+  model: string;
+  input_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  output_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  item_count?: number | null;
+  cost_usd: string;
+  created_at?: Date;
+}
+
 export interface AuditLogRow {
   id: string;
   baby_id: string | null;
@@ -220,6 +252,10 @@ export interface ChatMessagesRow {
   tokens_out: number | null;
   model: string | null;
   created_at: Date;
+  cited_measurement_ids: string[];
+  cost_usd: string | null;
+  tools_used: string[];
+  status: "complete" | "error";
 }
 
 export interface ChatMessagesInsert {
@@ -234,6 +270,10 @@ export interface ChatMessagesInsert {
   tokens_out?: number | null;
   model?: string | null;
   created_at?: Date;
+  cited_measurement_ids?: string[];
+  cost_usd?: string | null;
+  tools_used?: string[];
+  status?: "complete" | "error";
 }
 
 export interface ChatThreadsRow {
@@ -252,6 +292,21 @@ export interface ChatThreadsInsert {
   title?: string | null;
   created_at?: Date;
   updated_at?: Date;
+}
+
+export interface ChatTurnsRow {
+  id: string;
+  user_id: string;
+  reserved_xid: string;
+  claimed_at: Date | null;
+  created_at: Date;
+}
+
+export interface ChatTurnsInsert {
+  user_id: string;
+  reserved_xid: string;
+  claimed_at?: Date | null;
+  created_at?: Date;
 }
 
 export interface InvitesRow {
@@ -466,6 +521,10 @@ export interface PhotoSearchRow {
   tags: string[];
   is_sensitive: boolean;
   updated_at: Date;
+  doc_version: string | null;
+  content_hash: string | null;
+  embedded_at: Date | null;
+  place: string | null;
 }
 
 export interface PhotoSearchInsert {
@@ -481,6 +540,10 @@ export interface PhotoSearchInsert {
   tags?: string[];
   is_sensitive?: boolean;
   updated_at?: Date;
+  doc_version?: string | null;
+  content_hash?: string | null;
+  embedded_at?: Date | null;
+  place?: string | null;
 }
 
 export interface PhotosRow {
@@ -767,11 +830,13 @@ export interface WorkerHeartbeatsInsert {
 export interface Tables {
   ai_batch_items: { row: AiBatchItemsRow; insert: AiBatchItemsInsert };
   ai_batches: { row: AiBatchesRow; insert: AiBatchesInsert };
+  ai_spend: { row: AiSpendRow; insert: AiSpendInsert };
   audit_log: { row: AuditLogRow; insert: AuditLogInsert };
   babies: { row: BabiesRow; insert: BabiesInsert };
   baby_members: { row: BabyMembersRow; insert: BabyMembersInsert };
   chat_messages: { row: ChatMessagesRow; insert: ChatMessagesInsert };
   chat_threads: { row: ChatThreadsRow; insert: ChatThreadsInsert };
+  chat_turns: { row: ChatTurnsRow; insert: ChatTurnsInsert };
   invites: { row: InvitesRow; insert: InvitesInsert };
   measurements: { row: MeasurementsRow; insert: MeasurementsInsert };
   milestones: { row: MilestonesRow; insert: MilestonesInsert };
@@ -797,11 +862,13 @@ export type TableName = keyof Tables;
 export const TABLE_NAMES = [
   "ai_batch_items",
   "ai_batches",
+  "ai_spend",
   "audit_log",
   "babies",
   "baby_members",
   "chat_messages",
   "chat_threads",
+  "chat_turns",
   "invites",
   "measurements",
   "milestones",

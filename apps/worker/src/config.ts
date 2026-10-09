@@ -1,11 +1,13 @@
 import {
   aiPipelineEnvSchema,
   databaseEnvSchema,
+  EMBED_DIMS,
   encryptionEnvSchema,
   ingestEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
   s3EnvSchema,
+  searchEnvSchema,
 } from "@littlelight/shared";
 import { z } from "zod";
 
@@ -18,7 +20,10 @@ import { z } from "zod";
 // adds the AI batch pipeline settings (`aiPipelineEnvSchema`: batch size/age, crons, attempts,
 // budget, queue-age alert; docs/plans/step-6.md 2.7). Provider/model/keys (`aiEnvSchema` from
 // `@littlelight/ai`) are NOT part of this config: `main.ts` reads them through `getAiStatus` /
-// `createVisionDescriber` so a missing key never fails worker boot.
+// `createVisionDescriber` so a missing key never fails worker boot. Step 7 adds the search
+// indexer settings (`searchEnvSchema`: reconcile cron, embedding batch; docs/plans/step-7.md 2.7)
+// and one AI-env guard that DOES fail boot: `EMBED_DIMS` must equal the `photo_search.embedding`
+// column width (1024), or every upsert would fail.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -32,6 +37,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof encryptionEnvSchema> &
   z.output<typeof ingestEnvSchema> &
   z.output<typeof aiPipelineEnvSchema> &
+  z.output<typeof searchEnvSchema> &
   z.output<typeof logEnvSchema>;
 
 /** Env needed by `healthcheck.ts` only (no S3/JWT/encryption key: it reads the heartbeat row). */
@@ -79,8 +85,21 @@ function parseAll(env: RawEnv, schemas: AnySchema[]): Record<string, unknown> {
   return merged;
 }
 
+/**
+ * `EMBED_DIMS` (read by `@littlelight/ai`, default 1024) must equal the `vector(1024)` column.
+ * Unset/empty is fine (the default); anything else is a `ConfigError` naming the field only.
+ */
+export const embedDimsGuardSchema = z.object({
+  EMBED_DIMS: z
+    .string()
+    .optional()
+    .refine((v) => v === undefined || Number(v) === EMBED_DIMS, {
+      message: `must be ${EMBED_DIMS}, the photo_search.embedding column width`,
+    }),
+});
+
 export function loadConfig(env: RawEnv = process.env): WorkerConfig {
-  return parseAll(env, [
+  const merged = parseAll(env, [
     heartbeatEnvSchema,
     databaseEnvSchema,
     s3EnvSchema,
@@ -88,8 +107,13 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     encryptionEnvSchema,
     ingestEnvSchema,
     aiPipelineEnvSchema,
+    searchEnvSchema,
+    embedDimsGuardSchema,
     logEnvSchema,
-  ]) as WorkerConfig;
+  ]);
+  // The guard's value is not configuration (the AI factories read EMBED_DIMS from the env).
+  delete merged.EMBED_DIMS;
+  return merged as WorkerConfig;
 }
 
 export function loadHealthcheckConfig(env: RawEnv = process.env): HealthcheckConfig {
