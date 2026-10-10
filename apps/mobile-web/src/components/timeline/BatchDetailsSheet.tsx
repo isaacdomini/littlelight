@@ -1,6 +1,6 @@
 import { IonModal } from "@ionic/react";
-import type { PhotosBatchDetailsRequest } from "@littlelight/shared";
-import { PHOTO_DETAILS_LIMITS } from "@littlelight/shared";
+import type { PhotosBatchDetailsRequest } from "@tinyglow/shared";
+import { PHOTO_DETAILS_LIMITS } from "@tinyglow/shared";
 import { useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";

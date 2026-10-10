@@ -21,12 +21,12 @@ afterEach(() => {
 });
 
 describe("FirstUploadPage primer", () => {
-  it("native: says Littlelight only receives the photos you pick", async () => {
+  it("native: says Tinyglow only receives the photos you pick", async () => {
     setNativePlatform("ios");
     const { container } = renderApp(<FirstUploadPage />, { route: "/onboarding/first-upload" });
     await ionReady(container);
     expect(screen.getByTestId("primer").textContent).toContain(
-      "Littlelight only receives the photos you pick",
+      "Tinyglow only receives the photos you pick",
     );
   });
 

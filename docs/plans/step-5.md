@@ -60,7 +60,7 @@ No new service. No model call anywhere (step 6). Signed URLs stay thumb/display 
 one object each (`signDerivative`); `analysis` and originals are never signed except the existing
 admin-only original route.
 
-### 2.2 Age groups and labels (`@littlelight/shared` `src/age.ts`, mirrored in SQL)
+### 2.2 Age groups and labels (`@tinyglow/shared` `src/age.ts`, mirrored in SQL)
 
 One definition, used by the API (summary + SQL function), the SPA (headers, scrubber, alt text)
 and the seed. Input is `photos.age_days` (calendar days at the local capture date; step 4).
@@ -157,7 +157,7 @@ the only AI-related read in step 5; no write path, no model.
 **Existing routes unchanged**: `DELETE /photos/:id`, `POST /photos/:id/restore`, approve/reject,
 `GET /photos/:id/original` (admins only), uploads.
 
-### 2.5 Jobs (`@littlelight/shared` `src/jobs.ts`)
+### 2.5 Jobs (`@tinyglow/shared` `src/jobs.ts`)
 
 | Job | Payload (zod, strict) | Producer | Options | Handler |
 | --- | --- | --- | --- | --- |
@@ -174,7 +174,7 @@ this step's no-op handler trivially complies. `JobQueue` (`apps/api/src/plugins/
 `enqueueIngest`. The worker's `QUEUES`/`startWorkers` register the queue (`queues ready` log
 line becomes `queues: 5`).
 
-### 2.6 Shared contracts (`@littlelight/shared`, architect-defined; backend-engineer writes them in 5.2)
+### 2.6 Shared contracts (`@tinyglow/shared`, architect-defined; backend-engineer writes them in 5.2)
 
 `src/age.ts` additions: 2.2 (`ageGroupKey`, `ageGroupLabel`, `ageGroupSortValue`, `formatAge`,
 constants). Pure, no zod.
@@ -234,16 +234,16 @@ renderer (`ingest/derivatives.ts`), so seeded objects are produced by the same c
 Runs **on the host** like the worker integration tests, never in a container, never in production:
 
 ```
-pnpm perf:seed            # root script → pnpm --filter @littlelight/worker perf-seed
+pnpm perf:seed            # root script → pnpm --filter @tinyglow/worker perf-seed
 pnpm perf:seed --remove   # deletes the perf baby's rows and every object version under its prefix
 ```
 
-Env (same as `pnpm test:integration`): `DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight`
+Env (same as `pnpm test:integration`): `DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow`
 (superuser; the script refuses any URL whose user is not `postgres`, any host that is not
 `localhost`/`127.0.0.1`, and `NODE_ENV=production`), `S3_ENDPOINT=http://localhost:9000`,
 `S3_ACCESS_KEY=dev`, `S3_SECRET_KEY=devdevdev` (MinIO root; the bucket-scoped keys cannot
 `CopyObject` across prefixes they do not own… they can, but the root key keeps the script
-independent of the step-4 policies), `S3_BUCKET=littlelight-dev`, `DATA_ENCRYPTION_KEY` (unused:
+independent of the step-4 policies), `S3_BUCKET=tinyglow-dev`, `DATA_ENCRYPTION_KEY` (unused:
 the perf baby has no home location and no GPS; the script never calls `encrypt_coord`).
 
 Fixed ids (`PERF_IDS` in shared `constants.ts`): baby `00000000-0000-4000-8000-000000000900`
@@ -481,7 +481,7 @@ logs; `caption` is rendered as text, never HTML; no third-party scripts.
   `e2e/playwright.perf.config.ts`: projects `phone` 375×812 and `desktop` 1280×800, 1 worker, no
   retries, 10 min timeout; excluded from `pnpm e2e`): precondition `pnpm perf:seed` has run
   (the spec checks `GET /babies/<perf>/photos/summary` → `total = 10000` as demo mom, else fails
-  with "run pnpm perf:seed"). Signs in as `demo-mom@littlelight.local` (OTP via Mailpit),
+  with "run pnpm perf:seed"). Signs in as `demo-mom@tinyglow.local` (OTP via Mailpit),
   selects the perf baby (through the header switcher or `currentBabyStore`'s key — test-engineer
   reads `lib/session.ts`), opens `/timeline`, waits for the first group header. Injects a sampler
   (`page.evaluate`): a `requestAnimationFrame` loop recording frame deltas, a
@@ -513,7 +513,7 @@ Same-lane tasks run in sequence unless noted.
 - Owned: every `package.json`, `pnpm-lock.yaml`, root `vitest.config.ts` (nothing new expected),
   `e2e/playwright.perf.config.ts` is **not** devops (test-engineer, 5.11); root scripts.
 - Add, pinned to the latest stable past pnpm 12's release-age gate: `apps/mobile-web`:
-  `react-virtuoso`, `swiper`. Root scripts: `"perf:seed": "pnpm --filter @littlelight/worker perf-seed"`,
+  `react-virtuoso`, `swiper`. Root scripts: `"perf:seed": "pnpm --filter @tinyglow/worker perf-seed"`,
   `"e2e:perf": "playwright test -c e2e/playwright.perf.config.ts"`. `apps/worker/package.json`:
   `"perf-seed": "tsx src/tools/perf-seed.ts"`. Nothing else (D8, D9: no chart or persistence
   library).
@@ -588,7 +588,7 @@ Same-lane tasks run in sequence unless noted.
   version per key; `psql -c "select plan, plan_owner_user_id from babies where id = '<perf>'"` →
   `free | <null>`; `select count(*) from photos where baby_id = '<perf>' and status <> 'ingested'`
   → 0; signing in as demo mom lists two babies; `pnpm perf:seed --remove` leaves 0 rows and 0
-  object versions; worker log on start says `queues: 5`; `pnpm --filter @littlelight/worker
+  object versions; worker log on start says `queues: 5`; `pnpm --filter @tinyglow/worker
   run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"details"}'` logs the no-op line.
 
 ### 5.7 Frontend foundations (frontend-engineer) — lane F, after 5.2 (parallel with B/S; integrates once 5.4–5.6 are up)
@@ -599,7 +599,7 @@ Same-lane tasks run in sequence unless noted.
   `apps/mobile-web/src/main.tsx` / `styles.css` (dark palette import, if missing).
 - Build the "Foundations" block of 2.9. Keep `lib/queries.ts` as a re-export shim so the upload
   code compiles unchanged.
-- Done-when: `pnpm --filter @littlelight/mobile-web typecheck && test` green; the step-4 grid
+- Done-when: `pnpm --filter @tinyglow/mobile-web typecheck && test` green; the step-4 grid
   still works against the dev stack using `PhotoImage`; dark mode follows the OS setting.
 
 ### 5.8 Frontend: timeline, viewer, details editing, select mode (frontend-engineer) — lane F, after 5.7
@@ -618,7 +618,7 @@ Same-lane tasks run in sequence unless noted.
 - Done-when: with the perf seed loaded, a human scrolls `/timeline` of the perf baby smoothly on
   a laptop at 375 px and 1280 px, jumps with the scrubber, opens a photo, swipes, pinch/double-tap
   zooms (Chrome device emulation), edits details and sees them after reload; the tablet/desktop
-  layouts match 2.9; `pnpm --filter @littlelight/mobile-web typecheck && test` green.
+  layouts match 2.9; `pnpm --filter @tinyglow/mobile-web typecheck && test` green.
 
 ### 5.9 Frontend: Milestones tab, Growth view, measurements (frontend-engineer) — lane F, after 5.7 (may run in parallel with 5.8 as a second invocation: disjoint paths below)
 
@@ -656,8 +656,8 @@ Same-lane tasks run in sequence unless noted.
 - Owned: `.github/workflows/ci.yml`, `.github/scripts/**`.
 - Add `e2e/timeline/*.ts e2e/perf/*.ts e2e/playwright.perf.config.ts` to the e2e typecheck glob;
   in `dev-stack-smoke`, after the upload gate: `pnpm perf:seed` (host, same env as the gate's
-  psql/MinIO access: `DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight S3_ENDPOINT=http://localhost:9000
-  S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev S3_BUCKET=littlelight-dev`) then `PERF_CI=1 pnpm e2e:perf`
+  psql/MinIO access: `DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow S3_ENDPOINT=http://localhost:9000
+  S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev S3_BUCKET=tinyglow-dev`) then `PERF_CI=1 pnpm e2e:perf`
   (15-minute step timeout; upload `e2e/report` and the perf table on failure).
 - Done-when: `actionlint` clean; every job's commands pass locally in order.
 
@@ -693,8 +693,8 @@ docker compose -f docker-compose.dev.yml down -v
 docker compose -f docker-compose.dev.yml up -d --build --wait
 pnpm install --frozen-lockfile
 # 10,000 seeded photos (dev only, idempotent)
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight S3_ENDPOINT=http://localhost:9000 \
-S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev S3_BUCKET=littlelight-dev pnpm perf:seed
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow S3_ENDPOINT=http://localhost:9000 \
+S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev S3_BUCKET=tinyglow-dev pnpm perf:seed
 # expected: photos=10000 photo_derivatives=20000 measurements=45 custom milestones=3, objects copied 20000 (+48 base)
 # scroll smoothly (Playwright frame timing, long tasks, DOM bounds; phone + desktop projects)
 pnpm e2e:perf
@@ -705,12 +705,12 @@ bash .github/scripts/restart-api.sh      # resets the in-memory OTP limits betwe
 pnpm e2e                                 # includes e2e/timeline/edits.spec.ts
 ```
 
-### 4.2 API walkthrough (cookie jar `a.jar` from step 3's 4.2 steps 1–5 as `demo-mom@littlelight.local`; `B=http://localhost:8080`, `H='x-littlelight-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, `PERF=00000000-0000-4000-8000-000000000900`)
+### 4.2 API walkthrough (cookie jar `a.jar` from step 3's 4.2 steps 1–5 as `demo-mom@tinyglow.local`; `B=http://localhost:8080`, `H='x-tinyglow-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, `PERF=00000000-0000-4000-8000-000000000900`)
 
 1. `curl -s -b a.jar $B/api/babies/$PERF/photos/summary` → `total = 10000`, `groups[0].key = "m24"` … last `"w1"`, each with `count` and `cursor`; counts sum to 10000.
 2. `curl -s -b a.jar "$B/api/babies/$PERF/photos?limit=200"` → 200 items newest first, each with `thumbUrl` (`X-Amz-Expires=3600`), `milestoneId`, `caption: null`, `ageDays`; `nextCursor` set, `prevCursor` set.
 3. Jump: `C=$(… groups[] | select(.key=="m12") | .cursor)`; `curl -s -b a.jar "$B/api/babies/$PERF/photos?cursor=$C&limit=5"` → first item's `ageDays` in `[334, 365)` (month 12); then `dir=newer&cursor=<prevCursor>` returns the 200 items just newer, in newest-first order.
-4. Timing: `for i in $(seq 1 20); do curl -s -o /dev/null -w '%{time_total}\n' -b a.jar "$B/api/babies/$PERF/photos?limit=200&cursor=$LAST"; done | sort -n | tail -2` → p95 ≤ 0.3 s where `$LAST` is the 49th page's cursor; `docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -c "EXPLAIN SELECT id FROM photos p WHERE baby_id='$PERF' AND deleted_at IS NULL ORDER BY COALESCE(taken_at, created_at) DESC, id DESC LIMIT 200"` → `Index Scan using photos_baby_id_sort_idx`.
+4. Timing: `for i in $(seq 1 20); do curl -s -o /dev/null -w '%{time_total}\n' -b a.jar "$B/api/babies/$PERF/photos?limit=200&cursor=$LAST"; done | sort -n | tail -2` → p95 ≤ 0.3 s where `$LAST` is the 49th page's cursor; `docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -c "EXPLAIN SELECT id FROM photos p WHERE baby_id='$PERF' AND deleted_at IS NULL ORDER BY COALESCE(taken_at, created_at) DESC, id DESC LIMIT 200"` → `Index Scan using photos_baby_id_sort_idx`.
 5. URLs: `curl -s -b a.jar -H "$H" -X POST $B/api/babies/$MAYA/photos/urls -H 'content-type: application/json' -d '{"photoIds":["00000000-0000-4000-8000-000000000302","00000000-0000-4000-8000-000000000311"]}'` → both present for mom; the same as the nanny (`n.jar`) → only `…311` (her own pending) plus approved ones she asked for.
 6. Details: `curl … -X PATCH $B/api/photos/00000000-0000-4000-8000-000000000303/details -d '{"milestoneId":"10000000-0000-4000-8000-000000000003","people":["Grandma Rose"],"locationLabel":"Home","note":"rolled!"}'` → `details` echoed, `canEdit: true`; `GET /photos/…303` shows them; `psql -c "select event, metadata from audit_log where event='photo.details_updated' order by created_at desc limit 1"` → metadata has only `photo_id`; `psql -c "select count(*) from pgboss.job where name='photo.reindex' and data->>'photoId'='00000000-0000-4000-8000-000000000303'"` ≥ 1; worker log shows `reindex: no-op until step 7`.
 7. Nanny: `curl -b n.jar … -X PATCH $B/api/photos/…303/details -d '{"note":"x"}'` → 403; on her own pending `…311` → 200; after mom approves `…311`, the nanny's PATCH → 403.
@@ -724,18 +724,18 @@ pnpm e2e                                 # includes e2e/timeline/edits.spec.ts
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
 WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true \
 JWT_SECRET=dev-only-jwt-secret-at-least-32-characters PUBLIC_URL=http://localhost:8080 \
-MAIL_FROM=noreply@littlelight.local SMTP_HOST=localhost \
+MAIL_FROM=noreply@tinyglow.local SMTP_HOST=localhost \
 S3_ENDPOINT=http://localhost:9000 S3_PUBLIC_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev \
-S3_BUCKET=littlelight-test pnpm test:integration
+S3_BUCKET=tinyglow-test pnpm test:integration
 pnpm smoke
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                # 12
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 grep -rnE 'withMetadata|keepExif|keepMetadata|keepIccProfile|withIccProfile|withExif' apps/worker/src ; echo "exit $?"   # exit 1
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight pnpm --filter @littlelight/db db:types && git diff --exit-code -- packages/db/src/generated
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow pnpm --filter @tinyglow/db db:types && git diff --exit-code -- packages/db/src/generated
 docker compose -f docker-compose.dev.yml logs api worker | grep -Ei 'X-Amz-Signature|latitude|GPSLatitude|"note"' ; echo "no secrets/GPS/notes in logs: exit $?"   # exit 1
 docker compose -f docker-compose.dev.yml exec -T worker printenv NODE_ENV DATABASE_URL | grep -c postgres:dev   # 0 (the perf seed's superuser URL never reaches a container)
 grep -rn 'perf-seed\|perf:seed' docker-compose.yml apps/*/Dockerfile ; echo "perf seed absent from production: exit $?"   # exit 1

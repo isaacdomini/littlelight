@@ -1,4 +1,4 @@
-import { PUSH_ENDPOINTS } from "@littlelight/shared";
+import { PUSH_ENDPOINTS } from "@tinyglow/shared";
 import type { WorkerLog } from "../log-types";
 import { type ApnsClient, apnsKeyPem, createApnsClient } from "./apns";
 import { createFcmClient, type FcmClient, parseFcmServiceAccount } from "./fcm";

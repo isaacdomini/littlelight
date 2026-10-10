@@ -10,7 +10,7 @@ import {
   SYNC_FOREGROUND_BATCH,
   SYNC_MIN_INTERVAL_SEC,
   type SyncTrigger,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { useEffect, useSyncExternalStore } from "react";
 import { apiFetch, isApiError } from "../../lib/api";
 import { type ItemState, uploadManager } from "../../lib/upload/manager";
@@ -22,7 +22,7 @@ import { setSyncFlag, syncMayBeOn } from "./syncFlag";
 
 // Apple Photos album sync (docs/plans/step-10.md 2.5, D1-D4, D12, D13). iOS, admins only.
 // Feeds the existing UploadManager on its low-priority "sync" lane (at most 2 uploads at once),
-// newest photos first, in small batches. Nothing is ever deleted from Littlelight or from the
+// newest photos first, in small batches. Nothing is ever deleted from Tinyglow or from the
 // phone. PHAsset identifiers, album ids, file names and paths stay in JS memory and in the native
 // ledger: they are never logged, never sent to the API (only the album *title*, which the parent
 // sees in Settings, and counters) and never reach telemetry.
@@ -381,7 +381,7 @@ export class PhotoSyncManager {
     await this.saveConfig({ ...cfg, wifiOnly });
   }
 
-  /** Stops syncing. Removes the sync setup and this device's ledger; photos stay in Littlelight. */
+  /** Stops syncing. Removes the sync setup and this device's ledger; photos stay in Tinyglow. */
   async disable(): Promise<void> {
     const cfg = this.status.config;
     if (!cfg) return;
@@ -717,7 +717,7 @@ let pluginProxy: PhotoSyncPlugin | null = null;
  */
 async function call<R>(fn: (p: PhotoSyncPlugin) => Promise<R>): Promise<R> {
   const { registerPlugin } = await import("@capacitor/core");
-  pluginProxy ??= registerPlugin<PhotoSyncPlugin>("LittlelightPhotoSync");
+  pluginProxy ??= registerPlugin<PhotoSyncPlugin>("TinyglowPhotoSync");
   return fn(pluginProxy);
 }
 

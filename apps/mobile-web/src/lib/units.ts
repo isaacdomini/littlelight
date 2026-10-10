@@ -5,7 +5,7 @@ import {
   type MeasurementUnit,
   splitLbOz,
   type Units,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { useAuth } from "../auth/AuthProvider";
 
 /** Display units of the signed-in profile (metric until the profile exists). */

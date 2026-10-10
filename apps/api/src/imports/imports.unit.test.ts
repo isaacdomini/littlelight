@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@littlelight/shared";
+import { apiErrorSchema } from "@tinyglow/shared";
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import { loggerOptions, redactUrl } from "../app";
@@ -173,7 +173,7 @@ describe("logging: the Google callback and capability URLs never reach a log", (
 
 describe("config: Google import settings", () => {
   const env = {
-    DATABASE_URL: "postgres://postgres:dev@db:5432/littlelight",
+    DATABASE_URL: "postgres://postgres:dev@db:5432/tinyglow",
     S3_ENDPOINT: "http://storage:9000",
     S3_PUBLIC_ENDPOINT: "http://localhost:9000",
     S3_ACCESS_KEY: "dev",
@@ -184,7 +184,7 @@ describe("config: Google import settings", () => {
     DATA_ENCRYPTION_KEY: "dev-only-data-encryption-key-32-chars-min",
     PUBLIC_URL: "http://localhost:8080",
     SMTP_HOST: "mail",
-    MAIL_FROM: "noreply@littlelight.test",
+    MAIL_FROM: "noreply@tinyglow.test",
   };
 
   it("defaults to none (feature unavailable)", () => {

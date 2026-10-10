@@ -18,7 +18,7 @@ import {
   AI_VISION_CONTEXT_LIMITS,
   aiVisionContextSchema,
   looksLikeCoordinates,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { ReasoningEffort } from "./defaults";
 import { AiRequestError } from "./errors";
 import { assertAnalysisImage, toBase64, toDataUrl } from "./image";
@@ -42,7 +42,7 @@ export const CUSTOM_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** OpenAI `prompt_cache_key`: one routing key per prompt version (prefix cache accounting). */
 export function promptCacheKey(promptVersion: string): string {
-  return `littlelight-describe-${promptVersion}`;
+  return `tinyglow-describe-${promptVersion}`;
 }
 
 /** System prompt for a version pair; throws for versions this package cannot build. */

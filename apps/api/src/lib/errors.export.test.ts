@@ -1,4 +1,4 @@
-import { apiErrorSchema, EXPORTS_PER_BABY_PER_DAY } from "@littlelight/shared";
+import { apiErrorSchema, EXPORTS_PER_BABY_PER_DAY } from "@tinyglow/shared";
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import {

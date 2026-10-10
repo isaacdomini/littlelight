@@ -1,4 +1,4 @@
-import { SYNC_BACKGROUND_BATCH, SYNC_CONFIG_KEY, SYNC_FOREGROUND_BATCH } from "@littlelight/shared";
+import { SYNC_BACKGROUND_BATCH, SYNC_CONFIG_KEY, SYNC_FOREGROUND_BATCH } from "@tinyglow/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/api";
 import {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { CHAT_PROMPT_VERSION } from "@littlelight/shared";
+import { CHAT_PROMPT_VERSION } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import {
   CHAT_PROMPT_V1_SHA256,
@@ -13,7 +13,7 @@ describe("chat prompt v1", () => {
     expect(CHAT_PROMPT_VERSION).toBe("v1");
     const sha = createHash("sha256").update(CHAT_SYSTEM_RULES_V1, "utf8").digest("hex");
     expect(CHAT_PROMPT_V1_SHA256).toBe(sha);
-    expect(sha).toBe("71054bdf7b68a6a1bc82f2c16573eabf51402a39b498747c4bfe3d4c84da1ea2");
+    expect(sha).toBe("6cd8a820888e88c1b25e2b129a773128f2e159101711df47f0fb64524a3bd87f");
   });
 
   it("states the no-medical-interpretation and data-not-instructions rules", () => {

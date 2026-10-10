@@ -30,7 +30,7 @@ import {
 
 // RLS / grant matrix (docs/plans/step-2.md 2.6 and 2.8). Every actor x table x verb cell the plan
 // names is asserted. Each case runs in its own transaction that is rolled back, on a connection
-// made as littlelight_api (authenticated / viewer / service_role) or littlelight_worker (pipeline),
+// made as tinyglow_api (authenticated / viewer / service_role) or tinyglow_worker (pipeline),
 // exactly like the API/worker do it. Fixtures are committed once per file and removed afterwards.
 //
 // Expectations vocabulary: "rows" = rows returned, "0 rows" = RLS filtered, "RLS violation" =
@@ -371,7 +371,7 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
             await c.query("SET LOCAL ROLE authenticated");
           };
           // Wrong email.
-          await mk("", "contributor", "someone-else@littlelight.test");
+          await mk("", "contributor", "someone-else@tinyglow.test");
           expect((await join("contributor"))?.message).toMatch(RLS_VIOLATION);
           // Revoked / expired / accepted.
           await mk("revoked_at=now()");
@@ -1289,7 +1289,7 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
   });
 
   // ---------------------------------------------------------------------------------------------
-  describe("pipeline (littlelight_worker -> SET ROLE pipeline)", () => {
+  describe("pipeline (tinyglow_worker -> SET ROLE pipeline)", () => {
     it("reads the photo pipeline tables across babies", async () => {
       await db.asPipeline(async (c) => {
         expect(await count(c, "photos", `baby_id IN ('${BABY.A}','${BABY.B}')`)).toBe(
@@ -1485,7 +1485,7 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
         ]) {
           await c.query("BEGIN");
           const err = await tryQuery(c, `SET LOCAL ROLE ${role}`);
-          expect(err, `littlelight_worker SET ROLE ${role}`).not.toBeNull();
+          expect(err, `tinyglow_worker SET ROLE ${role}`).not.toBeNull();
           expect(err?.code).toBe("42501");
           await c.query("ROLLBACK");
         }
@@ -1521,7 +1521,7 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
   });
 
   // ---------------------------------------------------------------------------------------------
-  describe("littlelight_api without SET ROLE; anon; service_role", () => {
+  describe("tinyglow_api without SET ROLE; anon; service_role", () => {
     it("SELECT 1 works, every app table is permission denied, SET ROLE pipeline fails", async () => {
       const c = await db.apiPool.connect();
       try {
@@ -1538,11 +1538,11 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
           "postgres",
           "supabase_auth_admin",
           "anon",
-          "littlelight_worker",
+          "tinyglow_worker",
         ]) {
           await c.query("BEGIN");
           const err = await tryQuery(c, `SET LOCAL ROLE ${role}`);
-          expect(err, `littlelight_api SET ROLE ${role}`).not.toBeNull();
+          expect(err, `tinyglow_api SET ROLE ${role}`).not.toBeNull();
           expect(err?.code).toBe("42501");
           await c.query("ROLLBACK");
         }
@@ -1618,11 +1618,11 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
       });
     });
 
-    it("service_role is NOT granted to the worker (cannot be reached from littlelight_worker)", async () => {
+    it("service_role is NOT granted to the worker (cannot be reached from tinyglow_worker)", async () => {
       const r = await db.admin.query(
-        `SELECT pg_has_role('littlelight_worker', 'service_role', 'USAGE') AS usage,
-                pg_has_role('littlelight_worker', 'service_role', 'MEMBER') AS member,
-                pg_has_role('littlelight_api', 'pipeline', 'MEMBER') AS api_pipeline`,
+        `SELECT pg_has_role('tinyglow_worker', 'service_role', 'USAGE') AS usage,
+                pg_has_role('tinyglow_worker', 'service_role', 'MEMBER') AS member,
+                pg_has_role('tinyglow_api', 'pipeline', 'MEMBER') AS api_pipeline`,
       );
       expect(r.rows[0]).toEqual({ usage: false, member: false, api_pipeline: false });
     });
@@ -1738,7 +1738,7 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
           ).toBe(0);
           expect(await rowCount(c, "DELETE FROM invites WHERE id = $1", [INVITE_A])).toBe(0);
         },
-        "FX-INVITEE-A@littlelight.test",
+        "FX-INVITEE-A@tinyglow.test",
       );
     });
   });

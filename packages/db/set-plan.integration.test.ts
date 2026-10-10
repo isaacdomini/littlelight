@@ -57,7 +57,7 @@ describe.skipIf(!databaseUrl)("db:plan (setPlan)", () => {
     ]) {
       await q(
         "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1,'authenticated','authenticated',$2,now(),now())",
-        [id, `plan-${n}@littlelight.test`],
+        [id, `plan-${n}@tinyglow.test`],
       );
       await q("INSERT INTO public.profiles (user_id, display_name) VALUES ($1,$2)", [id, n]);
     }

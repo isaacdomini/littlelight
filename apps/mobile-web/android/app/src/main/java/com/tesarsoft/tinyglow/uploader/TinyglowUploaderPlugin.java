@@ -1,4 +1,4 @@
-package com.tesarsoft.littlelight.uploader;
+package com.tesarsoft.tinyglow.uploader;
 
 import androidx.lifecycle.Observer;
 import androidx.work.Constraints;
@@ -20,14 +20,14 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Bridge `LittlelightUploader` (docs/plans/step-9.md 2.6):
+ * Bridge `TinyglowUploader` (docs/plans/step-9.md 2.6):
  *   upload({ url, path }) -> { id }; cancel({ id });
  *   events progress { id, sent, total } | done { id, status } | error { id, message }.
  * The work survives the app being backgrounded or killed (WorkManager, expedited, foreground
  * service type dataSync with an "Uploading N photos" notification). URLs and paths are never logged.
  */
-@CapacitorPlugin(name = "LittlelightUploader")
-public class LittlelightUploaderPlugin extends Plugin {
+@CapacitorPlugin(name = "TinyglowUploader")
+public class TinyglowUploaderPlugin extends Plugin {
 
     private final Set<String> delivered = new HashSet<>();
     private final Set<String> counted = new HashSet<>();

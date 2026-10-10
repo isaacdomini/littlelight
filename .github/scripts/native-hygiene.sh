@@ -30,7 +30,7 @@
 #      sheet's "Allow access" handler); `this.requestAuthorization(` occurs exactly once
 #      (grep -c = 1) and inside `async enable(`, and the setup-sheet call sits in its `allow`
 #      handler. On the native side PHPhotoLibrary.requestAuthorization occurs exactly once in
-#      ios/App/App/*.swift, in LittlelightPhotoSync.swift.
+#      ios/App/App/*.swift, in TinyglowPhotoSync.swift.
 #
 # The merged Android manifest's forbidden-permission check needs a Gradle build and runs in the
 # android-debug job (.github/scripts/check-android-manifest.mjs).
@@ -267,9 +267,9 @@ else
   echo "::error::$what"
   fail=1
 fi
-what="PHPhotoLibrary.requestAuthorization exactly once in $IOS_APP/*.swift, in LittlelightPhotoSync.swift"
+what="PHPhotoLibrary.requestAuthorization exactly once in $IOS_APP/*.swift, in TinyglowPhotoSync.swift"
 swift_hits="$(grep -nE 'PHPhotoLibrary\.requestAuthorization' "$IOS_APP"/*.swift | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)"
-if [ "$(printf '%s\n' "$swift_hits" | grep -c .)" -eq 1 ] && printf '%s\n' "$swift_hits" | grep -q '/LittlelightPhotoSync\.swift:'; then
+if [ "$(printf '%s\n' "$swift_hits" | grep -c .)" -eq 1 ] && printf '%s\n' "$swift_hits" | grep -q '/TinyglowPhotoSync\.swift:'; then
   echo "ok: $what"
 else
   printf '%s\n' "$swift_hits" | cut -d: -f1,2

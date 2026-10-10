@@ -1,4 +1,4 @@
-import type { BabySummary, PhotoSummary } from "@littlelight/shared";
+import type { BabySummary, PhotoSummary } from "@tinyglow/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso } from "react-virtuoso";
 import { tn } from "../../i18n";

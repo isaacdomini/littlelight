@@ -3,7 +3,7 @@ import {
   type ReindexJob,
   type ReindexReason,
   reindexJobSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { JobWithMetadata } from "pg-boss";
 import type { ReconcileResult, ReindexResult, SearchIndexer } from "./ai";
 import { errorCategory } from "./clients";

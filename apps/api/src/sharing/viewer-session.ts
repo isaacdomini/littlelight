@@ -5,7 +5,7 @@ import {
   type ShareSessionResponse,
   shareSessionRequestSchema,
   shareSessionResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import * as auth from "../auth";

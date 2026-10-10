@@ -14,7 +14,7 @@ describe("pushEnvSchema", () => {
     const e = pushEnvSchema.parse({});
     expect(e.PUSH_PROVIDER).toBe("none");
     expect(e.APNS_ENVIRONMENT).toBe("sandbox");
-    expect(e.APNS_BUNDLE_ID).toBe("com.tesarsoft.littlelight");
+    expect(e.APNS_BUNDLE_ID).toBe("com.tesarsoft.tinyglow");
     expect(e.PUSH_PHOTOS_DEBOUNCE_SEC).toBe(600);
     expect(e.PUSH_SHARE_DEBOUNCE_SEC).toBe(60);
     expect(e.PUSH_MIN_GAP_MIN).toBe(60);
@@ -48,7 +48,7 @@ describe("pushEnvSchema", () => {
       APNS_KEY_ID: "ZYXWV98765",
       APNS_PRIVATE_KEY_BASE64: "LS0tLS1CRUdJTg==",
       APNS_ENVIRONMENT: "production",
-      FCM_PROJECT_ID: "littlelight-prod",
+      FCM_PROJECT_ID: "tinyglow-prod",
       FCM_SERVICE_ACCOUNT_BASE64: "eyJhIjoxfQ==",
       PUSH_FCM_BASE_URL: "https://fcm.example.test///",
     });

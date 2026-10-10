@@ -40,7 +40,7 @@ async function build(allowed: readonly string[] = ORIGINS) {
   return app;
 }
 
-const NATIVE = { "x-littlelight-client": "native" };
+const NATIVE = { "x-tinyglow-client": "native" };
 
 describe("native CORS plugin", () => {
   it.each(ORIGINS)(
@@ -53,14 +53,14 @@ describe("native CORS plugin", () => {
         headers: {
           origin,
           "access-control-request-method": "POST",
-          "access-control-request-headers": "authorization,content-type,x-littlelight-client",
+          "access-control-request-headers": "authorization,content-type,x-tinyglow-client",
         },
       });
       expect(res.statusCode).toBe(204);
       expect(res.headers["access-control-allow-origin"]).toBe(origin);
       expect(res.headers["access-control-allow-methods"]).toBe(CORS_ALLOW_METHODS);
       expect(res.headers["access-control-allow-headers"]).toBe(CORS_ALLOW_HEADERS);
-      expect(CORS_ALLOW_HEADERS).toContain("x-littlelight-client");
+      expect(CORS_ALLOW_HEADERS).toContain("x-tinyglow-client");
       expect(CORS_ALLOW_HEADERS).toContain("authorization");
       expect(res.headers["access-control-max-age"]).toBe(String(CORS_MAX_AGE_SEC));
       expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
@@ -129,7 +129,7 @@ describe("native CORS plugin", () => {
     const res = await app.inject({
       method: "GET",
       url: "/ping",
-      headers: { origin: "https://localhost", "x-littlelight-client": "web" },
+      headers: { origin: "https://localhost", "x-tinyglow-client": "web" },
     });
     expect(res.statusCode).toBe(403);
     await app.close();

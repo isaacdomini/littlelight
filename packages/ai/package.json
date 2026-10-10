@@ -1,5 +1,5 @@
 {
-  "name": "@littlelight/ai",
+  "name": "@tinyglow/ai",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "bakeoff": "tsx src/bakeoff/run.ts"
   },
   "dependencies": {
-    "@littlelight/shared": "workspace:*",
+    "@tinyglow/shared": "workspace:*",
     "zod": "4.6.5"
   },
   "devDependencies": {

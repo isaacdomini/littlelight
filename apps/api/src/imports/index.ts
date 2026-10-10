@@ -1,7 +1,7 @@
 import {
   IMPORT_BATCHES_PER_USER_PER_HOUR,
   IMPORT_CONNECTS_PER_USER_PER_HOUR,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import { createThrottle, type Throttle } from "../auth";
 import { googleImportSettings } from "../config";

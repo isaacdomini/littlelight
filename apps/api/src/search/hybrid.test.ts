@@ -1,4 +1,4 @@
-import type { Embedder } from "@littlelight/ai";
+import type { Embedder } from "@tinyglow/ai";
 import { describe, expect, it, vi } from "vitest";
 import type { Tx } from "../auth";
 import {

@@ -12,12 +12,12 @@ import {
   embedModelTag,
   getAiStatus,
   type ReasoningEffort,
-} from "@littlelight/ai";
+} from "@tinyglow/ai";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { errorCategory } from "../routes/healthz";
 
 // Chat model and embedder, created once per process (docs/plans/step-7.md 2.9). The API reads
-// `OPENAI_API_KEY` (and every other provider setting) only through `@littlelight/ai`'s factories:
+// `OPENAI_API_KEY` (and every other provider setting) only through `@tinyglow/ai`'s factories:
 // the env goes in, a `ChatModel` / `Embedder` comes out, and nothing here stores or logs a key.
 // `VISION_PROVIDER=fake` selects the deterministic fake chat model and bag-of-words embedder
 // (plan D1/D12), refused in production unless `AI_ALLOW_FAKE_IN_PRODUCTION=true`.

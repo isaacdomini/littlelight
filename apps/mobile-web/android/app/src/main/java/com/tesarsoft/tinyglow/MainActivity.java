@@ -1,17 +1,17 @@
-package com.tesarsoft.littlelight;
+package com.tesarsoft.tinyglow;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.os.Build;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
-import com.tesarsoft.littlelight.uploader.LittlelightUploaderPlugin;
+import com.tesarsoft.tinyglow.uploader.TinyglowUploaderPlugin;
 
 public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(LittlelightUploaderPlugin.class);
+        registerPlugin(TinyglowUploaderPlugin.class);
         super.onCreate(savedInstanceState);
         createDefaultChannel();
     }

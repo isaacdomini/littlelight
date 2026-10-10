@@ -7,7 +7,7 @@ import {
   googleTokenResponseSchema,
   type PickerSession,
   pickerSessionSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { GoogleImportSettings } from "../../config";
 
 // Server-to-server Google calls of the import API (docs/plans/step-10.md 2.6, D6, D14, D18):
@@ -93,7 +93,7 @@ export type CloseSessionResult = "deleted" | "unauthorized" | "failed";
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 /** OAuth client id sent to the fake when none is configured (the fake does not check it). */
-const FAKE_CLIENT_ID = "littlelight-dev";
+const FAKE_CLIENT_ID = "tinyglow-dev";
 
 function categoryForStatus(status: number): GoogleErrorCategory {
   if (status === 404) return "not_found";

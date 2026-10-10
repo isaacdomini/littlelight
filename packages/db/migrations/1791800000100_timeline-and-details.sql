@@ -12,7 +12,7 @@
 --   `authenticated` has no UPDATE grant on `baby_id`, so a custom milestone can never be turned
 --   into a preset either. Custom milestones stay admin-only for INSERT/UPDATE/DELETE.
 -- * At most 200 custom milestones per baby (`milestones_cap`, check_violation "milestone limit
---   reached"; MAX_CUSTOM_MILESTONES_PER_BABY in @littlelight/shared). The baby row is locked so
+--   reached"; MAX_CUSTOM_MILESTONES_PER_BABY in @tinyglow/shared). The baby row is locked so
 --   two concurrent inserts cannot both pass the count.
 -- * A custom milestone's name may not equal a preset's name, case-insensitively (plan D7:
 --   "two First steps in the picker"), on INSERT and on rename. The step-2 unique index covers
@@ -25,7 +25,7 @@
 -- * `photo_details` edits remain governed by `photo_editable` (admins, or the uploader of a
 --   pending photo; never a trashed or quarantined photo). Unchanged.
 -- * `age_group(age_days)` is IMMUTABLE, SECURITY INVOKER and must return exactly the keys of
---   @littlelight/shared `ageGroupKey` (step-5 plan 2.2); the two are compared by a test.
+--   @tinyglow/shared `ageGroupKey` (step-5 plan 2.2); the two are compared by a test.
 --
 -- No CHECK constraint on parent-entered text ("shape triggers"). A CHECK failure reports
 -- `Failing row contains (...)` in the error DETAIL, which Postgres writes to the server log, so a
@@ -43,7 +43,7 @@
 --   invites_email_check, photo_ai_overrides_field_path_check.
 -- New step-5 limits added the same way: photo_details.people <= 20, photo_details.location_label
 -- <= 120, upload_sessions.people <= 20, measurements.value_metric <= 200000 (200 kg / 200 m:
--- a sanity bound; the real input bounds are MEASUREMENT_LIMITS in @littlelight/shared).
+-- a sanity bound; the real input bounds are MEASUREMENT_LIMITS in @tinyglow/shared).
 -- Trigger functions are plain plpgsql (they read only NEW) and are not executable by app roles.
 -- Nothing in this migration logs or echoes notes, people, labels, names or bytes.
 
@@ -120,7 +120,7 @@ CREATE POLICY photos_authenticated_select ON public.photos FOR SELECT TO authent
   );
 
 -------------------------------------------------------------------------------------------------
--- age_group: SQL twin of @littlelight/shared ageGroupKey (plan 2.2). Keep the two identical.
+-- age_group: SQL twin of @tinyglow/shared ageGroupKey (plan 2.2). Keep the two identical.
 --   NULL            -> 'unknown'  (not ingested yet / no birth date)
 --   < 0             -> 'pre'      (before birth)
 --   0  <= d < 84    -> 'w' || floor(d / 7) + 1          (w1..w12)
@@ -140,7 +140,7 @@ AS $$
          END
 $$;
 COMMENT ON FUNCTION public.age_group(integer) IS
-  'Timeline age-group key for photos.age_days: unknown, pre, w1..w12, m3..m24, y2.. Mirrors @littlelight/shared ageGroupKey exactly.';
+  'Timeline age-group key for photos.age_days: unknown, pre, w1..w12, m3..m24, y2.. Mirrors @tinyglow/shared ageGroupKey exactly.';
 REVOKE EXECUTE ON FUNCTION public.age_group(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.age_group(integer) TO authenticated, viewer, pipeline, service_role;
 

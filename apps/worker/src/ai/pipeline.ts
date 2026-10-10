@@ -16,7 +16,7 @@ import {
   type VisionRequest,
   type VisionResult,
   validateDescription,
-} from "@littlelight/ai";
+} from "@tinyglow/ai";
 import {
   AI_COST_PER_PHOTO_ESTIMATE_USD,
   AI_PROMPT_VERSION,
@@ -25,7 +25,7 @@ import {
   type AiPipelineEnv,
   maxMilestoneConfidence,
   type ReindexJob,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type pg from "pg";
 import { errorCategory } from "../clients";
 import { type PipelinePool, runAsPipeline } from "../db";
@@ -68,7 +68,7 @@ export type AiPipelineConfig = Pick<
     VISION_PROVIDER?: string;
     VISION_MODEL?: string;
     VISION_REASONING_EFFORT?: ReasoningEffort;
-    /** Default `AI_PROMPT_VERSION` / `AI_SCHEMA_VERSION` from `@littlelight/shared`. */
+    /** Default `AI_PROMPT_VERSION` / `AI_SCHEMA_VERSION` from `@tinyglow/shared`. */
     promptVersion?: string;
     schemaVersion?: string;
     /** Overrides `VISION_REASONING_EFFORT`; with `none`, reasoning tokens > 0 log a cost warning. */

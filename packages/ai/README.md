@@ -1,4 +1,4 @@
-# @littlelight/ai
+# @tinyglow/ai
 
 The only package that talks to model providers. API and worker code call the factories and
 interfaces exported here and never import a provider SDK directly (PRD "Build handoff for Claude
@@ -46,7 +46,7 @@ for both providers) and `src/bakeoff/run.ts`.
 | `OPENAI_API_KEY` | unset | Required for `openai` and for embeddings. Put it in `.env.local` (reaches the worker and, from step 7, the api for chat and query embeddings) |
 | `ANTHROPIC_API_KEY` | unset | Required only when `VISION_PROVIDER=anthropic` (and for the bake-off) |
 | `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` | real APIs | Mock servers only; whatever is set here receives photos |
-| `AI_MAX_OUTPUT_TOKENS`, `AI_IMAGE_DETAIL`, `AI_BATCH_MAX_BYTES` | 1200, `auto`, 150 MB | From `aiPipelineEnvSchema` (`@littlelight/shared`) |
+| `AI_MAX_OUTPUT_TOKENS`, `AI_IMAGE_DETAIL`, `AI_BATCH_MAX_BYTES` | 1200, `auto`, 150 MB | From `aiPipelineEnvSchema` (`@tinyglow/shared`) |
 | `FAKE_VISION_DIR` | unset | Fake only: `<batchId>.jsonl` (request lines minus image bytes and text: ids, plan, image size, context field lengths) and `<batchId>.state.json` (ids, poll count) so a batch survives across processes |
 | `FAKE_VISION_POLLS` | `1` | Fake only: polls answered `in_progress` before `completed` |
 
@@ -56,10 +56,10 @@ Empty strings count as unset. Reasoning efforts are `none | low | medium | high`
 ## Request shapes (docs/plans/step-6.md 2.2)
 
 - **OpenAI**: JSONL lines `{custom_id: photoId, method: "POST", url: "/v1/responses", body}` with
-  `body = {model, instructions, text: {format: {type: "json_schema", name: "littlelight_photo_v1",
+  `body = {model, instructions, text: {format: {type: "json_schema", name: "tinyglow_photo_v1",
   schema, strict: true}}, reasoning: {effort}, input: [{role: "user", content: [input_image
   (data:image/jpeg;base64,…), input_text]}], max_output_tokens, prompt_cache_key:
-  "littlelight-describe-v1", store: false}`; uploaded with `purpose=batch`; batch created with
+  "tinyglow-describe-v1", store: false}`; uploaded with `purpose=batch`; batch created with
   `endpoint: "/v1/responses"`, `completion_window: "24h"`. Input, output and error files are
   deleted by `deleteBatchArtifacts` (404 = already gone). If batch creation fails after the
   upload, the input file is deleted immediately.
@@ -77,8 +77,8 @@ Empty strings count as unset. Reasoning efforts are `none | low | medium | high`
 - **OpenAI request**: `POST /v1/responses {model, instructions, input, tools: [{type: "function",
   name, description, parameters, strict: true}], tool_choice: "auto", parallel_tool_calls: true,
   reasoning: {effort: "low"}, max_output_tokens, store: false, include:
-  ["reasoning.encrypted_content"], prompt_cache_key: "littlelight-chat-v1", stream: true}`. Tools
-  are `CHAT_TOOL_DEFINITIONS` from `@littlelight/shared`. `system` messages become
+  ["reasoning.encrypted_content"], prompt_cache_key: "tinyglow-chat-v1", stream: true}`. Tools
+  are `CHAT_TOOL_DEFINITIONS` from `@tinyglow/shared`. `system` messages become
   `instructions`; an assistant message carrying `providerItems` is replayed as those raw output
   items (reasoning items with `encrypted_content`, function calls); tool results are
   `function_call_output` items. Retries (429/5xx/network) happen only before the stream starts;
@@ -154,7 +154,7 @@ safety") and `CLAUDE.md`. Reviewers should reject any adapter that breaks one.
    worker checks `babies.plan` server-side when it enqueues a job. `VisionRequest.plan` is typed as
    the literal `"paid"`, so a free-tier request won't compile, and adapters re-assert it at runtime.
 5. **Validate before storing.** `VisionResult.raw` is unvalidated. It is validated against the
-   description schema v1 (zod, `@littlelight/shared`) before anything is written to `photo_ai`.
+   description schema v1 (zod, `@tinyglow/shared`) before anything is written to `photo_ai`.
    Invalid output is retried once, then dead-lettered. Raw output is never written.
 6. **Provider is config.** One interface, two implementations (OpenAI primary, Anthropic Claude
    Haiku 5.5 fallback), selected by `VISION_PROVIDER`. Call sites never change when the provider does.

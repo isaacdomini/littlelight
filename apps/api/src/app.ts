@@ -1,6 +1,6 @@
 import cookie from "@fastify/cookie";
-import type { AiEnvInput } from "@littlelight/ai";
-import { AI_PIPELINE_DEFAULTS, redactUrl } from "@littlelight/shared";
+import type { AiEnvInput } from "@tinyglow/ai";
+import { AI_PIPELINE_DEFAULTS, redactUrl } from "@tinyglow/shared";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import {
   serializerCompiler,
@@ -62,7 +62,7 @@ export interface BuildAppOptions {
   gotrue?: GoTrueClient;
   /**
    * Override the chat model / embedder (tests pass fakes). Default: built once from `aiEnv` by
-   * `@littlelight/ai`'s factories (docs/plans/step-7.md 2.9).
+   * `@tinyglow/ai`'s factories (docs/plans/step-7.md 2.9).
    */
   ai?: AiServices;
   /** Env for the AI factories when `ai` is not given (default `process.env`). */
@@ -78,7 +78,7 @@ export interface BuildAppOptions {
 
 /**
  * URL as logged (query string dropped; invite/share tokens and token-shaped segments replaced).
- * Moved to `@littlelight/shared` (`telemetry.ts`) so the request logger and the Sentry scrubber
+ * Moved to `@tinyglow/shared` (`telemetry.ts`) so the request logger and the Sentry scrubber
  * apply one set of rules; re-exported here for existing imports and tests.
  */
 export { redactUrl };

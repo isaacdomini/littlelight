@@ -1,12 +1,12 @@
-# Littlelight production stack (on-prem server, reached only through Cloudflare Tunnel).
+# Tinyglow production stack (on-prem server, reached only through Cloudflare Tunnel).
 #
 # cloudflared runs OUTSIDE this file (on the host, or on another machine on the LAN). Exactly two
 # ports are published, bound to 127.0.0.1 by default so only the host-run cloudflared reaches them:
 #   web     nginx :80        -> ${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}
 #   storage MinIO API :9000  -> ${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}
 # Tunnel public hostnames (ingress reference: docker/cloudflared/config.example.yml):
-#   littlelight.tesarsoft.com        -> http://localhost:${WEB_PORT}
-#   files.littlelight.tesarsoft.com  -> http://localhost:${STORAGE_PORT}, path ^/<S3_BUCKET>/. only,
+#   tinyglow.app        -> http://localhost:${WEB_PORT}
+#   files.tinyglow.app  -> http://localhost:${STORAGE_PORT}, path ^/<S3_BUCKET>/. only,
 #                                       NO "HTTP Host Header" override (presigned signatures are
 #                                       validated against the original Host)
 # Nothing else is published: not the MinIO console (9001), db, auth, api, mail or worker. If
@@ -51,11 +51,11 @@
 # http://auth:9999 for codes, verify, refresh, sign-out and account deletion.
 #
 # Database roles (docs/plans/step-2.md 2.2) and start order:
-#   db -> db-init   (superuser: creates/converges roles supabase_auth_admin, littlelight_api,
-#                    littlelight_worker, viewer, pipeline, ... and the auth/pgboss schemas)
+#   db -> db-init   (superuser: creates/converges roles supabase_auth_admin, tinyglow_api,
+#                    tinyglow_worker, viewer, pipeline, ... and the auth/pgboss schemas)
 #      -> auth      (GoTrue as supabase_auth_admin; runs its own migrations, then /health)
 #      -> migrate   (superuser: app migrations; they reference auth.users)
-#      -> api       (littlelight_api, RLS enforced) / worker (littlelight_worker)
+#      -> api       (tinyglow_api, RLS enforced) / worker (tinyglow_worker)
 # MinIO (docs/plans/step-4.md 2.11): the root key (S3_ROOT_USER / S3_ROOT_PASSWORD) goes to
 # storage and storage-init only. storage-init (docker/minio/init.sh) converges on every `up`:
 # bucket + versioning, the 7-day noncurrent-version lifecycle rule, and two bucket-scoped users:
@@ -64,7 +64,7 @@
 # PUBLIC_URL and the two Capacitor WebView origins by default. The worker mounts STORAGE_PATH read-only at /storage for the 80 % disk alert.
 # Never enable log_statement=all, log_parameter_max_length_on_error > 0 or pg_stat_statements
 # parameter capture on `db`: request claims and encryption keys travel as bind parameters.
-name: littlelight
+name: tinyglow
 
 x-logging: &logging
   driver: local
@@ -80,7 +80,7 @@ x-app: &app
 x-bootstrap-env: &bootstrap-env
   NODE_ENV: production
   TZ: ${TZ:-UTC}
-  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/littlelight
+  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/tinyglow
   AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}
   API_DB_PASSWORD: ${API_DB_PASSWORD:?Set API_DB_PASSWORD in .env}
   WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:?Set WORKER_DB_PASSWORD in .env}
@@ -91,11 +91,11 @@ x-app-env: &app-env
   NODE_ENV: production
   LOG_LEVEL: ${LOG_LEVEL:-info}
   TZ: ${TZ:-UTC}
-  PUBLIC_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}
+  PUBLIC_URL: ${PUBLIC_URL:-https://tinyglow.app}
   JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
   DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set DATA_ENCRYPTION_KEY in .env}
   S3_ENDPOINT: ${S3_ENDPOINT:-http://storage:9000}
-  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://files.tinyglow.app}
   # S3_ACCESS_KEY / S3_SECRET_KEY are per service (api and worker blocks), never the root key.
   S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
   S3_REGION: ${S3_REGION:-us-east-1}
@@ -171,19 +171,19 @@ services:
     logging: *logging
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: littlelight
+      POSTGRES_DB: tinyglow
     volumes:
       - db-data:/var/lib/postgresql/data
     shm_size: 256m
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d littlelight"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d tinyglow"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 30s
       start_interval: 1s
 
-  # One-shot: Postgres roles (supabase_auth_admin for GoTrue, littlelight_api, littlelight_worker,
+  # One-shot: Postgres roles (supabase_auth_admin for GoTrue, tinyglow_api, tinyglow_worker,
   # viewer, pipeline, ...), the auth schema GoTrue needs and the pgboss schema. Idempotent; it
   # re-applies passwords/attributes from .env on every start (also the step after a restore).
   db-init:
@@ -191,7 +191,7 @@ services:
     build:
       context: .
       dockerfile: packages/db/Dockerfile
-    image: littlelight-db-tools
+    image: tinyglow-db-tools
     command: ["pnpm", "db:bootstrap"]
     restart: "no"
     logging: *logging
@@ -209,7 +209,7 @@ services:
     build:
       context: .
       dockerfile: packages/db/Dockerfile
-    image: littlelight-db-tools
+    image: tinyglow-db-tools
     command: ["pnpm", "db:migrate"]
     restart: "no"
     logging: *logging
@@ -232,16 +232,16 @@ services:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: "9999"
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}@db:5432/littlelight
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${AUTH_DB_PASSWORD:?Set AUTH_DB_PASSWORD in .env}@db:5432/tinyglow
       GOTRUE_JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       GOTRUE_JWT_EXP: "3600"
       GOTRUE_JWT_AUD: authenticated
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_ADMIN_ROLES: service_role
-      GOTRUE_JWT_ISSUER: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth
-      GOTRUE_SITE_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}
-      API_EXTERNAL_URL: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth
-      GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:-https://littlelight.tesarsoft.com/**}
+      GOTRUE_JWT_ISSUER: ${PUBLIC_URL:-https://tinyglow.app}/auth
+      GOTRUE_SITE_URL: ${PUBLIC_URL:-https://tinyglow.app}
+      API_EXTERNAL_URL: ${PUBLIC_URL:-https://tinyglow.app}/auth
+      GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:-https://tinyglow.app/**}
       # Rate-limit on the client IP Cloudflare sets (clients cannot bypass Cloudflare: the only
       # published ports are bound to 127.0.0.1 for the host-run cloudflared, see the header).
       # OAuth redirects arrive via cloudflared -> nginx, which passes the header through; the
@@ -282,7 +282,7 @@ services:
       GOTRUE_SMTP_PASS: ${SMTP_PASS:?Set SMTP_PASS in .env}
       # Same From address as the api's mail (MAIL_FROM, defaulting to SMTP_ADMIN_EMAIL).
       GOTRUE_SMTP_ADMIN_EMAIL: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}}
-      GOTRUE_SMTP_SENDER_NAME: Littlelight
+      GOTRUE_SMTP_SENDER_NAME: Tinyglow
       # At most one sign-in email per address per 60 s (matches the app's resend cooldown) and a
       # global backstop of 200 emails per hour; per-email/per-IP limits live in the api.
       GOTRUE_SMTP_MAX_FREQUENCY: 60s
@@ -292,8 +292,8 @@ services:
       # templates don't use {{ .ConfirmationURL }} (GoTrue's /verify is not browser-facing).
       GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://web/email-templates/confirmation.html
       GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://web/email-templates/magic-link.html
-      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Littlelight sign-in code
-      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Littlelight sign-in code
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Tinyglow sign-in code
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Tinyglow sign-in code
       # Social sign-in: off until the credentials in .env.example exist; then set the *_ENABLED
       # flag to "true" in .env (the same flag turns the button on in the api, see below).
       # Verified-email auto-linking is GoTrue's default; unverified provider emails never link.
@@ -301,11 +301,11 @@ services:
       GOTRUE_EXTERNAL_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
       GOTRUE_EXTERNAL_APPLE_CLIENT_ID: ${APPLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_APPLE_SECRET: ${APPLE_CLIENT_SECRET:-}
-      GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth/callback
+      GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: ${PUBLIC_URL:-https://tinyglow.app}/auth/callback
       GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
       GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${PUBLIC_URL:-https://littlelight.tesarsoft.com}/auth/callback
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${PUBLIC_URL:-https://tinyglow.app}/auth/callback
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
       interval: 10s
@@ -322,11 +322,11 @@ services:
     environment:
       MINIO_ROOT_USER: ${S3_ROOT_USER:?Set S3_ROOT_USER in .env}
       MINIO_ROOT_PASSWORD: ${S3_ROOT_PASSWORD:?Set S3_ROOT_PASSWORD in .env}
-      MINIO_SERVER_URL: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
+      MINIO_SERVER_URL: ${S3_PUBLIC_ENDPOINT:-https://files.tinyglow.app}
       # Browser part PUTs and signed GETs come from the web app origin and the native apps'
       # WebView origins (iOS capacitor://localhost, Android https://localhost; docs/plans/
       # step-9.md 2.3). Override the whole comma list with S3_CORS_ALLOW_ORIGIN.
-      MINIO_API_CORS_ALLOW_ORIGIN: ${S3_CORS_ALLOW_ORIGIN:-${PUBLIC_URL:-https://littlelight.tesarsoft.com},capacitor://localhost,https://localhost}
+      MINIO_API_CORS_ALLOW_ORIGIN: ${S3_CORS_ALLOW_ORIGIN:-${PUBLIC_URL:-https://tinyglow.app},capacitor://localhost,https://localhost}
     volumes:
       - ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}:/data
     # S3 API only, for the host-run cloudflared (files. hostname). The console (:9001) is never
@@ -373,7 +373,7 @@ services:
       target: prod
     environment:
       <<: *app-env
-      DATABASE_URL: postgres://littlelight_api:${API_DB_PASSWORD:?Set API_DB_PASSWORD in .env}@db:5432/littlelight
+      DATABASE_URL: postgres://tinyglow_api:${API_DB_PASSWORD:?Set API_DB_PASSWORD in .env}@db:5432/tinyglow
       # Bucket-scoped MinIO user (created by storage-init; no delete, no versions, no admin).
       S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?Set S3_API_ACCESS_KEY in .env}
       S3_SECRET_KEY: ${S3_API_SECRET_KEY:?Set S3_API_SECRET_KEY in .env}
@@ -433,7 +433,7 @@ services:
       target: prod
     environment:
       <<: *app-env
-      DATABASE_URL: postgres://littlelight_worker:${WORKER_DB_PASSWORD:?Set WORKER_DB_PASSWORD in .env}@db:5432/littlelight
+      DATABASE_URL: postgres://tinyglow_worker:${WORKER_DB_PASSWORD:?Set WORKER_DB_PASSWORD in .env}@db:5432/tinyglow
       # Bucket-scoped MinIO user (api's rights + delete incl. object versions; no admin).
       S3_ACCESS_KEY: ${S3_WORKER_ACCESS_KEY:?Set S3_WORKER_ACCESS_KEY in .env}
       S3_SECRET_KEY: ${S3_WORKER_SECRET_KEY:?Set S3_WORKER_SECRET_KEY in .env}
@@ -464,7 +464,7 @@ services:
       # Push notifications (docs/plans/step-9.md 2.8), worker only: none (default; nothing is
       # sent until the keys exist) | live (APNs for iOS devices if APNS_* are set, FCM for
       # Android if FCM_* are set). `fake` is refused when NODE_ENV=production. Empty values =
-      # unset / code defaults (APNS_BUNDLE_ID = com.tesarsoft.littlelight; *_BASE_URL = the
+      # unset / code defaults (APNS_BUNDLE_ID = com.tesarsoft.tinyglow; *_BASE_URL = the
       # real Apple/Google endpoints, mock servers in testing only).
       PUSH_PROVIDER: ${PUSH_PROVIDER:-none}
       APNS_TEAM_ID: ${APNS_TEAM_ID:-}
@@ -540,7 +540,7 @@ services:
       # Content-Security-Policy-Report-Only (default) | Content-Security-Policy (enforce).
       WEB_CSP_HEADER: ${WEB_CSP_HEADER:-Content-Security-Policy-Report-Only}
       # Presigned photo GETs and upload part PUTs go to this origin (img-src, connect-src).
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://files.tinyglow.app}
       # Extra connect-src origins (space-separated), e.g. the Sentry ingest origin.
       WEB_CSP_CONNECT_EXTRA: ${WEB_CSP_CONNECT_EXTRA:-}
     ports:
@@ -571,7 +571,7 @@ services:
       PGHOST: db
       PGUSER: postgres
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      PGDATABASE: littlelight
+      PGDATABASE: tinyglow
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
       TZ: ${TZ:-UTC}
@@ -581,7 +581,7 @@ services:
     entrypoint: ["/bin/bash", "/scripts/pg-backup.sh"]
     healthcheck:
       # Unhealthy if the newest verified dump is older than 26 hours.
-      test: ["CMD-SHELL", "find /backups -maxdepth 1 -name 'littlelight-*.dump' -mmin -1560 | grep -q ."]
+      test: ["CMD-SHELL", "find /backups -maxdepth 1 -name 'tinyglow-*.dump' -mmin -1560 | grep -q ."]
       interval: 5m
       timeout: 30s
       retries: 1

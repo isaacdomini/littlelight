@@ -20,7 +20,7 @@ export async function psql(sql: string): Promise<string[]> {
       "-U",
       "postgres",
       "-d",
-      "littlelight",
+      "tinyglow",
       "-At",
       "-c",
       sql,

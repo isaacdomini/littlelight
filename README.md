@@ -1,4 +1,4 @@
-# Littlelight
+# Tinyglow
 
 Private, AI-organized baby photo album. Spec: `docs/PRD.md`. Build plans: `docs/plans/`.
 
@@ -8,12 +8,12 @@ pnpm monorepo, TypeScript everywhere:
 
 | Package | Path |
 | --- | --- |
-| `@littlelight/api` | `apps/api` (Fastify) |
-| `@littlelight/worker` | `apps/worker` (pg-boss) |
-| `@littlelight/mobile-web` | `apps/mobile-web` (React + Vite + Ionic) |
-| `@littlelight/db` | `packages/db` (migrations, bootstrap, seed) |
-| `@littlelight/shared` | `packages/shared` (zod schemas, constants) |
-| `@littlelight/ai` | `packages/ai` (model adapters) |
+| `@tinyglow/api` | `apps/api` (Fastify) |
+| `@tinyglow/worker` | `apps/worker` (pg-boss) |
+| `@tinyglow/mobile-web` | `apps/mobile-web` (React + Vite + Ionic) |
+| `@tinyglow/db` | `packages/db` (migrations, bootstrap, seed) |
+| `@tinyglow/shared` | `packages/shared` (zod schemas, constants) |
+| `@tinyglow/ai` | `packages/ai` (model adapters) |
 
 `packages/shared` and `packages/ai` export TypeScript source directly; no build step.
 
@@ -39,5 +39,5 @@ pnpm install --frozen-lockfile
 pnpm lint          # Biome (format + lint check); `pnpm format` writes fixes
 pnpm typecheck     # tsc --noEmit in every package
 pnpm test          # Vitest unit tests (no DB or network)
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight pnpm test:integration
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow pnpm test:integration
 ```

@@ -1,4 +1,4 @@
-import { SEARCH_FACET_TAGS_MAX, type SearchFacetsResponse } from "@littlelight/shared";
+import { SEARCH_FACET_TAGS_MAX, type SearchFacetsResponse } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 
 // FR-7.5 chip values (docs/plans/step-7.md 2.8 "routes.ts"): people, milestones, tags (top 30),

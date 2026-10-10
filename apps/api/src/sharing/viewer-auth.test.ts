@@ -1,5 +1,5 @@
 import cookie from "@fastify/cookie";
-import { VIEWER_COOKIE } from "@littlelight/shared";
+import { VIEWER_COOKIE } from "@tinyglow/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { testConfig } from "../testing/support";
@@ -19,8 +19,8 @@ import {
 
 const LINK = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const SESSION = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-const WEB = { "x-littlelight-client": "web" };
-const NATIVE = { "x-littlelight-client": "native" };
+const WEB = { "x-tinyglow-client": "web" };
+const NATIVE = { "x-tinyglow-client": "native" };
 
 const config = testConfig();
 let app: FastifyInstance | undefined;
@@ -149,7 +149,7 @@ describe("the onRequest hook", () => {
     expect(res.json()).toEqual({ viewer: { transport: "cookie", jti: SESSION }, error: null });
   });
 
-  it("a non-GET over the cookie without X-Littlelight-Client: web is 403 csrf_rejected", async () => {
+  it("a non-GET over the cookie without X-Tinyglow-Client: web is 403 csrf_rejected", async () => {
     const a = await build();
     const cookieHeader = `${VIEWER_COOKIE}=${await jwt()}`;
     for (const method of ["POST", "DELETE", "PATCH", "PUT"] as const) {

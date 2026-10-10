@@ -1,5 +1,5 @@
 /**
- * Provider-neutral contracts for every model call in Littlelight (plan step 1, section 2.11).
+ * Provider-neutral contracts for every model call in Tinyglow (plan step 1, section 2.11).
  *
  * Call sites depend only on these interfaces; the OpenAI (primary) and Anthropic (fallback)
  * adapters implement them and are selected by env (`VISION_PROVIDER`), never by code changes.
@@ -123,7 +123,7 @@ export type VisionFailureKind =
 
 /**
  * One photo's result. `raw` is the unvalidated model output: it MUST be validated against the
- * description schema v1 (zod, in `@littlelight/shared` from step 6) before anything is written
+ * description schema v1 (zod, in `@tinyglow/shared` from step 6) before anything is written
  * to `photo_ai`. Invalid output is retried once, then dead-lettered (PRD FR-5.3).
  */
 export type VisionResult =
@@ -220,7 +220,7 @@ export interface ChatToolCall {
   name: string;
   /**
    * Unvalidated arguments as produced by the model: the parsed JSON object, or the raw string
-   * when it was not valid JSON. Validate with `parseChatToolArguments` (`@littlelight/shared`)
+   * when it was not valid JSON. Validate with `parseChatToolArguments` (`@tinyglow/shared`)
    * before executing. Never log (they contain the user's query).
    */
   arguments: unknown;
@@ -247,7 +247,7 @@ export type ChatMessage =
 export interface ChatToolDefinition {
   name: string;
   description: string;
-  /** Strict JSON Schema for the arguments (`CHAT_TOOL_JSON_SCHEMAS` in `@littlelight/shared`). */
+  /** Strict JSON Schema for the arguments (`CHAT_TOOL_JSON_SCHEMAS` in `@tinyglow/shared`). */
   parameters: Readonly<Record<string, unknown>>;
 }
 

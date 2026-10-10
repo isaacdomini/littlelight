@@ -1,4 +1,4 @@
-# Littlelight CI (docs/plans/step-1.md task 1.10; PRD "Build order" step 1: "CI builds every image").
+# Tinyglow CI (docs/plans/step-1.md task 1.10; PRD "Build order" step 1: "CI builds every image").
 #
 #   check            install (frozen lockfile), lint, a no-metadata grep over the worker source,
 #                    the step-6/7 AI hygiene greps (.github/scripts/ai-hygiene.sh: no provider key
@@ -116,11 +116,11 @@ jobs:
         image: pgvector/pgvector:0.8.7-pg17
         env:
           POSTGRES_PASSWORD: dev
-          POSTGRES_DB: littlelight
+          POSTGRES_DB: tinyglow
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d littlelight"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d tinyglow"
           --health-interval 2s
           --health-timeout 5s
           --health-retries 30
@@ -202,7 +202,7 @@ jobs:
       # docs/plans/step-10.md 2.10 "CI (10.14)" / 4.1: static (.github/scripts/import-hygiene.mjs)
       # - no logger call in apps/api/src/imports, apps/worker/src/import or the native photoSync.ts
       # carries a baseUrl, pickerUri, token, code, secret or raw error, no console.*, no print/NSLog
-      # in LittlelightPhotoSync.swift; the worker never names google_accounts / refresh_token_enc /
+      # in TinyglowPhotoSync.swift; the worker never names google_accounts / refresh_token_enc /
       # service_role and never inserts into photos (migrations and the bootstrap grant it neither);
       # every media request goes through parseAllowedMediaUrl / resolveMediaRedirect, null-checked,
       # redirect "manual"; GOOGLE_IMPORT_CLIENT_SECRET never in the client app or the web image.
@@ -269,9 +269,9 @@ jobs:
       - name: Integration tests (pgvector service + MinIO)
         env:
           # Dev-only values of the throwaway service container above (same as docker-compose.dev.yml
-          # x-dev-shared). Tests connect as the superuser for fixtures and as littlelight_api /
-          # littlelight_worker for the RLS cases and the API's request pool.
-          DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight
+          # x-dev-shared). Tests connect as the superuser for fixtures and as tinyglow_api /
+          # tinyglow_worker for the RLS cases and the API's request pool.
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/tinyglow
           AUTH_DB_PASSWORD: dev
           API_DB_PASSWORD: dev
           WORKER_DB_PASSWORD: dev
@@ -286,7 +286,7 @@ jobs:
           AUTH_INTERNAL_URL: http://localhost:9999
           SMTP_HOST: localhost
           SMTP_PORT: "1025"
-          MAIL_FROM: noreply@littlelight.local
+          MAIL_FROM: noreply@tinyglow.local
           # worker-integration (apps/worker/src/testing/harness.ts): the MinIO started above,
           # root credentials (bucket create + versioning + ListObjectVersions). A dedicated test
           # bucket, as in docs/plans/step-4.md 4.4. S3_PUBLIC_ENDPOINT only matters to a test
@@ -295,7 +295,7 @@ jobs:
           S3_PUBLIC_ENDPOINT: http://localhost:9000
           S3_ACCESS_KEY: dev
           S3_SECRET_KEY: devdevdev
-          S3_BUCKET: littlelight-test
+          S3_BUCKET: tinyglow-test
           S3_REGION: us-east-1
           S3_FORCE_PATH_STYLE: "true"
           # Step-6/7 AI suites (docs/plans/step-6.md 2.10/4.4, step-7.md 2.12): the worker
@@ -373,7 +373,7 @@ jobs:
       - name: Generated DB types are current
         env:
           DB_SERVICE: ${{ job.services.db.id }}
-          DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight_types
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/tinyglow_types
           AUTH_DB_PASSWORD: dev
           API_DB_PASSWORD: dev
           WORKER_DB_PASSWORD: dev
@@ -381,17 +381,17 @@ jobs:
           GOTRUE_IMAGE: supabase/auth:v2.197.0
         run: |
           set -euo pipefail
-          docker exec "$DB_SERVICE" createdb -U postgres littlelight_types
+          docker exec "$DB_SERVICE" createdb -U postgres tinyglow_types
           pnpm db:bootstrap
           docker run --rm --network host \
             -e GOTRUE_DB_DRIVER=postgres \
-            -e GOTRUE_DB_DATABASE_URL="postgres://supabase_auth_admin:${AUTH_DB_PASSWORD}@localhost:5432/littlelight_types" \
+            -e GOTRUE_DB_DATABASE_URL="postgres://supabase_auth_admin:${AUTH_DB_PASSWORD}@localhost:5432/tinyglow_types" \
             -e GOTRUE_JWT_SECRET=dev-only-jwt-secret-at-least-32-characters \
             -e GOTRUE_SITE_URL=http://localhost:8080 \
             -e API_EXTERNAL_URL=http://localhost:8080/auth \
             "$GOTRUE_IMAGE" auth migrate
           pnpm db:migrate
-          pnpm --filter @littlelight/db db:types
+          pnpm --filter @tinyglow/db db:types
           git diff --exit-code -- packages/db/src/generated
           test -z "$(git status --porcelain -- packages/db/src/generated)" \
             || { echo "untracked generated files:"; git status --porcelain -- packages/db/src/generated; exit 1; }
@@ -476,7 +476,7 @@ jobs:
           push: false
           # Only the web image is run below; the others stay in the builder.
           load: ${{ matrix.image == 'web' }}
-          tags: littlelight-${{ matrix.image }}:ci
+          tags: tinyglow-${{ matrix.image }}:ci
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
@@ -489,7 +489,7 @@ jobs:
       - name: Web image CSP header (report-only default, enforcing when set)
         if: matrix.image == 'web'
         timeout-minutes: 5
-        run: bash .github/scripts/check-web-csp.sh littlelight-web:ci
+        run: bash .github/scripts/check-web-csp.sh tinyglow-web:ci
 
   dev-stack-smoke:
     name: Dev stack smoke + e2e
@@ -667,11 +667,11 @@ jobs:
       - name: Perf seed (10,000 photos, dev only)
         timeout-minutes: 10
         env:
-          DATABASE_URL: postgres://postgres:dev@localhost:5432/littlelight
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/tinyglow
           S3_ENDPOINT: http://localhost:9000
           S3_ACCESS_KEY: dev
           S3_SECRET_KEY: devdevdev
-          S3_BUCKET: littlelight-dev
+          S3_BUCKET: tinyglow-dev
           S3_REGION: us-east-1
         run: pnpm perf:seed
 
@@ -1160,10 +1160,10 @@ jobs:
       # scheme on), then `cap sync android`, which regenerates capacitor.settings.gradle, the
       # Cordova plugin project and the copied web assets (all git-ignored or generated).
       - name: Sync the web build into the Android project
-        run: pnpm --filter @littlelight/mobile-web native:sync:android
+        run: pnpm --filter @tinyglow/mobile-web native:sync:android
 
       - name: Build debug APK (assembleDebug)
-        run: pnpm --filter @littlelight/mobile-web android:build:debug
+        run: pnpm --filter @tinyglow/mobile-web android:build:debug
 
       - name: Android lint (lintDebug)
         working-directory: apps/mobile-web/android
@@ -1247,13 +1247,13 @@ jobs:
         run: |
           set -euo pipefail
           plutil -lint apps/mobile-web/ios/App/App/Info.plist apps/mobile-web/ios/App/App/Info-Debug.plist
-          pnpm --filter @littlelight/mobile-web check:ios-plists
+          pnpm --filter @tinyglow/mobile-web check:ios-plists
 
       - name: Sync the web build into the iOS project
-        run: pnpm --filter @littlelight/mobile-web native:sync:ios
+        run: pnpm --filter @tinyglow/mobile-web native:sync:ios
 
       - name: Build for the iOS Simulator (ad-hoc signed)
-        run: pnpm --filter @littlelight/mobile-web ios:build:sim
+        run: pnpm --filter @tinyglow/mobile-web ios:build:sim
 
       # docs/plans/step-9.md 4.5: the built Info.plist, the privacy manifest and the
       # entitlements parse; the entitlements embedded in the app list the associated domains.
@@ -1267,7 +1267,7 @@ jobs:
             apps/mobile-web/ios/App/App/App.entitlements
           /usr/libexec/PlistBuddy -c 'Print :NSPhotoLibraryUsageDescription' "$app/Info.plist"
           codesign -d --entitlements - "$app" 2>/dev/null | tee "$RUNNER_TEMP/entitlements.txt"
-          grep -q 'applinks:littlelight.tesarsoft.com' "$RUNNER_TEMP/entitlements.txt" \
+          grep -q 'applinks:tinyglow.app' "$RUNNER_TEMP/entitlements.txt" \
             || { echo "::error::associated domains entitlement missing from the built app"; exit 1; }
           # The Debug product carries the two debug-only keys (Info-Debug.plist via debug.xcconfig).
           for key in NSAppTransportSecurity CFBundleURLTypes; do

@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fakeDescription } from "@littlelight/ai";
-import { babyPrefix, exportKey } from "@littlelight/shared";
+import { fakeDescription } from "@tinyglow/ai";
+import { babyPrefix, exportKey } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createExportMailer } from "../email/mailer";
 import { purgeTrash } from "../purge";
@@ -304,7 +304,7 @@ describe.skipIf(!integrationEnv)("data.export (real stack)", () => {
         SMTP_HOST: "127.0.0.1",
         SMTP_PORT: sink.port,
         SMTP_SECURE: false,
-        MAIL_FROM: "noreply@littlelight.test",
+        MAIL_FROM: "noreply@tinyglow.test",
       },
       h.log,
     );

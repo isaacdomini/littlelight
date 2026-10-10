@@ -1,4 +1,4 @@
-import { idParamsSchema, sessionsListResponseSchema, userAgentLabel } from "@littlelight/shared";
+import { idParamsSchema, sessionsListResponseSchema, userAgentLabel } from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { notFound } from "../lib/errors";

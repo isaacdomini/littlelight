@@ -1,6 +1,6 @@
 import { IonAlert, IonIcon } from "@ionic/react";
-import type { GoogleConnectReturnPath, ImportBatch } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import type { GoogleConnectReturnPath, ImportBatch } from "@tinyglow/shared";
 import { logoGoogle } from "ionicons/icons";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";

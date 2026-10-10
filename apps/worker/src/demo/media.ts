@@ -5,7 +5,7 @@ import {
   derivativeKey,
   type IngestJob,
   originalKey,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import exifr from "exifr";
 import { errorCategory } from "../clients";
 import { type PipelinePool, runAsPipeline } from "../db";

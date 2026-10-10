@@ -1,5 +1,5 @@
 import { IonAlert } from "@ionic/react";
-import type { ShareLink, ShareLinkCreatedResponse } from "@littlelight/shared";
+import type { ShareLink, ShareLinkCreatedResponse } from "@tinyglow/shared";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { t, tn } from "../../i18n";

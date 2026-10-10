@@ -1,6 +1,6 @@
 import { IonAlert, IonContent, IonPage } from "@ionic/react";
-import type { PhotoGroup, PhotoSummary, PhotosView } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import type { PhotoGroup, PhotoSummary, PhotosView } from "@tinyglow/shared";
 import { imagesOutline } from "ionicons/icons";
 import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";

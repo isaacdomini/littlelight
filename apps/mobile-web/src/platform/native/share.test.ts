@@ -182,7 +182,7 @@ describe("downloadLargeAndShare (export ZIPs)", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     FS.downloadFile.mockResolvedValue({ path: "/var/cache/ll-share/x.zip" });
-    expect(await downloadLargeAndShare(SIGNED, "littlelight-export-2026-10-10.zip")).toBe(true);
+    expect(await downloadLargeAndShare(SIGNED, "tinyglow-export-2026-10-10.zip")).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(FS.writeFile).not.toHaveBeenCalled();
     const arg = FS.downloadFile.mock.calls[0]?.[0] as {
@@ -193,7 +193,7 @@ describe("downloadLargeAndShare (export ZIPs)", () => {
     expect(arg.url).toBe(SIGNED);
     expect(arg.directory).toBe("CACHE");
     expect(arg.path.startsWith("ll-share/")).toBe(true);
-    expect(arg.path.endsWith("littlelight-export-2026-10-10.zip")).toBe(true);
+    expect(arg.path.endsWith("tinyglow-export-2026-10-10.zip")).toBe(true);
     expect(SHARE.share).toHaveBeenCalledWith({ files: ["file:///var/cache/ll-share/x.zip"] });
     expect(FS.deleteFile).toHaveBeenCalledWith({ path: arg.path, directory: "CACHE" });
   });

@@ -4,7 +4,7 @@ import {
   authConfigResponseSchema,
   PRIVACY_VERSION,
   TERMS_VERSION,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app";
 import type { ApiConfig } from "../config";
@@ -17,7 +17,7 @@ import { GoTrueError } from "./gotrue";
 
 const okDb = { query: async () => ({ rows: [] }), end: async () => undefined };
 const okS3 = { send: (async () => ({})) as never, destroy: () => undefined };
-const WEB = { "x-littlelight-client": "web" };
+const WEB = { "x-tinyglow-client": "web" };
 
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 afterEach(async () => {
@@ -239,7 +239,7 @@ describe("auth hook, CSRF and token errors", () => {
       method: "POST",
       url: "/auth/signout",
       cookies: { ll_access: token },
-      headers: { "x-littlelight-client": "native" },
+      headers: { "x-tinyglow-client": "native" },
       payload: { scope: "local" },
     });
     expect(errorOf(nativeHeader).error).toBe("csrf_rejected");

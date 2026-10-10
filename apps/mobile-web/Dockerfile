@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Littlelight web app (React + Vite + Ionic). Build context: repo root (docs/plans/step-1.md 2.13).
+# Tinyglow web app (React + Vite + Ionic). Build context: repo root (docs/plans/step-1.md 2.13).
 #   dev  : Vite dev server on :8080; docker-compose.dev.yml bind-mounts the src dirs over it
 #   prod : nginx serving the Vite build on :80, proxying /api/ and /auth/ (docker/nginx/default.conf,
 #          plus the CSP snippet rendered from docker/nginx/templates/csp.conf.template at start)
@@ -27,7 +27,7 @@ COPY packages/shared/package.json packages/shared/
 # ---------------------------------------------------------------------------
 FROM pnpm AS base
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@littlelight/mobile-web..."
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@tinyglow/mobile-web..."
 
 # ---------------------------------------------------------------------------
 FROM base AS dev
@@ -36,7 +36,7 @@ COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/mobile-web apps/mobile-web
 EXPOSE 8080
-CMD ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["pnpm", "--filter", "@tinyglow/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
 
 # ---------------------------------------------------------------------------
 FROM dev AS build
@@ -46,7 +46,7 @@ ENV NODE_ENV=production
 # SENTRY_WEB_DSN here; the native builds (Capacitor) never set it. Vite reads VITE_* from the
 # process environment, which a build ARG is during RUN.
 ARG VITE_SENTRY_DSN=""
-RUN pnpm --filter @littlelight/mobile-web build
+RUN pnpm --filter @tinyglow/mobile-web build
 
 # ---------------------------------------------------------------------------
 FROM ${NGINX_IMAGE} AS prod

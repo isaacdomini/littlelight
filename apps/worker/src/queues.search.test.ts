@@ -1,4 +1,4 @@
-import { JOBS, searchBackfillJobSchema } from "@littlelight/shared";
+import { JOBS, searchBackfillJobSchema } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { ReconcileResult } from "./ai";
 import {

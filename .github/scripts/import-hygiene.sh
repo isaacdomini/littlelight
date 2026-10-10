@@ -6,7 +6,7 @@
 #
 #   1. Static checks (.github/scripts/import-hygiene.mjs, header there): nothing in the import
 #      code logs a baseUrl, pickerUri, token, code, secret or raw error, and the iOS
-#      LittlelightPhotoSync.swift prints nothing; the worker never names google_accounts (token
+#      TinyglowPhotoSync.swift prints nothing; the worker never names google_accounts (token
 #      only via import_google_refresh_token()) and never inserts into photos (booking only via
 #      import_book_photo()), and no migration/bootstrap grant would let it; the URL guard
 #      (parseAllowedMediaUrl / resolveMediaRedirect, null-checked, redirect "manual") precedes

@@ -1,4 +1,4 @@
-import { type ChatEvent, chatTurnResponseSchema, decodeChatEventFrame } from "@littlelight/shared";
+import { type ChatEvent, chatTurnResponseSchema, decodeChatEventFrame } from "@tinyglow/shared";
 import { apiUrl } from "../platform/apiBase";
 import { ApiError, headers, parseError, refreshSession } from "./api";
 
@@ -26,7 +26,7 @@ async function open(path: string, body: unknown, signal: AbortSignal): Promise<R
     return await fetch(apiUrl(path), await init());
   } catch (e) {
     if (signal.aborted) throw e;
-    throw new ApiError(0, "network", "Can't reach Littlelight. Check your connection.");
+    throw new ApiError(0, "network", "Can't reach Tinyglow. Check your connection.");
   }
 }
 

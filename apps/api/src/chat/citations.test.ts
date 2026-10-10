@@ -1,4 +1,4 @@
-import { parseCitations } from "@littlelight/shared";
+import { parseCitations } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { createCitationFilter } from "./citations";
 

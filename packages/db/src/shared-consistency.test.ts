@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-// packages/db must not depend on @littlelight/shared at runtime: relative import, test only.
+// packages/db must not depend on @tinyglow/shared at runtime: relative import, test only.
 import { DEMO_IDS, MILESTONE_PRESETS } from "../../shared/src/constants";
 import { DEMO } from "./seed";
 
-// Pure (no database) consistency between @littlelight/shared and the db package, so drift fails
+// Pure (no database) consistency between @tinyglow/shared and the db package, so drift fails
 // `pnpm test` as well as the integration suite.
 
-describe("@littlelight/shared DEMO_IDS match the seed's DEMO", () => {
+describe("@tinyglow/shared DEMO_IDS match the seed's DEMO", () => {
   it("users, baby and share link", () => {
     expect(DEMO_IDS.users).toEqual(DEMO.users);
     expect(DEMO_IDS.baby).toBe(DEMO.baby);

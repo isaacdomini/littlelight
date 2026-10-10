@@ -1,4 +1,4 @@
-import type { Milestone, MilestoneCategory } from "@littlelight/shared";
+import type { Milestone, MilestoneCategory } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import {
   PHOTO_SUMMARY_COLUMNS,

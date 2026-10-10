@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { derivativeKey } from "@littlelight/shared";
+import { derivativeKey } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { UrlSigner } from "../storage/sign";
 import {

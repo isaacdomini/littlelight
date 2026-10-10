@@ -5,8 +5,8 @@ import {
   type ChatStreamEvent,
   createFakeChatModel,
   type FakeChatScript,
-} from "@littlelight/ai";
-import { CHAT_MESSAGES, type ChatToolName } from "@littlelight/shared";
+} from "@tinyglow/ai";
+import { CHAT_MESSAGES, type ChatToolName } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   type AgentEvent,

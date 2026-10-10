@@ -16,7 +16,7 @@ import {
   searchReconcileJobSchema,
   shareApplyJobSchema,
   shareReconcileJobSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
 import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
@@ -53,30 +53,30 @@ import { sweepUploads } from "./uploads-sweep";
 
 // Run one job handler in-process, now (docs/plans/step-4.md 2.13 gate: "triggers purge.trash").
 //
-//   pnpm --filter @littlelight/worker run-job purge.trash
-//   pnpm --filter @littlelight/worker run-job uploads.sweep
-//   pnpm --filter @littlelight/worker run-job ingest.reconcile
-//   pnpm --filter @littlelight/worker run-job photo.ingest '{"photoId":"…","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"backfill"}'
-//   pnpm --filter @littlelight/worker run-job ai.flush ['{"force":true,"babyId":"…"}']
-//   pnpm --filter @littlelight/worker run-job ai.poll
-//   pnpm --filter @littlelight/worker run-job ai.backfill '{"babyId":"…","reason":"upgrade"}'
-//   pnpm --filter @littlelight/worker run-job search.reconcile
-//   pnpm --filter @littlelight/worker run-job search.backfill '{"babyId":"…","reason":"manual"}'
-//   pnpm --filter @littlelight/worker run-job share.apply '{"shareLinkId":"…","reason":"manual"}'
-//   pnpm --filter @littlelight/worker run-job share.reconcile
-//   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"share_viewed","shareLinkId":"…"}'
-//   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"photos_analyzed","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job data.export '{"exportId":"…","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job import.google '{"batchId":"…","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job import.sweep
-//   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
-//   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
-//   pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
-//   pnpm --filter @littlelight/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
-//   pnpm --filter @littlelight/worker run-job --enqueue push.notify '{"kind":"photos_analyzed","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job --enqueue data.export '{"exportId":"…","babyId":"…"}'
-//   pnpm --filter @littlelight/worker run-job --enqueue import.google '{"batchId":"…","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job purge.trash
+//   pnpm --filter @tinyglow/worker run-job uploads.sweep
+//   pnpm --filter @tinyglow/worker run-job ingest.reconcile
+//   pnpm --filter @tinyglow/worker run-job photo.ingest '{"photoId":"…","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job photo.reindex '{"photoId":"…","babyId":"…","reason":"backfill"}'
+//   pnpm --filter @tinyglow/worker run-job ai.flush ['{"force":true,"babyId":"…"}']
+//   pnpm --filter @tinyglow/worker run-job ai.poll
+//   pnpm --filter @tinyglow/worker run-job ai.backfill '{"babyId":"…","reason":"upgrade"}'
+//   pnpm --filter @tinyglow/worker run-job search.reconcile
+//   pnpm --filter @tinyglow/worker run-job search.backfill '{"babyId":"…","reason":"manual"}'
+//   pnpm --filter @tinyglow/worker run-job share.apply '{"shareLinkId":"…","reason":"manual"}'
+//   pnpm --filter @tinyglow/worker run-job share.reconcile
+//   pnpm --filter @tinyglow/worker run-job push.notify '{"kind":"share_viewed","shareLinkId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job push.notify '{"kind":"photos_analyzed","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job data.export '{"exportId":"…","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job import.google '{"batchId":"…","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job import.sweep
+//   pnpm --filter @tinyglow/worker run-job --enqueue purge.trash      # via the queue instead
+//   pnpm --filter @tinyglow/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
+//   pnpm --filter @tinyglow/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
+//   pnpm --filter @tinyglow/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
+//   pnpm --filter @tinyglow/worker run-job --enqueue push.notify '{"kind":"photos_analyzed","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job --enqueue data.export '{"exportId":"…","babyId":"…"}'
+//   pnpm --filter @tinyglow/worker run-job --enqueue import.google '{"batchId":"…","babyId":"…"}'
 //
 // `import.google` in-process runs one Picker batch with this process's `GOOGLE_IMPORT_*` env as a
 // last attempt (storage/network trouble fails the batch, no retry); a batch a running worker
@@ -99,7 +99,7 @@ import { sweepUploads } from "./uploads-sweep";
 // provider, flush/poll print `{skipped: true}`, and the search jobs (`photo.reindex`,
 // `search.reconcile`, `search.backfill`) write rows without vectors (keyword-only). An in-process
 // `ai.backfill` with `reason: "upgrade"` enqueues the `search.backfill` follow-up like the worker. Run them inside the worker container
-// (`docker compose exec -T worker pnpm --silent --filter @littlelight/worker run-job ai.poll`) to
+// (`docker compose exec -T worker pnpm --silent --filter @tinyglow/worker run-job ai.poll`) to
 // share its env, e.g. the fake provider's `FAKE_VISION_DIR` state across processes.
 //
 // In the production image: `node apps/worker/dist/run-job.js <job> [json]`. Uses the worker's
@@ -142,7 +142,7 @@ async function main(argv: string[]): Promise<number> {
     throw err;
   }
   const log = createLogger(config);
-  const pool = createPool(config, "littlelight-worker-run-job");
+  const pool = createPool(config, "tinyglow-worker-run-job");
   const s3 = createS3Client(config);
   const storage = createStorage(s3, config.S3_BUCKET);
   // Send-only pg-boss on the worker role: the running worker owns migrations and cron.
@@ -153,7 +153,7 @@ async function main(argv: string[]): Promise<number> {
     if (!boss) {
       boss = new PgBoss({
         connectionString: config.DATABASE_URL,
-        application_name: "littlelight-worker-run-job",
+        application_name: "tinyglow-worker-run-job",
         max: 2,
         migrate: false,
         supervise: false,

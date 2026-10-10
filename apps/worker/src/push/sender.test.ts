@@ -12,14 +12,14 @@ import type { PushConfig, PushMessage } from "./types";
 
 const BABY = "00000000-0000-4000-8000-000000000100";
 const msg: PushMessage = {
-  title: "Littlelight",
+  title: "Tinyglow",
   body: "3 new photos are ready to search.",
   data: { kind: "photos_analyzed", babyId: BABY },
   collapseId: `photos_analyzed:${BABY}`,
 };
 const base: PushConfig = {
   PUSH_PROVIDER: "none",
-  APNS_BUNDLE_ID: "com.tesarsoft.littlelight",
+  APNS_BUNDLE_ID: "com.tesarsoft.tinyglow",
   APNS_ENVIRONMENT: "sandbox",
   NODE_ENV: "development",
 };

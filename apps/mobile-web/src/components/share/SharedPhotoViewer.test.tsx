@@ -1,5 +1,5 @@
-import type { ViewerPhoto } from "@littlelight/shared";
 import { cleanup, render, screen } from "@testing-library/react";
+import type { ViewerPhoto } from "@tinyglow/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The viewer's capture date is a UTC calendar date (docs/plans/review-fixes.md D19): it must read

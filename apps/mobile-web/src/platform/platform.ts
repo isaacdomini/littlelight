@@ -1,4 +1,4 @@
-import type { ClientKind } from "@littlelight/shared";
+import type { ClientKind } from "@tinyglow/shared";
 
 // Minimal capability probe. Capacitor injects `window.Capacitor` into the native WebView before
 // any script runs, so this needs no import: the web bundle carries no Capacitor code at all.

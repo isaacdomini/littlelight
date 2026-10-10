@@ -1,9 +1,9 @@
-import { CITATION_MARKER_MAX_LENGTH, type Citation, type CitationKind } from "@littlelight/shared";
+import { CITATION_MARKER_MAX_LENGTH, type Citation, type CitationKind } from "@tinyglow/shared";
 
 // Streaming citation filter (docs/plans/step-7.md 2.8 "Agent", D5). The model cites with inline
 // markers `[photo:<uuid>]` / `[measurement:<uuid>]`; the user never sees them. This transformer
 // removes every marker from the streamed text as it arrives and records the citations in order,
-// with exactly the removal rule of `parseCitations` in `@littlelight/shared`: a marker goes
+// with exactly the removal rule of `parseCitations` in `@tinyglow/shared`: a marker goes
 // together with the spaces/tabs right before it, kind is case-insensitive, malformed ids are
 // stripped too (counted as `invalid`), duplicates are recorded once. Text from a `[` is held back
 // until the matching `]` or `CITATION_MARKER_MAX_LENGTH` characters, and trailing spaces are held

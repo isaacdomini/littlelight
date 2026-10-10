@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import { ageGroupKey, type ViewerPhoto } from "@littlelight/shared";
+import { ageGroupKey, type ViewerPhoto } from "@tinyglow/shared";
 import { eyeOffOutline, flag, imageOutline } from "ionicons/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso } from "react-virtuoso";

@@ -1,4 +1,4 @@
-# Cloudflare Tunnel ingress for Littlelight (PRD "Routing through Cloudflare Tunnel").
+# Cloudflare Tunnel ingress for Tinyglow (PRD "Routing through Cloudflare Tunnel").
 #
 # cloudflared is NOT part of docker-compose.yml: it runs on the host (or another machine on the
 # LAN) and reaches the two ports the stack publishes (see the docker-compose.yml header):
@@ -8,17 +8,17 @@
 # tunnel (`cloudflared tunnel --config /etc/cloudflared/config.yml run`, with your tunnel name /
 # credentials file below), or enter the same rules as Public hostnames in the dashboard for a
 # token-managed tunnel (Zero Trust -> Networks -> Tunnels -> <tunnel> -> Public hostnames):
-#   1. littlelight.tesarsoft.com                          -> HTTP  localhost:8080
-#   2. files.littlelight.tesarsoft.com  Path: ^/littlelight/.  -> HTTP  localhost:9000
+#   1. tinyglow.app                          -> HTTP  localhost:8080
+#   2. files.tinyglow.app  Path: ^/tinyglow/.  -> HTTP  localhost:9000
 #      Leave "HTTP Host Header" EMPTY: MinIO validates pre-signed URL signatures against the
-#      original Host (files.littlelight.tesarsoft.com). Overriding it breaks every upload/download.
+#      original Host (files.tinyglow.app). Overriding it breaks every upload/download.
 #      Path: only object paths in the app bucket are forwarded (S3_BUCKET, path-style URLs:
-#      https://files.littlelight.tesarsoft.com/<bucket>/<key>?X-Amz-...; the key must be
+#      https://files.tinyglow.app/<bucket>/<key>?X-Amz-...; the key must be
 #      non-empty). Every other path on that hostname (/, /minio/health/*, /minio/v2/metrics/*,
 #      /minio/admin/*, other buckets, bucket-level calls such as /<bucket>?versions or
 #      /<bucket>/?uploads) matches no rule and falls through to the tunnel's catch-all 404, so
 #      MinIO's admin, metrics and listing APIs are never public. If S3_BUCKET is not
-#      "littlelight", change the regex to ^/<S3_BUCKET>/. here and in the dashboard.
+#      "tinyglow", change the regex to ^/<S3_BUCKET>/. here and in the dashboard.
 #   No route for the MinIO console (:9001); compose does not publish it.
 # Ports: if WEB_PORT / STORAGE_PORT differ from 8080 / 9000, change the services below. If
 # cloudflared runs on another machine, replace localhost with the server's LAN address (= the
@@ -32,17 +32,17 @@
 #
 # Body-size cap: Cloudflare Free/Pro rejects request bodies over 100 MB. Uploads therefore use
 # S3 multipart with 16 MiB parts (pre-signed per part, docs/plans/step-4.md D1; the PRD's limit
-# is <= 50 MB) straight to files.littlelight...; nginx also caps /api/ bodies at 50 MB.
+# is <= 50 MB) straight to files.tinyglow...; nginx also caps /api/ bodies at 50 MB.
 # CORS for those browser PUTs is MinIO's (MINIO_API_CORS_ALLOW_ORIGIN = PUBLIC_URL on storage).
 #
 # REQUIRED production action (share links, docs/plans/step-8.md D6): add a Cloudflare Cache
 # Rule that bypasses the cache for the files. hostname, so no photo is ever stored at the edge
 # and a revoked share link leaves nothing to purge:
-#   Dashboard -> tesarsoft.com zone -> Caching -> Cache Rules -> Create rule
-#     Rule name:  littlelight files bypass
+#   Dashboard -> tinyglow.app zone -> Caching -> Cache Rules -> Create rule
+#     Rule name:  tinyglow files bypass
 #     If incoming requests match: Custom filter expression
-#       Field "Hostname" equals "files.littlelight.tesarsoft.com"
-#       (expression: (http.host eq "files.littlelight.tesarsoft.com"))
+#       Field "Hostname" equals "files.tinyglow.app"
+#       (expression: (http.host eq "files.tinyglow.app"))
 #     Then: Cache eligibility = "Bypass cache"   -> Deploy
 #   Verify (with any presigned GET URL from the app, before it expires):
 #     curl -sI '<presigned url>' | grep -iE 'cf-cache-status|cache-control'
@@ -50,21 +50,21 @@
 # Belt and braces: every presigned GET already asks MinIO for response-cache-control
 # "private, max-age=<ttl>" (viewer media: SHARE_MEDIA_URL_TTL_SEC, default 300 s; parents 1 h),
 # which Cloudflare does not store. The rule covers any URL that might lack it. The app page
-# (littlelight.tesarsoft.com) needs no rule: Cloudflare does not cache HTML or /api by default,
+# (tinyglow.app) needs no rule: Cloudflare does not cache HTML or /api by default,
 # and /s/<token> is sent with Cache-Control: no-store and Referrer-Policy: no-referrer by nginx.
 
-tunnel: littlelight
+tunnel: tinyglow
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
-  - hostname: littlelight.tesarsoft.com
+  - hostname: tinyglow.app
     service: http://localhost:8080
     originRequest:
       connectTimeout: 10s
   # Object paths in the app bucket only (regex on the URL path); everything else on this
   # hostname falls through to the 404 below.
-  - hostname: files.littlelight.tesarsoft.com
-    path: ^/littlelight/.
+  - hostname: files.tinyglow.app
+    path: ^/tinyglow/.
     service: http://localhost:9000
     originRequest:
       connectTimeout: 10s

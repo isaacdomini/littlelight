@@ -2,7 +2,7 @@ import {
   JOBS,
   PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
   PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   type BossLike,

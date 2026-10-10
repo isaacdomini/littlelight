@@ -2,7 +2,7 @@ import { isNative } from "./platform";
 
 // API origin (docs/plans/step-9.md 2.3). On the web every URL is same-origin and relative; in
 // the Capacitor shell the bundle is served from capacitor://localhost, so the API is reached at
-// `VITE_API_URL` (an origin such as https://littlelight.tesarsoft.com, baked in at build time;
+// `VITE_API_URL` (an origin such as https://tinyglow.app, baked in at build time;
 // it contains no secret).
 
 function origin(): string {

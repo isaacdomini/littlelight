@@ -5,7 +5,7 @@ import {
   IMPORT_PICKING_TTL_MIN,
   type ImportBatchError,
   type ImportGoogleJob,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { errorCategory } from "../clients";
 import { type PipelinePool, runAsPipeline } from "../db";
 import type { WorkerLog } from "../log-types";

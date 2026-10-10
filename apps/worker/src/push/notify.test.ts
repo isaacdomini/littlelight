@@ -125,7 +125,7 @@ describe("buildPushMessage", () => {
   it("photos_analyzed: the count in the text, ids only in the data, collapse id kind:baby", () => {
     const m = buildPushMessage({ kind: "photos_analyzed", babyId: BABY }, BABY, 23);
     expect(m).toEqual({
-      title: "Littlelight",
+      title: "Tinyglow",
       body: "23 new photos are ready to search.",
       data: { kind: "photos_analyzed", babyId: BABY },
       collapseId: `photos_analyzed:${BABY}`,

@@ -4,7 +4,7 @@ import {
   dataExportJobSchema,
   EXPORT_PROGRESS_EVERY,
   type ExportError,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { ZipArchive } from "archiver";
 import { errorCategory } from "../clients";
 import { type PipelinePool, runAsPipeline } from "../db";

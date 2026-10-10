@@ -24,7 +24,7 @@ async function main(): Promise<number> {
     connectionString: config.DATABASE_URL,
     connectionTimeoutMillis: 3_000,
     query_timeout: 3_000,
-    application_name: "littlelight-worker-healthcheck",
+    application_name: "tinyglow-worker-healthcheck",
   });
   try {
     await client.connect();

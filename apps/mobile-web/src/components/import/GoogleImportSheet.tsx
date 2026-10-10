@@ -1,6 +1,6 @@
 import { IonModal } from "@ionic/react";
-import type { ImportBatch, ImportBatchError } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ImportBatch, ImportBatchError } from "@tinyglow/shared";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { t } from "../../i18n";

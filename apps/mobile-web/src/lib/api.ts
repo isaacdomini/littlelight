@@ -1,4 +1,4 @@
-import { type ApiErrorCode, apiErrorSchema } from "@littlelight/shared";
+import { type ApiErrorCode, apiErrorSchema } from "@tinyglow/shared";
 import type { ZodType } from "zod";
 import { apiUrl } from "../platform/apiBase";
 import { clientKind, isNative } from "../platform/platform";
@@ -49,7 +49,7 @@ export interface RequestOptions<T> {
 const NO_SESSION_EFFECT = ["/auth/otp", "/auth/verify", "/auth/pkce", "/auth/id-token"];
 
 export async function headers(hasBody: boolean): Promise<Headers> {
-  const h = new Headers({ Accept: "application/json", "X-Littlelight-Client": clientKind() });
+  const h = new Headers({ Accept: "application/json", "X-Tinyglow-Client": clientKind() });
   if (hasBody) h.set("Content-Type", "application/json");
   if (isNative()) {
     const tokens = await getTokenStore().get();
@@ -116,7 +116,7 @@ async function once(path: string, opts: RequestOptions<unknown>): Promise<Respon
       body: hasBody ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new ApiError(0, "network", "Can't reach Littlelight. Check your connection.");
+    throw new ApiError(0, "network", "Can't reach Tinyglow. Check your connection.");
   }
 }
 

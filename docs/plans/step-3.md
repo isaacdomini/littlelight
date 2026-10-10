@@ -26,7 +26,7 @@ GoTrue (browser-facing GoTrue is reduced to the OAuth redirect endpoints), issue
 httpOnly cookies and native sessions as bearer tokens, verifies every JWT, and runs every unit of
 work inside the step-2 per-transaction identity pattern (`BEGIN; SET LOCAL ROLE …;
 set_config('request.jwt.claims', $1, true)`) with a release path that provably returns the
-pooled connection as `littlelight_api`. A Playwright e2e against the dev stack, reading codes and
+pooled connection as `tinyglow_api`. A Playwright e2e against the dev stack, reading codes and
 invite links from Mailpit, proves the acceptance check and runs in CI's dev-stack job.
 
 ## 2. Interfaces first
@@ -38,7 +38,7 @@ through the orchestrator.
 
 ```
 browser/app ──/api/*──► api (Fastify) ──http://auth:9999──► GoTrue ──► Postgres auth.*
-     │                      │ littlelight_api, SET LOCAL ROLE per txn ──► Postgres public.*
+     │                      │ tinyglow_api, SET LOCAL ROLE per txn ──► Postgres public.*
      │                      └─SMTP──► mail (Mailpit) / Postmark|Resend
      └──/auth/authorize, /auth/callback, /auth/health only ──► GoTrue (OAuth redirects)
 ```
@@ -62,7 +62,7 @@ browser/app ──/api/*──► api (Fastify) ──http://auth:9999──► 
 | --- | --- | --- |
 | Transport in | cookie `ll_access` | `Authorization: Bearer <access>` |
 | Refresh | cookie `ll_refresh` (Path `/api/auth`, SameSite=Strict, Max-Age 30 d, re-issued on every refresh ⇒ 30-day inactivity timeout) | body `{refreshToken}`; GoTrue session inactivity 90 d |
-| Header | `X-Littlelight-Client: web` on every cookie-authenticated request (CSRF: custom header + SameSite; the API rejects cookie-authenticated non-GET requests without it with 403 `csrf_rejected`) | `X-Littlelight-Client: native` ⇒ tokens returned in the body, no cookies |
+| Header | `X-Tinyglow-Client: web` on every cookie-authenticated request (CSRF: custom header + SameSite; the API rejects cookie-authenticated non-GET requests without it with 403 `csrf_rejected`) | `X-Tinyglow-Client: native` ⇒ tokens returned in the body, no cookies |
 | Access JWT | GoTrue HS256, 1 h (`GOTRUE_JWT_EXP=3600`), claims per `authenticatedClaimsSchema` (+ `session_id`) | same |
 | Rotation | GoTrue: `SECURITY_REFRESH_TOKEN_ROTATION_ENABLED=true`, `REUSE_INTERVAL=10` s; reuse of an old refresh token revokes the family (GoTrue built-in) | same |
 | Inactivity | 30 d (cookie Max-Age) | 90 d (`GOTRUE_SESSIONS_INACTIVITY_TIMEOUT=2160h`, one global value; the web cookie is the shorter bound) |
@@ -177,11 +177,11 @@ anything else → 500 `internal` (message never includes SQL or parameters). Zod
   create sessions. Regenerate `packages/db/src/generated` (`pnpm db:types`); down migration drops
   everything above.
 
-### 2.6 Shared contracts (`@littlelight/shared`, architect-defined, backend-engineer writes in 3.2)
+### 2.6 Shared contracts (`@tinyglow/shared`, architect-defined, backend-engineer writes in 3.2)
 
 `src/auth.ts` (constants + helpers):
 `AUTH_COOKIE_ACCESS='ll_access'`, `AUTH_COOKIE_REFRESH='ll_refresh'`,
-`CLIENT_HEADER='x-littlelight-client'`, `clientKindSchema=z.enum(['web','native'])`,
+`CLIENT_HEADER='x-tinyglow-client'`, `clientKindSchema=z.enum(['web','native'])`,
 `SPA_AUTH_CALLBACK_PATH='/signin/callback'`, `INVITE_PATH='/invite'`,
 `ACCESS_TOKEN_TTL_SEC=3600`, `WEB_SESSION_IDLE_DAYS=30`, `NATIVE_SESSION_IDLE_DAYS=90`,
 `FRESH_SIGN_IN_MAX_AGE_MIN=10`, `OTP_CODE_LENGTH=6`, `OTP_TTL_MIN=10`, `OTP_MAX_ATTEMPTS=5`,
@@ -260,7 +260,7 @@ if `dataKey` → `SELECT set_config('app.data_key', $1, true)` (service_role onl
 transaction): `RESET ROLE; DISCARD ALL`; if that fails → `client.release(err)` (destroyed), else
 `client.release()`. Never `SET ROLE` without `LOCAL`; never log `claimsJson`/`dataKey`; pino must
 not log query parameters. Test (3.10): with `max: 1`, after `runAs` (success and failure paths)
-`SELECT current_user, current_setting('request.jwt.claims', true)` → `littlelight_api`, `''`.
+`SELECT current_user, current_setting('request.jwt.claims', true)` → `tinyglow_api`, `''`.
 
 `apps/api/src/auth/index.ts` (security-engineer) exports what the rest of the API uses:
 
@@ -280,7 +280,7 @@ export async function audit(client, event, { babyId?, actorUserId, metadata? }):
 `ll_access` cookie; `jose.jwtVerify(token, JWT_SECRET, { algorithms: ['HS256'], issuer:
 `${PUBLIC_URL}/auth`, audience: 'authenticated' })` then `authenticatedClaimsSchema.parse`;
 expired ⇒ 401 `token_expired` (the SPA refreshes once and retries); cookie transport + non-GET
-without `X-Littlelight-Client: web` ⇒ 403 `csrf_rejected`. `GoTrueClient`
+without `X-Tinyglow-Client: web` ⇒ 403 `csrf_rejected`. `GoTrueClient`
 (`auth/gotrue.ts`) is an interface with a fetch implementation; `buildApp` accepts `gotrue?`
 and `mailer?` stubs for tests. Bounded `withServiceRole` call sites (each with its reason):
 invite lookup/accept by token hash; removal request writes; account deletion; nothing else in
@@ -290,10 +290,10 @@ this step.
 with a nodemailer SMTP implementation (`mailEnvSchema`) and a `captureMailer()` for tests; logs
 template name + message id only, never recipients or bodies. Templates (`email/templates.ts`,
 HTML-escaped, no images/trackers): `inviteEmail({babyName, inviterName, role, acceptUrl,
-expiresAt})` — subject `You're invited to ${babyName}'s album on Littlelight`, body with the link
+expiresAt})` — subject `You're invited to ${babyName}'s album on Tinyglow`, body with the link
 `${PUBLIC_URL}/invite/${token}` and "This invite expires in 7 days; accept it by signing in with
 this email address"; `newDeviceEmail({when, deviceLabel, country, devicesUrl})` — subject `New
-sign-in to your Littlelight account`, link to `${PUBLIC_URL}/settings/devices`.
+sign-in to your Tinyglow account`, link to `${PUBLIC_URL}/settings/devices`.
 
 Account deletion (`auth/account.ts`), one `withServiceRole('account deletion')` transaction then
 GoTrue: (1) `requireFreshSignIn`; (2) blocking babies = live babies where the user is the only
@@ -311,12 +311,12 @@ cookies, 204. Babies the user had soft-deleted are purged after 30 days by the w
 | --- | --- | --- |
 | `auth` env | add `GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"`, `GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: "10"`, `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT: "2160h"`, `GOTRUE_SESSIONS_SINGLE_PER_USER: "false"`, `GOTRUE_EXTERNAL_PHONE_ENABLED: "false"`, `GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"`, `GOTRUE_RATE_LIMIT_HEADER: X-Forwarded-For` (the API forwards the client IP); Apple/Google stay `"false"` (dev OAuth testing: pass `GOTRUE_EXTERNAL_GOOGLE_ENABLED` etc. in the shell; documented) | same additions; `GOTRUE_SMTP_MAX_FREQUENCY: 60s`, `GOTRUE_RATE_LIMIT_EMAIL_SENT: "200"` (global per-hour backstop; per-email/IP limits live in the API); `GOTRUE_RATE_LIMIT_HEADER` stays `CF-Connecting-IP` |
 | Email templates | `docker/gotrue/templates/{confirmation,magic-link}.html`: keep the 6-digit `{{ .Token }}` as primary; the fallback link becomes `{{ .SiteURL }}/signin/callback#token_hash={{ .TokenHash }}&type=email` (no `{{ .ConfirmationURL }}`); text says "on a computer, open this link" | same files |
-| `api` env | `PUBLIC_URL=http://localhost:8080`, `AUTH_INTERNAL_URL=http://auth:9999`, `AUTH_APPLE_ENABLED=false`, `AUTH_GOOGLE_ENABLED=false`, `SMTP_HOST=mail`, `SMTP_PORT=1025`, `SMTP_SECURE=false`, `MAIL_FROM=noreply@littlelight.local` in `.env.dev` (`TURNSTILE_*` absent) | api block: `AUTH_INTERNAL_URL: http://auth:9999`, `AUTH_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}`, `AUTH_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}` (one `.env` flag feeds GoTrue and the API), `SMTP_HOST/PORT/USER/PASS/SECURE`, `MAIL_FROM: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL}}`, `TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}`, `TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}`. Update the header comment: api now receives SMTP; worker still does not |
-| `.env.example` | – | document `GOTRUE_EXTERNAL_APPLE_ENABLED`, `APPLE_CLIENT_ID` (comma list: Services ID for web, bundle ID for native), `APPLE_CLIENT_SECRET` (6-month JWT from the .p8 key; regenerate before expiry), `GOTRUE_EXTERNAL_GOOGLE_ENABLED`, `GOOGLE_CLIENT_ID` (comma list: web, iOS, Android), `GOOGLE_CLIENT_SECRET`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `MAIL_FROM`, `SMTP_SECURE`; redirect URI to register at both providers: `https://littlelight.tesarsoft.com/auth/callback` |
+| `api` env | `PUBLIC_URL=http://localhost:8080`, `AUTH_INTERNAL_URL=http://auth:9999`, `AUTH_APPLE_ENABLED=false`, `AUTH_GOOGLE_ENABLED=false`, `SMTP_HOST=mail`, `SMTP_PORT=1025`, `SMTP_SECURE=false`, `MAIL_FROM=noreply@tinyglow.local` in `.env.dev` (`TURNSTILE_*` absent) | api block: `AUTH_INTERNAL_URL: http://auth:9999`, `AUTH_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}`, `AUTH_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}` (one `.env` flag feeds GoTrue and the API), `SMTP_HOST/PORT/USER/PASS/SECURE`, `MAIL_FROM: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL}}`, `TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}`, `TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}`. Update the header comment: api now receives SMTP; worker still does not |
+| `.env.example` | – | document `GOTRUE_EXTERNAL_APPLE_ENABLED`, `APPLE_CLIENT_ID` (comma list: Services ID for web, bundle ID for native), `APPLE_CLIENT_SECRET` (6-month JWT from the .p8 key; regenerate before expiry), `GOTRUE_EXTERNAL_GOOGLE_ENABLED`, `GOOGLE_CLIENT_ID` (comma list: web, iOS, Android), `GOOGLE_CLIENT_SECRET`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `MAIL_FROM`, `SMTP_SECURE`; redirect URI to register at both providers: `https://tinyglow.app/auth/callback` |
 | nginx `/auth/` | – | only `= /auth/health` (GET), `= /auth/authorize` (GET), `= /auth/callback` (GET, POST) proxy to GoTrue (prefix stripped, same headers as today); `location /auth/ { return 404; }` |
 | Vite proxy (frontend-engineer, `vite.config.ts`) | `/auth` proxy gets `bypass` returning `false` (404) unless the path is one of the three above | – |
-| `api` Dockerfile / compose | `apps/api/Dockerfile` dev stage `COPY packages/db packages/db` (the API imports `@littlelight/db/types`, type-only); dev compose bind-mounts `./packages/db/src:/repo/packages/db/src:ro` into `api` | prod stage unchanged (tsup bundles types away) |
-| CI | `dev-stack-smoke` job: after the stack is up, `pnpm install --frozen-lockfile`, `pnpm exec playwright install --with-deps chromium`, `pnpm e2e` (then the existing smoke); upload `e2e/report` on failure. `check` job: `pnpm test:integration` now also runs the `api-integration` project (env adds `JWT_SECRET=dev-only-jwt-secret-at-least-32-characters`, `PUBLIC_URL=http://localhost:8080`, `MAIL_FROM=noreply@littlelight.local`, `SMTP_HOST=localhost`) | – |
+| `api` Dockerfile / compose | `apps/api/Dockerfile` dev stage `COPY packages/db packages/db` (the API imports `@tinyglow/db/types`, type-only); dev compose bind-mounts `./packages/db/src:/repo/packages/db/src:ro` into `api` | prod stage unchanged (tsup bundles types away) |
+| CI | `dev-stack-smoke` job: after the stack is up, `pnpm install --frozen-lockfile`, `pnpm exec playwright install --with-deps chromium`, `pnpm e2e` (then the existing smoke); upload `e2e/report` on failure. `check` job: `pnpm test:integration` now also runs the `api-integration` project (env adds `JWT_SECRET=dev-only-jwt-secret-at-least-32-characters`, `PUBLIC_URL=http://localhost:8080`, `MAIL_FROM=noreply@tinyglow.local`, `SMTP_HOST=localhost`) | – |
 
 ### 2.9 Rate limits, captcha, generic responses (security-engineer, `auth/throttle.ts`, `auth/turnstile.ts`)
 
@@ -332,7 +332,7 @@ exists (always 202; UI text "If this email is valid, we sent a code").
 ### 2.10 Frontend (frontend-engineer, `apps/mobile-web/src/**`)
 
 - `lib/api.ts`: `apiFetch(path, init)` → JSON, `credentials: 'same-origin'`, header
-  `X-Littlelight-Client` from `platform.ts` (`'web'` now; step 9 returns `'native'` and attaches
+  `X-Tinyglow-Client` from `platform.ts` (`'web'` now; step 9 returns `'native'` and attaches
   the bearer token from `tokenStore.ts`); on 401 `token_expired` → `POST /api/auth/refresh` once
   then retry; other 401 → clear auth state → `/welcome`. Errors become `ApiError {status, code,
   message, details}` (`apiErrorSchema`).
@@ -398,7 +398,7 @@ admins; a different email on another invite link sees "This invite was sent to o
 and the API returns 403 `invite_email_mismatch`; a third admin invite accept ⇒ 409 `admins_full`),
 `sessions.spec.ts` (devices list; sign out everywhere ⇒ `GET /api/me` 401), `account.spec.ts`
 (sole admin blocked ⇒ delete album ⇒ delete account ⇒ 401; co-admin deletion keeps the album for
-the other admin), `seed.spec.ts` (`demo-mom@littlelight.local` signs in with OTP and sees Maya as
+the other admin), `seed.spec.ts` (`demo-mom@tinyglow.local` signs in with OTP and sees Maya as
 admin — step-2 risk R1). Root script `"e2e": "playwright test -c e2e/playwright.config.ts"`.
 
 ## 3. Tasks
@@ -410,7 +410,7 @@ Same-lane tasks run in sequence; lanes run in parallel where noted.
 
 - Owned for this task only (orchestrator approval implied by this plan): every `package.json`,
   `pnpm-lock.yaml`, root `vitest.config.ts`, `apps/api/Dockerfile`, dev compose `api` bind mount.
-- Add: `apps/api`: `jose`, `@fastify/cookie`, `nodemailer`, `@littlelight/db: workspace:*`;
+- Add: `apps/api`: `jose`, `@fastify/cookie`, `nodemailer`, `@tinyglow/db: workspace:*`;
   devDependency `@types/nodemailer`. Root devDependency `@playwright/test`. No frontend deps.
   Pin exact versions (latest stable passing pnpm's minimum-release-age), one `pnpm install`.
 - Root scripts: `"e2e": "playwright test -c e2e/playwright.config.ts"`, `"test:integration":
@@ -510,7 +510,7 @@ Same-lane tasks run in sequence; lanes run in parallel where noted.
   only); the PKCE verifier and the pending invite token live in sessionStorage and are removed
   after use; the Turnstile script is loaded only when needed; no third-party scripts otherwise;
   `currentBabyId` is the only persisted app state.
-- Done-when: `pnpm --filter @littlelight/mobile-web typecheck && test` green; against the dev
+- Done-when: `pnpm --filter @tinyglow/mobile-web typecheck && test` green; against the dev
   stack a human can complete steps 1–8, open an invite link, switch babies, list devices, and
   delete the account; the e2e in 3.12 drives the same screens by `data-testid`s listed in the
   component files (`welcome-email`, `welcome-continue`, `verify-code`, `consent-adult`,
@@ -543,7 +543,7 @@ Same-lane tasks run in sequence; lanes run in parallel where noted.
 - Files: `packages/shared/src/{auth,api/*}.test.ts` (maskEmail incl. one-char local part,
   normalizeEmail, error codes, audit metadata rule, `session_id` required in claims);
   `apps/api/src/plugins/db.integration.test.ts` (**the step-2 open issue**: with a `max: 1`
-  pool, after `runAs` success and after `fn` throws, `SELECT current_user` is `littlelight_api`
+  pool, after `runAs` success and after `fn` throws, `SELECT current_user` is `tinyglow_api`
   and `current_setting('request.jwt.claims', true)` is empty; a client that fails `DISCARD ALL`
   is destroyed); `apps/api/src/auth/*.test.ts` (JWT verify: wrong secret/issuer/alg/expired ⇒
   401 codes; cookie attributes; CSRF header; throttle windows; Turnstile threshold inert without
@@ -611,7 +611,7 @@ pnpm install --frozen-lockfile && pnpm exec playwright install chromium
 pnpm e2e        # onboarding, invite (match + mismatch + admins_full), sessions, account, seed specs green
 ```
 
-### 4.2 API walkthrough (cookie jar; `B=http://localhost:8080`, `M=http://localhost:8025`, `H='x-littlelight-client: web'`)
+### 4.2 API walkthrough (cookie jar; `B=http://localhost:8080`, `M=http://localhost:8025`, `H='x-tinyglow-client: web'`)
 
 1. `curl -s -X POST $B/api/auth/otp -H 'content-type: application/json' -H "$H" -d '{"email":"a@example.com"}'` → `202 {"ok":true}`; same for a 6th call within the hour → `429` with `Retry-After`.
 2. Code: `ID=$(curl -s "$M/api/v1/search?query=to:a@example.com" | jq -r '.messages[0].ID'); CODE=$(curl -s $M/api/v1/message/$ID | jq -r .Text | grep -oE '[0-9]{6}' | head -1)`.
@@ -626,19 +626,19 @@ pnpm e2e        # onboarding, invite (match + mismatch + admins_full), sessions,
 11. `GET /api/auth/sessions` with `a.jar` → ≥1 session with `current:true`; `POST /api/auth/signout {"scope":"global"}` → 204; `GET /api/me` → 401.
 12. Account deletion: with `c.jar` (sole admin of nothing) `DELETE /api/me {"acknowledge":true}` → 204, then `GET /api/me` → 401. With `b.jar` (co-admin of Maya): fresh sign-in then delete → 204; `a.jar` still sees Maya with one admin.
 13. Direct GoTrue blocked: `curl -s -o /dev/null -w '%{http_code}' -X POST $B/auth/otp` → 404; `$B/auth/health` → 200.
-14. CSRF: a cookie-authenticated `POST /api/babies` without the `x-littlelight-client` header → 403 `csrf_rejected`.
+14. CSRF: a cookie-authenticated `POST /api/babies` without the `x-tinyglow-client` header → 403 `csrf_rejected`.
 
 ### 4.3 Suites and hygiene
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
 WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true \
 JWT_SECRET=dev-only-jwt-secret-at-least-32-characters PUBLIC_URL=http://localhost:8080 \
-MAIL_FROM=noreply@littlelight.local SMTP_HOST=localhost pnpm test:integration   # incl. db.integration.test.ts: current_user = littlelight_api after runAs
+MAIL_FROM=noreply@tinyglow.local SMTP_HOST=localhost pnpm test:integration   # incl. db.integration.test.ts: current_user = tinyglow_api after runAs
 pnpm smoke
-docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc "select count(*) from pgmigrations"   # 10
-docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
+docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc "select count(*) from pgmigrations"   # 10
+docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 docker compose -f docker-compose.dev.yml logs api | grep -Ei 'll_access=|ll_refresh=|"code":"[0-9]{6}"|token_hash=' ; echo "no secrets in logs: exit $?"   # expect no match (exit 1)
 grep -rn 'change-me' .env.dev; git status --porcelain | grep -E '^\?\? \.env(\.local)?$'   # nothing
 cp .env.example .env && STORAGE_PATH=/tmp/s BACKUP_PATH=/tmp/b docker compose -f docker-compose.yml config -q; rm .env
@@ -675,7 +675,7 @@ cp .env.example .env && STORAGE_PATH=/tmp/s BACKUP_PATH=/tmp/b docker compose -f
 - **D7 — New dependencies**: `jose` (JWT verify + admin JWT mint; also step-8 viewer JWTs),
   `@fastify/cookie`, `nodemailer` + types (SMTP works with Mailpit and Postmark/Resend alike; a
   provider HTTP API would need a second dev path), `@playwright/test` (the PRD asks for an e2e;
-  this is the standard browser runner and reads Mailpit over HTTP), `@littlelight/db` as a
+  this is the standard browser runner and reads Mailpit over HTTP), `@tinyglow/db` as a
   type-only API dependency. Rate limiting is an in-house sliding window (R5) rather than
   `@fastify/rate-limit`, which keys on one dimension per route.
 - **D8 — Magic link carries `token_hash` in the URL fragment** to `/signin/callback` and the API
@@ -708,15 +708,15 @@ cp .env.example .env && STORAGE_PATH=/tmp/s BACKUP_PATH=/tmp/b docker compose -f
   the only way to guarantee no role/claims leakage across pooled requests.
 - **Needs the user (not for the gate; add to `.env` on the server when available):**
   1. Apple: Apple Developer App ID (bundle id, Sign in with Apple capability), a Services ID for
-     web with return URL `https://littlelight.tesarsoft.com/auth/callback`, a Sign in with Apple
+     web with return URL `https://tinyglow.app/auth/callback`, a Sign in with Apple
      key (.p8) + Key ID + Team ID → `APPLE_CLIENT_ID=<services id>,<bundle id>`,
      `APPLE_CLIENT_SECRET=<ES256 client-secret JWT, max 6 months, regenerate on expiry>`,
      `GOTRUE_EXTERNAL_APPLE_ENABLED=true`.
   2. Google: Cloud Console OAuth consent screen + Web client (redirect
-     `https://littlelight.tesarsoft.com/auth/callback`), later iOS and Android clients (step 9) →
+     `https://tinyglow.app/auth/callback`), later iOS and Android clients (step 9) →
      `GOOGLE_CLIENT_ID=<web>,<ios>,<android>`, `GOOGLE_CLIENT_SECRET=<web secret>`,
      `GOTRUE_EXTERNAL_GOOGLE_ENABLED=true`.
-  3. Cloudflare Turnstile widget for `littlelight.tesarsoft.com` → `TURNSTILE_SITE_KEY`,
+  3. Cloudflare Turnstile widget for `tinyglow.app` → `TURNSTILE_SITE_KEY`,
      `TURNSTILE_SECRET_KEY`.
   4. Transactional email (Postmark or Resend SMTP, verified sender, SPF/DKIM/DMARC) →
      `SMTP_HOST/PORT/USER/PASS`, `SMTP_ADMIN_EMAIL`, `MAIL_FROM` (now used by GoTrue and the API).

@@ -9,7 +9,7 @@ import { errorCategory } from "./clients";
 //   HEARTBEAT_STALE_MS) also proves storage.
 // - `updated_at` advances on EVERY successful write, storage up or down. Pruning keys off it, so
 //   a live worker whose storage is down (last_seen_at stale or epoch) is never pruned by a peer.
-// Runs directly as `littlelight_worker` (direct grant + policy on this table; no SET ROLE).
+// Runs directly as `tinyglow_worker` (direct grant + policy on this table; no SET ROLE).
 // Step 6 (docs/plans/step-6.md 2.6, 2.7): `details.aiQueueAgeMin` from an optional sampler
 // (`createAiQueueAgeSampler`, at most one query per minute) that also raises the PRD's
 // "queue age > 2 h" alert as a `warn` once, and an `info` when it clears. Step 7

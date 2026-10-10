@@ -1,3 +1,4 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type GoogleConnection,
   type GoogleConnectReturnPath,
@@ -9,8 +10,7 @@ import {
   importBatchCreateResponseSchema,
   importBatchesListResponseSchema,
   importBatchResponseSchema,
-} from "@littlelight/shared";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { useEffect } from "react";
 import { isNative } from "../platform/platform";
 import { ApiError, apiFetch, isApiError } from "./api";

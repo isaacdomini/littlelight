@@ -244,7 +244,7 @@ describe("scrubTelemetryString: each pattern", () => {
   });
 
   it("replaces a presigned export URL entirely down to path", () => {
-    const url = `http://localhost:9000/littlelight/babies/${UUID}/exports/${UUID}.zip?X-Amz-Signature=${SIG}&X-Amz-Expires=600`;
+    const url = `http://localhost:9000/tinyglow/babies/${UUID}/exports/${UUID}.zip?X-Amz-Signature=${SIG}&X-Amz-Expires=600`;
     const out = scrubTelemetryString(`GET ${url} failed`);
     expect(out).not.toContain("X-Amz");
     expect(out).not.toContain(SIG);
@@ -295,7 +295,7 @@ describe("scrubTelemetryString: each pattern", () => {
     expect(scrubTelemetryString("x#token_hash=abc")).toBe(`x#${REDACTED}`);
   });
 
-  it.each(["mom@example.com", "first.last+tag@sub.example.co.uk", "demo-mom@littlelight.local"])(
+  it.each(["mom@example.com", "first.last+tag@sub.example.co.uk", "demo-mom@tinyglow.local"])(
     "replaces the email %s",
     (email) => {
       const out = scrubTelemetryString(`user ${email} not found`);
@@ -409,7 +409,7 @@ function fixtureEvent() {
     timestamp: 1_790_000_000.5,
     platform: "node",
     level: "error",
-    release: "littlelight@1.0.0",
+    release: "tinyglow@1.0.0",
     environment: "production",
     server_name: "host-mom-laptop.local",
     transaction: "POST /api/babies/x/photos",
@@ -510,7 +510,7 @@ describe("scrubTelemetryEvent", () => {
   it("keeps the useful parts: type, frame names and line numbers, release, level, route tag", () => {
     const out = scrubTelemetryEvent(fixtureEvent()) as ReturnType<typeof fixtureEvent>;
     expect(out.event_id).toBe("0123456789abcdef0123456789abcdef");
-    expect(out.release).toBe("littlelight@1.0.0");
+    expect(out.release).toBe("tinyglow@1.0.0");
     expect(out.level).toBe("error");
     expect(out.tags.route).toBe("/api/babies/:id/exports");
     const ex = out.exception.values[0];

@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import type { AiDescriptionV1, Milestone, Photo } from "@littlelight/shared";
+import type { AiDescriptionV1, Milestone, Photo } from "@tinyglow/shared";
 import { eyeOffOutline } from "ionicons/icons";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";

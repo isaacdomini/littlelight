@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import type { SearchFacetsResponse } from "@littlelight/shared";
+import type { SearchFacetsResponse } from "@tinyglow/shared";
 import { chevronDown } from "ionicons/icons";
 import { useState } from "react";
 import { t } from "../../i18n";

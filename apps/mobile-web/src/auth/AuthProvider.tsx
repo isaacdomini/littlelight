@@ -1,6 +1,6 @@
-import type { BabySummary, MeResponse } from "@littlelight/shared";
-import { meResponseSchema } from "@littlelight/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { BabySummary, MeResponse } from "@tinyglow/shared";
+import { meResponseSchema } from "@tinyglow/shared";
 import {
   createContext,
   type ReactNode,

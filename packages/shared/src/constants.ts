@@ -3,7 +3,7 @@ import type { MilestoneCategory } from "./db-enums";
 // Shared constants (docs/plans/step-1.md 2.10, docs/plans/step-2.md 2.11, docs/plans/step-5.md 2.6). Model names are config defaults, not code paths:
 // every model call goes through packages/ai adapters, which read these as fallbacks.
 
-export const APP_NAME = "Littlelight";
+export const APP_NAME = "Tinyglow";
 
 /** Browser path prefix proxied to the API (Vite dev proxy and production nginx strip it). */
 export const API_PREFIX = "/api";
@@ -139,11 +139,11 @@ export const MILESTONE_PRESETS: readonly MilestonePreset[] = [
  */
 export const DEMO_IDS = {
   users: {
-    /** demo-mom@littlelight.local, admin, "Maria" (Mom), plan owner. */
+    /** demo-mom@tinyglow.local, admin, "Maria" (Mom), plan owner. */
     mom: "00000000-0000-4000-8000-000000000001",
-    /** demo-dad@littlelight.local, admin, "Dad". */
+    /** demo-dad@tinyglow.local, admin, "Dad". */
     dad: "00000000-0000-4000-8000-000000000002",
-    /** demo-nanny@littlelight.local, contributor, "Nanny". */
+    /** demo-nanny@tinyglow.local, contributor, "Nanny". */
     nanny: "00000000-0000-4000-8000-000000000003",
   },
   /** "Maya" (nickname "Mimi"), plan `plus`. */

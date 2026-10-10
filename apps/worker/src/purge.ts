@@ -1,4 +1,4 @@
-import { babyPrefix, photoPrefixes } from "@littlelight/shared";
+import { babyPrefix, photoPrefixes } from "@tinyglow/shared";
 import { errorCategory } from "./clients";
 import { type PipelinePool, runAsPipeline } from "./db";
 import type { WorkerLog } from "./log-types";

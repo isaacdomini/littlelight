@@ -1,5 +1,5 @@
 /**
- * Error types for `@littlelight/ai`. Messages name env fields, providers, operations, HTTP
+ * Error types for `@tinyglow/ai`. Messages name env fields, providers, operations, HTTP
  * statuses and provider error codes only; they never include key values, prompts, parent
  * notes, image bytes, model output or any provider response body.
  */

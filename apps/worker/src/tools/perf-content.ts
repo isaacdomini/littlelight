@@ -12,7 +12,7 @@ import {
   PERF_PHOTO_COUNT,
   roundTo,
   toMetric,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 // Deterministic content of the dev-only performance seed (docs/plans/step-5.md 2.8). Pure: no
 // I/O, no clock, no Math.random. Every value is a function of the photo/measurement index, so

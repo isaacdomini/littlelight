@@ -1,4 +1,4 @@
-import type { Measurement, MeasurementKind, MeasurementUnit } from "@littlelight/shared";
+import type { Measurement, MeasurementKind, MeasurementUnit } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 
 // Measurement reads shared by `/babies/:id/measurements`, `/measurements/:id` and

@@ -57,7 +57,7 @@ db ─► db-init (pnpm db:bootstrap: roles + auth schema) ─► auth (GoTrue m
   service before running migrations` when `to_regclass('auth.users') IS NULL`, so a wrong order
   fails loudly instead of silently.
 - CI's `check` job runs integration tests against a bare pgvector service with no GoTrue. The
-  test harness calls `ensureAuthSchemaStub(client)` (exported from `@littlelight/db`, see 2.10)
+  test harness calls `ensureAuthSchemaStub(client)` (exported from `@tinyglow/db`, see 2.10)
   which creates a minimal `auth.users` / `auth.identities` only when they do not exist. The
   stub's column list is exactly the column list the seed inserts (2.9).
 
@@ -70,28 +70,28 @@ Migrations assume they exist and fail with a clear message otherwise.
 | --- | --- | --- | --- |
 | `postgres` | superuser | `db-init`, `migrate`, seed, `backup` only | never api/worker |
 | `supabase_auth_admin` | existing (step 1) | GoTrue | GoTrue |
-| `littlelight_api` | LOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER NOCREATEROLE, password `API_DB_PASSWORD` | API connection role. **No privileges of its own on app tables**: NOINHERIT means a query outside `SET LOCAL ROLE` gets `permission denied`, never data | `api` (`DATABASE_URL`) |
-| `littlelight_worker` | LOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER, password `WORKER_DB_PASSWORD`; `GRANT CREATE ON DATABASE` (pg-boss schema); direct `ALL` on `worker_heartbeats` | Worker connection role; heartbeat + pg-boss run as this role directly | `worker` (`DATABASE_URL`), `healthcheck.ts` |
-| `authenticated` | NOLOGIN (exists) | Signed-in user; policies read `request.jwt.claims` | `littlelight_api` via `SET LOCAL ROLE` |
-| `viewer` | NOLOGIN, new | Share-link viewer; may read only the allow-list in 2.6 for one `share_link_id` claim | `littlelight_api` via `SET LOCAL ROLE` |
-| `service_role` | NOLOGIN (exists), **now `BYPASSRLS`**, `ALL` on every public table | API-internal operations with no user context: share-token exchange (reads `token_hash`/`passcode_hash`), viewer-session writes, invite/billing/account-deletion flows, audit writes | `littlelight_api` via `SET LOCAL ROLE` only; **never the worker** |
-| `pipeline` | NOLOGIN NOBYPASSRLS, new | Worker job role: cross-baby, but only the photo-pipeline tables/columns in 2.6; never invites, tokens, chat, members, viewer sessions | `littlelight_worker` via `SET LOCAL ROLE` |
+| `tinyglow_api` | LOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER NOCREATEROLE, password `API_DB_PASSWORD` | API connection role. **No privileges of its own on app tables**: NOINHERIT means a query outside `SET LOCAL ROLE` gets `permission denied`, never data | `api` (`DATABASE_URL`) |
+| `tinyglow_worker` | LOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER, password `WORKER_DB_PASSWORD`; `GRANT CREATE ON DATABASE` (pg-boss schema); direct `ALL` on `worker_heartbeats` | Worker connection role; heartbeat + pg-boss run as this role directly | `worker` (`DATABASE_URL`), `healthcheck.ts` |
+| `authenticated` | NOLOGIN (exists) | Signed-in user; policies read `request.jwt.claims` | `tinyglow_api` via `SET LOCAL ROLE` |
+| `viewer` | NOLOGIN, new | Share-link viewer; may read only the allow-list in 2.6 for one `share_link_id` claim | `tinyglow_api` via `SET LOCAL ROLE` |
+| `service_role` | NOLOGIN (exists), **now `BYPASSRLS`**, `ALL` on every public table | API-internal operations with no user context: share-token exchange (reads `token_hash`/`passcode_hash`), viewer-session writes, invite/billing/account-deletion flows, audit writes | `tinyglow_api` via `SET LOCAL ROLE` only; **never the worker** |
+| `pipeline` | NOLOGIN NOBYPASSRLS, new | Worker job role: cross-baby, but only the photo-pipeline tables/columns in 2.6; never invites, tokens, chat, members, viewer sessions | `tinyglow_worker` via `SET LOCAL ROLE` |
 | `anon` | NOLOGIN (exists) | No grants on anything (kept only because GoTrue mints the claim) | nobody |
 
-Memberships: `GRANT authenticated, viewer, service_role TO littlelight_api WITH INHERIT FALSE, SET TRUE;`
-`GRANT pipeline TO littlelight_worker WITH INHERIT FALSE, SET TRUE;`
+Memberships: `GRANT authenticated, viewer, service_role TO tinyglow_api WITH INHERIT FALSE, SET TRUE;`
+`GRANT pipeline TO tinyglow_worker WITH INHERIT FALSE, SET TRUE;`
 
 Why the asymmetry (service bypasses RLS, pipeline does not): the API is already the auth trust
 boundary and uses `service_role` only in a few named code paths; the worker handles untrusted
 image bytes and third-party model output (`text_in_image` prompt injection), so it gets the
 tighter role (PRD "least-privilege keys for workers").
 
-pg-boss: bootstrap creates schema `pgboss AUTHORIZATION littlelight_worker` if missing (pg-boss's
+pg-boss: bootstrap creates schema `pgboss AUTHORIZATION tinyglow_worker` if missing (pg-boss's
 own `CREATE SCHEMA IF NOT EXISTS` then no-ops; it still needs `CREATE ON DATABASE`, which Postgres
 checks even with `IF NOT EXISTS`), and if a `pgboss` schema from step 1 already exists owned by
 `postgres` (existing dev volumes) it transfers ownership of the schema and every table/sequence/
-function/type in it to `littlelight_worker`. `ALTER DEFAULT PRIVILEGES FOR ROLE littlelight_worker
-IN SCHEMA pgboss GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO littlelight_api` (+ sequences,
+function/type in it to `tinyglow_worker`. `ALTER DEFAULT PRIVILEGES FOR ROLE tinyglow_worker
+IN SCHEMA pgboss GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO tinyglow_api` (+ sequences,
 functions) so the API can enqueue jobs in step 4 without further grants.
 
 ### 2.3 Per-transaction identity (`request.jwt.claims`)
@@ -177,7 +177,7 @@ every policy names its role with `TO <role>` (never PUBLIC); policy names `<tabl
 | `chat_threads` | `id`, `baby_id … CASCADE`, `user_id uuid REFERENCES profiles ON DELETE CASCADE`, `title text`, `created_at`, `updated_at` | `(baby_id, user_id, updated_at DESC)` |
 | `chat_messages` | `id`, `thread_id REFERENCES chat_threads ON DELETE CASCADE`, `baby_id … CASCADE` (denormalised for RLS), `user_id uuid REFERENCES profiles ON DELETE CASCADE`, `role text CHECK IN ('user','assistant','tool','system')`, `content text NOT NULL`, `cited_photo_ids uuid[] NOT NULL DEFAULT '{}'`, `tokens_in integer`, `tokens_out integer`, `model text`, `created_at` | `(thread_id, created_at)` |
 | `audit_log` | `id bigint GENERATED ALWAYS AS IDENTITY PK`, `baby_id uuid REFERENCES babies ON DELETE SET NULL`, `actor_user_id uuid REFERENCES profiles ON DELETE SET NULL`, `share_link_id uuid REFERENCES share_links ON DELETE SET NULL`, `event text NOT NULL`, `metadata jsonb NOT NULL DEFAULT '{}'`, `created_at` | `(baby_id, created_at DESC)`, `(actor_user_id, created_at DESC)`. Append-only: no UPDATE/DELETE grant to any role. Comment: metadata never holds tokens, GPS, notes or prompts |
-| `worker_heartbeats` (step 1) | add `updated_at timestamptz NOT NULL DEFAULT now()` (always advances, fixes step-1 S5) | policy + grants for `littlelight_worker` |
+| `worker_heartbeats` (step 1) | add `updated_at timestamptz NOT NULL DEFAULT now()` (always advances, fixes step-1 S5) | policy + grants for `tinyglow_worker` |
 
 ### 2.5 Soft delete and purge semantics
 
@@ -219,10 +219,10 @@ grants are `GRANT <verb> (cols)`; a `SELECT *` by a role with a column list fail
 | `viewer_sessions` | `is_baby_admin(share_link_baby(share_link_id))`, cols: id, share_link_id, created_at, expires_at, last_seen_at | – | – | – | – | – |
 | `chat_threads` / `chat_messages` | `is_baby_admin(baby_id) AND user_id = auth_uid()` | same `AND baby_ai_enabled(baby_id)` | same | same | – | – |
 | `audit_log` | `is_baby_admin(baby_id) OR actor_user_id = auth_uid()` | `actor_user_id = auth_uid() AND (baby_id IS NULL OR is_baby_member(baby_id))` | – | – | – | INSERT WITH CHECK `actor_user_id IS NULL` |
-| `worker_heartbeats` | – | – | – | – | – | – (direct grant + policy `TO littlelight_worker` USING true / WITH CHECK true) |
+| `worker_heartbeats` | – | – | – | – | – | – (direct grant + policy `TO tinyglow_worker` USING true / WITH CHECK true) |
 
 Schema-level: `REVOKE ALL ON SCHEMA public FROM PUBLIC; GRANT USAGE ON SCHEMA public TO
-littlelight_api, littlelight_worker, authenticated, viewer, pipeline, service_role;` `ALTER DEFAULT
+tinyglow_api, tinyglow_worker, authenticated, viewer, pipeline, service_role;` `ALTER DEFAULT
 PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO service_role` (+ sequences).
 `anon` gets nothing. No role but `postgres` can read `pgmigrations` or `auth.*`.
 
@@ -266,9 +266,9 @@ upserted (`ON CONFLICT (pk) DO UPDATE`), so a second run yields identical counts
 share token (dev only). Never inserts real images: storage keys are placeholders; step 5's 10,000-
 photo seed extends this file.
 
-Fixed ids: users `00000000-0000-4000-8000-00000000000{1,2,3}` = `demo-mom@littlelight.local`
-(admin, display "Maria", relationship "Mom"), `demo-dad@littlelight.local` (admin, "Dad"),
-`demo-nanny@littlelight.local` (contributor, "Nanny"); baby `…-000000000100` "Maya", nickname
+Fixed ids: users `00000000-0000-4000-8000-00000000000{1,2,3}` = `demo-mom@tinyglow.local`
+(admin, display "Maria", relationship "Mom"), `demo-dad@tinyglow.local` (admin, "Dad"),
+`demo-nanny@tinyglow.local` (contributor, "Nanny"); baby `…-000000000100` "Maya", nickname
 "Mimi", `birth_date 2025-06-30`, `plan = 'plus'`, `plan_owner_user_id` = mom, home coordinates
 encrypted (`47.6062, -122.3321`, `home_label 'Home'`); share link `…-000000000200` "Grandparents",
 dev token `demo-grandparents-share-token` (stored as `sha256(token)`), `expires_at now() + 24h`
@@ -298,12 +298,12 @@ one `audit_log` row `seed.demo_family`.
 users, the fallback is seeding through GoTrue's admin API (`POST /admin/users` with a
 `service_role` JWT) from the same script (Risk R4).
 
-### 2.10 `@littlelight/db` package surface
+### 2.10 `@tinyglow/db` package surface
 
 - `src/bootstrap.ts` (extended): all roles in 2.2, passwords from `API_DB_PASSWORD`,
   `WORKER_DB_PASSWORD` (same bind-param `set_config` → `DO` pattern, ≥ 16 chars in production),
   `service_role` → `BYPASSRLS`, `pgboss` schema + ownership convergence + default privileges.
-  Exports `APP_ROLES = { api: 'littlelight_api', worker: 'littlelight_worker', viewer: 'viewer',
+  Exports `APP_ROLES = { api: 'tinyglow_api', worker: 'tinyglow_worker', viewer: 'viewer',
   pipeline: 'pipeline', authenticated: 'authenticated', service: 'service_role' }`.
 - `src/env.ts`: `requireApiDbPassword`, `requireWorkerDbPassword`, `requireDataEncryptionKey`,
   `seedEnabled(env)`.
@@ -319,12 +319,12 @@ users, the fallback is seeding through GoTrue's admin API (`POST /admin/users` w
   `vector|tsvector|bit → string`. Output is committed and deterministic (sorted); script
   `db:types` = `tsx src/gen-types.ts` (needs `DATABASE_URL`, superuser or any role with catalog
   access). Package export `"./types": "./src/generated/index.ts"` for step 3+ consumers (adding
-  `@littlelight/db` as an api/worker dependency is deferred to step 3 with a serial lockfile regen).
+  `@tinyglow/db` as an api/worker dependency is deferred to step 3 with a serial lockfile regen).
   Alternative if the orchestrator prefers a maintained tool: Kanel (`kanel`), see R6.
 - `README.md`: role model, per-transaction pattern (2.3), encryption key handling, seed flags,
   "RLS policy changes need a test", type generation, migration list.
 
-### 2.11 Shared contracts (`@littlelight/shared`, architect-defined, backend-engineer writes)
+### 2.11 Shared contracts (`@tinyglow/shared`, architect-defined, backend-engineer writes)
 
 - `src/db-enums.ts` (zod + inferred types): `babyRoleSchema` (`admin|contributor`), `planSchema`
   (`free|plus`), `unitsSchema` (`metric|imperial`), `photoStatusSchema`, `photoApprovalSchema`,
@@ -363,11 +363,11 @@ users, the fallback is seeding through GoTrue's admin API (`POST /admin/users` w
 | New one-shot `db-init` | same image as `migrate`, `command: ["pnpm","db:bootstrap"]`, env: superuser `DATABASE_URL`, `AUTH_DB_PASSWORD`, `API_DB_PASSWORD`, `WORKER_DB_PASSWORD` (literals via `x-dev-shared`), `depends_on db: service_healthy`, `restart: "no"` | same with `${…:?}` from `.env` |
 | `auth` | `depends_on: db-init: service_completed_successfully` (+ `mail`) | same |
 | `migrate` | `depends_on: auth: service_healthy`; env adds the three passwords, `DATA_ENCRYPTION_KEY`, `SEED_DEMO_FAMILY: "true"`; command unchanged (`db:migrate && db:seed`) | `depends_on: auth: service_healthy`; no seed, no `SEED_DEMO_FAMILY` |
-| `api` | `environment: DATABASE_URL: postgres://littlelight_api:dev@db:5432/littlelight`, `DATA_ENCRYPTION_KEY` (from `x-dev-app-env`) | `DATABASE_URL: postgres://littlelight_api:${API_DB_PASSWORD:?}@db:5432/littlelight` via `environment:` (overrides env_file) |
-| `worker` | `DATABASE_URL: postgres://littlelight_worker:dev@db:5432/littlelight`, `DATA_ENCRYPTION_KEY` | `postgres://littlelight_worker:${WORKER_DB_PASSWORD:?}@…` |
+| `api` | `environment: DATABASE_URL: postgres://tinyglow_api:dev@db:5432/tinyglow`, `DATA_ENCRYPTION_KEY` (from `x-dev-app-env`) | `DATABASE_URL: postgres://tinyglow_api:${API_DB_PASSWORD:?}@db:5432/tinyglow` via `environment:` (overrides env_file) |
+| `worker` | `DATABASE_URL: postgres://tinyglow_worker:dev@db:5432/tinyglow`, `DATA_ENCRYPTION_KEY` | `postgres://tinyglow_worker:${WORKER_DB_PASSWORD:?}@…` |
 | `.env.dev` | `DATABASE_URL` line becomes a comment explaining it is set per service in Compose; add `DATA_ENCRYPTION_KEY` note (literal lives in `x-dev-shared`); `SEED_DEMO_FAMILY=true` | `.env.example`: `POSTGRES_PASSWORD`, `AUTH_DB_PASSWORD`, `API_DB_PASSWORD`, `WORKER_DB_PASSWORD`, `DATA_ENCRYPTION_KEY` (all `openssl rand -hex 32`), `DATABASE_URL` documented as the superuser URL used by `db-init`/`migrate` only; comment: never set `log_statement=all` on `db` |
 | CI `check` job | integration env adds `API_DB_PASSWORD=dev`, `WORKER_DB_PASSWORD=dev`, `DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min`, `SEED_DEMO_FAMILY=true`; new step after integration tests: `pnpm db:types && git diff --exit-code -- packages/db/src/generated` | – |
-| Smoke (`e2e/smoke/dev-stack.sh`, test-engineer) | expects `db-init`, `migrate`, `storage-init` exited 0; adds a check that `pg_stat_activity` shows `littlelight-api` as `littlelight_api` and `littlelight-worker:*` as `littlelight_worker`, and no app connection as `postgres` | – |
+| Smoke (`e2e/smoke/dev-stack.sh`, test-engineer) | expects `db-init`, `migrate`, `storage-init` exited 0; adds a check that `pg_stat_activity` shows `tinyglow-api` as `tinyglow_api` and `tinyglow-worker:*` as `tinyglow_worker`, and no app connection as `postgres` | – |
 
 `docker/backup/*`: roles-only dump already covers the new roles; devops verifies the restore
 script re-runs bootstrap after restore (passwords are not in the dump).
@@ -382,7 +382,7 @@ script re-runs bootstrap after restore (passwords are not in the dump).
 | `<ts>_ai.sql` | `ai_batches`, `photo_ai` (+ tripwire and sensitive-sync triggers), `photo_search` (+ HNSW/GIN/btree); RLS/policies (A, P) | drop |
 | `<ts>_sharing.sql` | `share_links`, `share_rules`, `shared_photos` (+ gate trigger), `viewer_sessions`; `is_share_link_active`, `share_link_baby`, `viewer_baby_id`, `viewer_can_see_photo`; RLS/policies incl. all **V** policies on `babies`, `milestones`, `photos`, `photo_derivatives`, `photo_details` | drop viewer policies on earlier tables, then tables/functions |
 | `<ts>_chat-audit.sql` | `chat_threads`, `chat_messages`, `audit_log`; RLS/policies | drop |
-| `<ts>_worker-heartbeats-app-role.sql` | `ALTER TABLE worker_heartbeats ADD COLUMN updated_at …`; `GRANT ALL ON worker_heartbeats TO littlelight_worker`; policy `worker_heartbeats_worker_all TO littlelight_worker USING (true) WITH CHECK (true)` | drop policy, revoke, drop column |
+| `<ts>_worker-heartbeats-app-role.sql` | `ALTER TABLE worker_heartbeats ADD COLUMN updated_at …`; `GRANT ALL ON worker_heartbeats TO tinyglow_worker`; policy `worker_heartbeats_worker_all TO tinyglow_worker USING (true) WITH CHECK (true)` | drop policy, revoke, drop column |
 
 Every file: `IF NOT EXISTS`/`IF EXISTS` guards, `ENABLE` + `FORCE ROW LEVEL SECURITY` in the
 same file as `CREATE TABLE`, down is the exact inverse. The whole run is one transaction
@@ -400,13 +400,13 @@ Owners per `CLAUDE.md` file ownership. Same-owner tasks run in sequence.
   BYPASSRLS`, `pgboss` schema/ownership/default privileges, password handling identical to
   `AUTH_DB_PASSWORD` (bind param → `DO`; never logged; redact list extended with the new
   secrets), `ensureAuthSchemaStub`, `appRoleUrl`. Bootstrap stays idempotent and converging.
-- Security: no `BYPASSRLS` on any LOGIN role; `littlelight_api`/`littlelight_worker` NOINHERIT;
+- Security: no `BYPASSRLS` on any LOGIN role; `tinyglow_api`/`tinyglow_worker` NOINHERIT;
   nothing grants `anon`.
 - Inputs: this plan. Done-when: against a throwaway pgvector (README recipe) `pnpm db:bootstrap`
   twice is a no-op the second time; `psql -c "\du"` shows the roles/attributes of 2.2;
-  `psql -U littlelight_api -c 'select 1'` works and `-c 'select * from worker_heartbeats'` is
-  `permission denied`; `SET ROLE authenticated` works for `littlelight_api` but `SET ROLE
-  pipeline` fails; `SET ROLE service_role` fails for `littlelight_worker`.
+  `psql -U tinyglow_api -c 'select 1'` works and `-c 'select * from worker_heartbeats'` is
+  `permission denied`; `SET ROLE authenticated` works for `tinyglow_api` but `SET ROLE
+  pipeline` fails; `SET ROLE service_role` fails for `tinyglow_worker`.
 
 ### 2.2 Migrations (security-engineer) — lane S, after 2.1
 
@@ -440,7 +440,7 @@ Owners per `CLAUDE.md` file ownership. Same-owner tasks run in sequence.
 - Owned: `packages/db/src/gen-types.ts`, `src/generated/**`, `package.json` (`db:types` script,
   `./types` export), `README.md`.
 - Build 2.10 generator; commit the output generated from the migrated dev DB.
-- Done-when: `pnpm db:types` twice produces no diff; `pnpm --filter @littlelight/db typecheck`
+- Done-when: `pnpm db:types` twice produces no diff; `pnpm --filter @tinyglow/db typecheck`
   passes; `PhotosRow.status` is the union of the CHECK values (the generator reads
   `pg_constraint` `CHECK (col IN (...))` to narrow `text` columns; falls back to `string`).
 
@@ -458,7 +458,7 @@ Owners per `CLAUDE.md` file ownership. Same-owner tasks run in sequence.
 - Owned: `apps/api/src/config.ts`, `apps/worker/src/config.ts`, `apps/worker/src/heartbeat.ts`,
   `apps/worker/src/main.ts` (only if needed). Not owned: `apps/api/src/auth/**`, `sharing/**`
   (do not create).
-- Build 2.12. `pg-boss` keeps `connectionString: DATABASE_URL` (now `littlelight_worker`); no
+- Build 2.12. `pg-boss` keeps `connectionString: DATABASE_URL` (now `tinyglow_worker`); no
   `schema` option change.
 - Done-when: with the dev stack on the new roles, `/healthz` is 200, worker healthy,
   `worker_heartbeats.updated_at` advances every beat even while `storage` is stopped
@@ -497,8 +497,8 @@ Owners per `CLAUDE.md` file ownership. Same-owner tasks run in sequence.
   - `packages/shared/src/{db-enums,jwt-claims}.test.ts`, `apps/worker/src/heartbeat.test.ts`
     (S5), `apps/api/src/config.test.ts` (`DATA_ENCRYPTION_KEY` required, value never in message).
   - `e2e/smoke/dev-stack.sh` — 2.13 additions.
-- Harness: connect as `postgres` for fixtures; as `littlelight_api` (via `appRoleUrl`) for
-  `authenticated`/`viewer`; as `littlelight_worker` for `pipeline`. Minting claims =
+- Harness: connect as `postgres` for fixtures; as `tinyglow_api` (via `appRoleUrl`) for
+  `authenticated`/`viewer`; as `tinyglow_worker` for `pipeline`. Minting claims =
   `BEGIN; SET LOCAL ROLE <r>; SELECT set_config('request.jwt.claims', $1, true)` with
   `JSON.stringify({ sub, role: 'authenticated', email })` or `{ role: 'viewer', share_link_id }`,
   assertions, `ROLLBACK`. Fixtures (fixed ids, created once per file as superuser): babies A and B;
@@ -517,10 +517,10 @@ Owners per `CLAUDE.md` file ownership. Same-owner tasks run in sequence.
 | `contribA` | `photos` = own uploads + approved, no trashed/others' pending; `babies` yes; `invites` 0 rows; `share_links`/`shared_photos`/`chat_*`/`photo_search` 0 rows | INSERT photo with `approval='approved'` → RLS violation; INSERT pending → ok; UPDATE own pending `deleted_at` → 1 row; UPDATE own pending `approval='approved'` → RLS violation; UPDATE approved photo (anyone's) → 0 rows; `DELETE FROM photos` → permission denied; INSERT `measurements` → RLS violation; INSERT `share_links` → RLS violation; INSERT `chat_threads` → RLS violation |
 | `viewer` LA | `shared_photos` = exactly LA's 2 rows; `photos` (allowed columns) = those 2 ids; `SELECT *` from `photos` → permission denied; `photo_derivatives` only thumb/display of those; `babies` (id,name,nickname,birth_date) = A; every other table (`photo_exif`, `photo_ai`, `photo_search`, `invites`, `baby_members`, `measurements`, `chat_*`, `audit_log`, `viewer_sessions`, `profiles`, `ai_batches`) → permission denied; any INSERT/UPDATE/DELETE → permission denied | viewer LA-expired / LA-revoked / LB claims → 0 rows from `shared_photos`, `photos`, `babies`; viewer with no claims → 0 rows |
 | `pipeline` | `photos`/`photo_exif` (incl. gps enc columns)/`photo_ai`/`photo_search`/`ai_batches` across both babies; `share_links` without hashes (`SELECT token_hash` → permission denied); `invites`, `chat_*`, `baby_members`, `viewer_sessions` → permission denied | UPDATE `photos.status` ok; UPDATE `photos.approval` → permission denied; DELETE photo trashed 31 days ago → 1 row, trashed yesterday → 0 rows; INSERT `shared_photos` rule → ok (non-sensitive) / trigger error (sensitive) |
-| `littlelight_api` without `SET ROLE` | `SELECT 1` ok; `SELECT * FROM photos` → permission denied; `SET ROLE pipeline` → error | – |
+| `tinyglow_api` without `SET ROLE` | `SELECT 1` ok; `SELECT * FROM photos` → permission denied; `SET ROLE pipeline` → error | – |
 | `anon` | permission denied on every app table | – |
 
-- Done-when: `pnpm test` green; `DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight
+- Done-when: `pnpm test` green; `DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow
   AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true pnpm test:integration`
   green both against the dev stack and against a bare pgvector (stub path); `pnpm smoke` green.
 
@@ -552,26 +552,26 @@ Run from the repo root with Docker Desktop running.
    Expected: `db-init`, `migrate`, `storage-init` exited 0; `db auth storage mail api worker web` healthy.
 2. App connections are not superuser:
    ```sh
-   docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc \
-     "select distinct usename||' '||application_name from pg_stat_activity where application_name like 'littlelight-%'"
+   docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc \
+     "select distinct usename||' '||application_name from pg_stat_activity where application_name like 'tinyglow-%'"
    ```
-   Expected: `littlelight_api littlelight-api`, `littlelight_worker littlelight-worker:<id>`; no `postgres littlelight-*` lines.
+   Expected: `tinyglow_api tinyglow-api`, `tinyglow_worker tinyglow-worker:<id>`; no `postgres tinyglow-*` lines.
 3. RLS test suite (the PRD check):
    ```sh
-   DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev \
+   DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev \
    API_DB_PASSWORD=dev WORKER_DB_PASSWORD=dev SEED_DEMO_FAMILY=true \
    DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min pnpm test:integration
    ```
    Expected: green, including `rls.integration.test.ts` cases named "another baby's rows are
    invisible", "contributor cannot delete", "viewer sees only shared_photos".
-4. Manual spot checks (seed ids from 2.9; `PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -d littlelight -Atv ON_ERROR_STOP=0"`):
+4. Manual spot checks (seed ids from 2.9; `PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -d tinyglow -Atv ON_ERROR_STOP=0"`):
    ```sh
    # another user's baby: 0 rows (stranger uuid is not a member)
-   $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos; rollback;"
+   $PSQL -U tinyglow_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos; rollback;"
    # contributor cannot delete
-   $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"   # ERROR: permission denied for table photos
+   $PSQL -U tinyglow_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"   # ERROR: permission denied for table photos
    # viewer sees only shared_photos
-   $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
+   $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
    ```
    Expected: `0`; `permission denied`; `3`, `3`, then `permission denied for table photo_exif`.
    (`PGPASSWORD=dev` for the app roles.)
@@ -579,7 +579,7 @@ Run from the repo root with Docker Desktop running.
    twice, then `$PSQL -U postgres -c "select (select count(*) from photos)||' '||(select count(*) from baby_members)||' '||(select count(*) from shared_photos)"` → `12 3 3` both times.
 6. Every table locked down: `$PSQL -U postgres -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"` → `0`.
 7. Reversibility: `docker compose -f docker-compose.dev.yml run --rm migrate sh -c "pnpm db:migrate:down all && pnpm db:migrate && pnpm db:seed"` exits 0.
-8. Types current: `DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight pnpm --filter @littlelight/db db:types && git diff --exit-code -- packages/db/src/generated`.
+8. Types current: `DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow pnpm --filter @tinyglow/db db:types && git diff --exit-code -- packages/db/src/generated`.
 9. Step-1 smoke still green: `pnpm smoke` (includes the OTP email and storage-down checks).
 10. Unit + lint + typecheck: `pnpm lint && pnpm typecheck && pnpm test`.
 11. Hygiene: `grep -rn 'hex-32\|change-me' .env.dev` prints nothing; `git status --porcelain | grep -E '^\?\? \.env(\.local)?$'` prints nothing.
@@ -590,7 +590,7 @@ Run from the repo root with Docker Desktop running.
   from the PRD YAML's `auth depends_on migrate` but satisfies its intent (role + schema before
   GoTrue). Alternative: no FK to `auth.users` at all (profiles anchored only by verified JWT
   `sub`); cheaper but loses integrity and cascade.
-- **D2 — Role model (2.2).** Two LOGIN roles (`littlelight_api`, `littlelight_worker`, both
+- **D2 — Role model (2.2).** Two LOGIN roles (`tinyglow_api`, `tinyglow_worker`, both
   NOINHERIT), `SET LOCAL ROLE` per transaction; `service_role` gets `BYPASSRLS` (Supabase
   semantics) and is reachable from the API only; the worker's `pipeline` role is NOBYPASSRLS with
   explicit policies. Changes step 1's `NOBYPASSRLS` assertion on `service_role`.

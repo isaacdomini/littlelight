@@ -1,4 +1,4 @@
-import { viewerPhotoSchema, viewerPhotosResponseSchema } from "@littlelight/shared";
+import { viewerPhotoSchema, viewerPhotosResponseSchema } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/errors";
 import type { SignGetOptions, UrlSigner } from "../storage/sign";

@@ -6,7 +6,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { AiDescriptionV1 } from "@littlelight/shared";
+import type { AiDescriptionV1 } from "@tinyglow/shared";
 
 const POSES = ["lying", "sitting", "crawling", "standing", "walking", "held"] as const;
 const EXPRESSIONS = ["smiling", "neutral", "sleeping", "surprised", "crying"] as const;

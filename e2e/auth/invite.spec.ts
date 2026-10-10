@@ -88,7 +88,7 @@ test("an invite opened with a different email is rejected with the masked addres
 
   // The API agrees: 403 invite_email_mismatch with the same message, and the wrong user has no album.
   const res = await page.request.post(`/api/invites/${token}/accept`, {
-    headers: { "X-Littlelight-Client": "web" },
+    headers: { "X-Tinyglow-Client": "web" },
   });
   expect(res.status()).toBe(403);
   const body = await res.json();

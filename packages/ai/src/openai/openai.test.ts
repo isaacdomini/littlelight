@@ -1,4 +1,4 @@
-import { AI_DESCRIPTION_V1_SCHEMA_NAME, aiDescriptionV1Schema } from "@littlelight/shared";
+import { AI_DESCRIPTION_V1_SCHEMA_NAME, aiDescriptionV1Schema } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { analysisImage } from "../../../../e2e/fixtures/ai-images";
 import type { VisionAdapterOptions } from "../adapter-options";
@@ -73,7 +73,7 @@ describe("describeBatch wire format", () => {
     expect(upload?.method).toBe("POST");
     expect(upload?.headers.authorization).toBe("Bearer sk-test-secret");
     expect(upload?.form?.purpose).toBe("batch");
-    expect(upload?.form?.filename).toMatch(/^littlelight-batch-[0-9a-f-]+\.jsonl$/);
+    expect(upload?.form?.filename).toMatch(/^tinyglow-batch-[0-9a-f-]+\.jsonl$/);
     const lines = (upload?.form?.content ?? "")
       .trim()
       .split("\n")
@@ -90,7 +90,7 @@ describe("describeBatch wire format", () => {
         strict: true,
         name: AI_DESCRIPTION_V1_SCHEMA_NAME,
       });
-      expect(l.body.prompt_cache_key).toBe("littlelight-describe-v1");
+      expect(l.body.prompt_cache_key).toBe("tinyglow-describe-v1");
       expect(l.body.input[0].content[0].type).toBe("input_image");
       expect(l.body.input[0].content[0].image_url).toMatch(/^data:image\/jpeg;base64,/);
       expect(JSON.stringify(l)).not.toMatch(/latitude|longitude|gps/i);
@@ -99,7 +99,7 @@ describe("describeBatch wire format", () => {
     expect(create?.body).toMatchObject({
       endpoint: "/v1/responses",
       completion_window: "24h",
-      metadata: { app: "littlelight", prompt_version: "v1", schema_version: "v1" },
+      metadata: { app: "tinyglow", prompt_version: "v1", schema_version: "v1" },
     });
     expect(h).toMatchObject({
       provider: "openai",

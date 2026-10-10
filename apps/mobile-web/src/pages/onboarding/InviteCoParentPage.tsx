@@ -1,4 +1,4 @@
-import { emailSchema, inviteSchema } from "@littlelight/shared";
+import { emailSchema, inviteSchema } from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../../auth/AuthProvider";

@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatModel, ChatToolCall } from "@littlelight/ai";
+import type { ChatMessage, ChatModel, ChatToolCall } from "@tinyglow/ai";
 import {
   CHAT_LIMITS,
   CHAT_MESSAGES,
@@ -9,7 +9,7 @@ import {
   parseChatToolArguments,
   partitionCitations,
   SEARCH_RESULT_LIMIT,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { createCitationFilter } from "./citations";
 import { type ToolOutcome, toolError } from "./tools";
 

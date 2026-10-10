@@ -94,11 +94,11 @@ for path in otp verify token logout signup user admin/users; do
 done
 
 step "3a. database: all 20 migrations applied"
-MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
+MIGS="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c "select count(*) from public.pgmigrations")"
 [ "$MIGS" = "20" ] || fail "expected 20 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
-PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
+PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
 if [ "$PERF_PHOTOS" != "0" ]; then
   [ "$PERF_PHOTOS" = "10000" ] || fail "perf baby is partly seeded ($PERF_PHOTOS photos, expected 10000); rerun pnpm perf:seed"
   echo "perf baby present: 10000 photos"
@@ -109,7 +109,7 @@ fi
 step "4. sign-in code: POST /api/auth/otp is a generic 202; the code arrives in Mailpit"
 EMAIL="smoke-$(date +%s)-$RANDOM@example.com"
 OTP_CODE="$(curl -s -o "$TMP/otp.json" -w '%{http_code}' -X POST "$BASE/api/auth/otp" \
-  -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+  -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' \
   -d "{\"email\":\"$EMAIL\"}")"
 [ "$OTP_CODE" = "202" ] || fail "POST /api/auth/otp answered $OTP_CODE, expected 202"
 grep -q '"ok":true' "$TMP/otp.json" || fail "POST /api/auth/otp body is not {\"ok\":true}: $(cat "$TMP/otp.json")"
@@ -133,7 +133,7 @@ step "4a. POST /api/auth/verify sets httpOnly session cookies; GET /api/me is 20
 JAR="$TMP/cookies.txt"
 HDRS="$TMP/verify-headers.txt"
 VCODE="$(curl -s -o "$TMP/verify.json" -D "$HDRS" -c "$JAR" -w '%{http_code}' -X POST "$BASE/api/auth/verify" \
-  -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+  -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' \
   -d "{\"email\":\"$EMAIL\",\"code\":\"$CODE\"}")"
 [ "$VCODE" = "200" ] || fail "POST /api/auth/verify answered $VCODE: $(cat "$TMP/verify.json")"
 grep -qi '^set-cookie: ll_access=.*HttpOnly' "$HDRS" || fail "verify did not set an httpOnly ll_access cookie"
@@ -147,31 +147,31 @@ NOAUTH="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/me")"
 echo "signed in as $EMAIL"
 
 step "5. worker heartbeat is fresh with storage_ok"
-HB="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c \
+HB="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c \
   "select count(*) from worker_heartbeats where storage_ok and now()-last_seen_at < interval '30 seconds'")"
 [ "${HB:-0}" -ge 1 ] || fail "no fresh worker heartbeat with storage_ok = true"
 echo "fresh heartbeat rows: $HB"
 
 step "5a. api and worker connect as their own roles, never as the superuser"
-PSQL=("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -F '|')
+PSQL=("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -F '|')
 CONNS="$("${PSQL[@]}" -c \
-  "select distinct usename||'|'||regexp_replace(application_name, ':.*$', '') from pg_stat_activity where application_name like 'littlelight-%' order by 1")"
+  "select distinct usename||'|'||regexp_replace(application_name, ':.*$', '') from pg_stat_activity where application_name like 'tinyglow-%' order by 1")"
 echo "$CONNS"
-grep -qx 'littlelight_api|littlelight-api' <<<"$CONNS" \
-  || fail "no littlelight-api session as littlelight_api in pg_stat_activity"
-grep -qx 'littlelight_worker|littlelight-worker' <<<"$CONNS" \
-  || fail "no littlelight-worker session as littlelight_worker in pg_stat_activity"
+grep -qx 'tinyglow_api|tinyglow-api' <<<"$CONNS" \
+  || fail "no tinyglow-api session as tinyglow_api in pg_stat_activity"
+grep -qx 'tinyglow_worker|tinyglow-worker' <<<"$CONNS" \
+  || fail "no tinyglow-worker session as tinyglow_worker in pg_stat_activity"
 SUPER="$("${PSQL[@]}" -c \
-  "select count(*) from pg_stat_activity where usename = 'postgres' and application_name like 'littlelight-%' and application_name not in ('littlelight-seed')")"
+  "select count(*) from pg_stat_activity where usename = 'postgres' and application_name like 'tinyglow-%' and application_name not in ('tinyglow-seed')")"
 [ "$SUPER" = "0" ] || fail "$SUPER api/worker session(s) are connected as the postgres superuser"
 # Any non-local client connected as postgres would be an app container using the wrong URL
 # (psql here goes through the unix socket; migrate/db-init have exited).
 REMOTE="$("${PSQL[@]}" -c \
-  "select count(*) from pg_stat_activity where usename = 'postgres' and client_addr is not null and application_name not in ('littlelight-seed')")"
+  "select count(*) from pg_stat_activity where usename = 'postgres' and client_addr is not null and application_name not in ('tinyglow-seed')")"
 [ "$REMOTE" = "0" ] || fail "$REMOTE remote session(s) connected as postgres (an app uses the superuser URL?)"
 
-step "5b. seeded demo family: RLS spot checks as littlelight_api (plan step 2 section 4)"
-APSQL=("${DC[@]}" exec -T -e PGPASSWORD=dev db psql -h 127.0.0.1 -U littlelight_api -d littlelight -At -v ON_ERROR_STOP=0)
+step "5b. seeded demo family: RLS spot checks as tinyglow_api (plan step 2 section 4)"
+APSQL=("${DC[@]}" exec -T -e PGPASSWORD=dev db psql -h 127.0.0.1 -U tinyglow_api -d tinyglow -At -v ON_ERROR_STOP=0)
 claims() { printf "select set_config('request.jwt.claims','%s',true);" "$1"; }
 STRANGER='{"sub":"00000000-0000-4000-8000-0000000000ff","role":"authenticated"}'
 NANNY='{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}'
@@ -186,16 +186,16 @@ grep -qx 'photos=4' <<<"$OUT" || fail "viewer does not see exactly 4 photos: $OU
 OUT="$("${APSQL[@]}" -c "begin; set local role viewer; $(claims "$VIEWER") select count(*) from photo_exif; rollback;" 2>&1 || true)"
 grep -q 'permission denied for table photo_exif' <<<"$OUT" || fail "viewer can read photo_exif: $OUT"
 OUT="$("${APSQL[@]}" -c "select count(*) from photos" 2>&1 || true)"
-grep -q 'permission denied' <<<"$OUT" || fail "littlelight_api outside SET ROLE can read photos: $OUT"
+grep -q 'permission denied' <<<"$OUT" || fail "tinyglow_api outside SET ROLE can read photos: $OUT"
 TABLES="$("${PSQL[@]}" -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)")"
 [ "$TABLES" = "0" ] || fail "$TABLES public table(s) without ENABLE+FORCE row level security"
 echo "RLS spot checks passed"
 
 step "5d. step 4: least-privilege MinIO service accounts, worker queues and disk gauge"
 API_KEY="$("${DC[@]}" exec -T api printenv S3_ACCESS_KEY | tr -d '\r')"
-[ "$API_KEY" = "littlelight-api" ] || fail "api S3_ACCESS_KEY is '$API_KEY', expected littlelight-api (not the root user)"
+[ "$API_KEY" = "tinyglow-api" ] || fail "api S3_ACCESS_KEY is '$API_KEY', expected tinyglow-api (not the root user)"
 WORKER_KEY="$("${DC[@]}" exec -T worker printenv S3_ACCESS_KEY | tr -d '\r')"
-[ "$WORKER_KEY" = "littlelight-worker" ] || fail "worker S3_ACCESS_KEY is '$WORKER_KEY', expected littlelight-worker"
+[ "$WORKER_KEY" = "tinyglow-worker" ] || fail "worker S3_ACCESS_KEY is '$WORKER_KEY', expected tinyglow-worker"
 WLOG="$("${DC[@]}" logs worker 2>&1)"
 grep -q 'queues ready' <<<"$WLOG" || fail "worker log has no 'queues ready'"
 grep -q 'CSAM matching disabled' <<<"$WLOG" || fail "worker log has no 'CSAM matching disabled'"
@@ -225,9 +225,9 @@ done
 [ "$("${PSQL[@]}" -c "select count(*) from photo_ai a join photos p on p.id=a.photo_id join babies b on b.id=p.baby_id where b.plan='free'")" = "0" ] \
   || fail "photo_ai rows exist for a free-tier baby"
 # demo-mom reads the seeded bath photo: ready, flagged, raw output for the admin, nothing private
-MOM_EMAIL="demo-mom@littlelight.local"
+MOM_EMAIL="demo-mom@tinyglow.local"
 MOM_JAR="$TMP/mom.jar"
-curl -fsS -o /dev/null -X POST "$BASE/api/auth/otp" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"email\":\"$MOM_EMAIL\"}" || fail "demo-mom OTP request failed"
+curl -fsS -o /dev/null -X POST "$BASE/api/auth/otp" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d "{\"email\":\"$MOM_EMAIL\"}" || fail "demo-mom OTP request failed"
 MOM_CODE=""
 for _ in $(seq 1 30); do
   MID="$(curl -fsS "$MAIL/api/v1/search?query=to:$MOM_EMAIL" | json 'j.messages?.[0]?.ID')" || true
@@ -238,12 +238,12 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 [ -n "$MOM_CODE" ] || fail "no sign-in code for demo-mom"
-curl -fsS -o /dev/null -c "$MOM_JAR" -X POST "$BASE/api/auth/verify" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+curl -fsS -o /dev/null -c "$MOM_JAR" -X POST "$BASE/api/auth/verify" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' \
   -d "{\"email\":\"$MOM_EMAIL\",\"code\":\"$MOM_CODE\"}" || fail "demo-mom verify failed"
 # a freshly seeded family has not accepted the current Terms yet: accept them like the app would
 MOM_ME="$(curl -fsS -b "$MOM_JAR" "$BASE/api/me")" || fail "GET /api/me as demo-mom failed"
 if [ "$(printf '%s' "$MOM_ME" | json 'j.consent.ok')" != "true" ]; then
-  curl -fsS -o /dev/null -b "$MOM_JAR" -X POST "$BASE/api/me/consent" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' \
+  curl -fsS -o /dev/null -b "$MOM_JAR" -X POST "$BASE/api/me/consent" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' \
     -d "{\"termsVersion\":\"$(printf '%s' "$MOM_ME" | json 'j.consent.requiredTermsVersion')\",\"privacyVersion\":\"$(printf '%s' "$MOM_ME" | json 'j.consent.requiredPrivacyVersion')\",\"isAdult\":true}" \
     || fail "demo-mom consent failed"
 fi
@@ -264,7 +264,7 @@ SEARCH="$(curl -fsS -b "$MOM_JAR" "$BASE/api/babies/$MAYA_ID/search?q=bath")" ||
 LEAK_RE='"(search_text|embedding|latitude|longitude|raw_json)"|(-?[0-9]+\.[0-9]+,){8,}'
 grep -Eq "$LEAK_RE" <<<"$SEARCH" && fail "search response leaks the document, GPS or a vector"
 curl -fsS -o /dev/null -b "$MOM_JAR" "$BASE/api/babies/$MAYA_ID/search/facets" || fail "GET search facets failed"
-CHAT_CODE="$(curl -s -o "$TMP/chat.json" -w '%{http_code}' -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/chat/messages" -H 'content-type: application/json' -H 'accept: application/json' -H 'X-Littlelight-Client: web' \
+CHAT_CODE="$(curl -s -o "$TMP/chat.json" -w '%{http_code}' -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/chat/messages" -H 'content-type: application/json' -H 'accept: application/json' -H 'X-Tinyglow-Client: web' \
   -d '{"text":"Show me bath time photos"}')"
 CHAT="$(cat "$TMP/chat.json")"
 if [ "$(printf '%s' "$SEARCH" | json 'j.degraded')" = "no_embeddings" ]; then
@@ -277,7 +277,7 @@ else
   [ "$(printf '%s' "$CHAT" | json 'j.message.citations.photoIds.includes("00000000-0000-4000-8000-000000000304")')" = "true" ] || fail "chat answer does not cite the bath photo: $CHAT"
   grep -Eq '\[photo:' <<<"$CHAT" && fail "chat answer carries a citation marker"
 fi
-curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/babies/$MAYA_ID/chat/thread" -H 'X-Littlelight-Client: web' || fail "DELETE chat thread failed"
+curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/babies/$MAYA_ID/chat/thread" -H 'X-Tinyglow-Client: web' || fail "DELETE chat thread failed"
 [ "$("${PSQL[@]}" -c "select count(*) from photo_search s join babies b on b.id=s.baby_id where b.deleted_at is null and not baby_ai_enabled(b.id)")" = "0" ] \
   || fail "photo_search rows exist for a live baby without the entitlement (trashed babies keep theirs until the purge)"
 [ "$("${PSQL[@]}" -c "select count(*) from ai_spend s join babies b on b.id=s.baby_id where b.plan='free'")" = "0" ] \
@@ -292,32 +292,32 @@ for p in album photos; do
   C="$(VB "$BASE/api/share/$p")"
   [ "$C" = "401" ] || fail "GET /api/share/$p without a viewer cookie answered $C, expected 401"
 done
-C="$(VB -X POST "$BASE/api/share/photos/urls" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"ids":["00000000-0000-4000-8000-000000000301"],"kind":"thumb"}')"
+C="$(VB -X POST "$BASE/api/share/photos/urls" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d '{"ids":["00000000-0000-4000-8000-000000000301"],"kind":"thumb"}')"
 [ "$C" = "401" ] || fail "POST /api/share/photos/urls without a cookie answered $C, expected 401"
-C="$(VB -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"token":"unknown-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}')"
+C="$(VB -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d '{"token":"unknown-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}')"
 [ "$C" = "410" ] || fail "exchanging an unknown token answered $C, expected 410"
 grep -q '"share_link_expired"' "$TMP/v.json" || fail "unknown token body is not share_link_expired: $(cat "$TMP/v.json")"
 C="$(VB "$BASE/api/babies/$MAYA_ID/share-links")"
 [ "$C" = "401" ] || fail "GET share-links without a parent session answered $C, expected 401"
 # demo-mom: create a link, open it as a viewer, prove the viewer cookie opens no parent route, revoke it
-LINK="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/share-links" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"name":"smoke link"}')" || fail "demo-mom could not create a share link"
+LINK="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/share-links" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d '{"name":"smoke link"}')" || fail "demo-mom could not create a share link"
 LINK_ID="$(printf '%s' "$LINK" | json 'j.link.id')"
 LINK_TOKEN="$(printf '%s' "$LINK" | json 'j.url.split("/").pop()')"
 VJAR="$TMP/viewer.jar"
-C="$(curl -s -o "$TMP/v.json" -w '%{http_code}' -c "$VJAR" -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"token\":\"$LINK_TOKEN\"}")"
+C="$(curl -s -o "$TMP/v.json" -w '%{http_code}' -c "$VJAR" -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d "{\"token\":\"$LINK_TOKEN\"}")"
 [ "$C" = "200" ] || fail "exchanging a fresh link answered $C: $(cat "$TMP/v.json")"
 C="$(VB -b "$VJAR" "$BASE/api/share/album")"
 [ "$C" = "200" ] || fail "viewer album with the cookie answered $C"
 C="$(VB -b "$VJAR" "$BASE/api/me")"
 [ "$C" = "401" ] || fail "a viewer cookie opened a parent route (GET /api/me answered $C)"
-C="$(VB -b "$VJAR" "$BASE/api/babies/$MAYA_ID/chat/messages" -X POST -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{"text":"hi"}')"
+C="$(VB -b "$VJAR" "$BASE/api/babies/$MAYA_ID/chat/messages" -X POST -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d '{"text":"hi"}')"
 case "$C" in 401|403) ;; *) fail "a viewer cookie reached chat (answered $C)";; esac
-curl -fsS -o /dev/null -b "$MOM_JAR" -X POST "$BASE/api/share-links/$LINK_ID/revoke" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d '{}' || fail "revoke failed"
+curl -fsS -o /dev/null -b "$MOM_JAR" -X POST "$BASE/api/share-links/$LINK_ID/revoke" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d '{}' || fail "revoke failed"
 C="$(VB -b "$VJAR" "$BASE/api/share/album")"
 [ "$C" = "410" ] || fail "revoked link: open viewer session answered $C, expected 410"
-C="$(VB -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"token\":\"$LINK_TOKEN\"}")"
+C="$(VB -X POST "$BASE/api/share/session" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d "{\"token\":\"$LINK_TOKEN\"}")"
 [ "$C" = "410" ] || fail "revoked link: exchange answered $C, expected 410"
-curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/share-links/$LINK_ID" -H 'X-Littlelight-Client: web' || fail "delete of the smoke link failed"
+curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/share-links/$LINK_ID" -H 'X-Tinyglow-Client: web' || fail "delete of the smoke link failed"
 # The dev web is Vite (no nginx): the /s/ headers are checked on the production nginx config
 # itself, served by a throwaway nginx container with a stub shell (nothing else is touched).
 NGX_NAME="ll-smoke-nginx-$$"
@@ -358,12 +358,12 @@ grep -qi '^content-type: application/json' <<<"$AASA_H" || fail "apple-app-site-
 AASA="$(curl -fsS "$BASE/.well-known/apple-app-site-association")" || fail "no apple-app-site-association"
 [ "$(printf '%s' "$AASA" | json 'j.applinks.details[0].components.map(c=>c["/"]).join(",")')" = "/invite/*,/s/*,/signin/native*" ] \
   || fail "AASA components are not /invite/*, /s/*, /signin/native*: $AASA"
-[ "$(curl -fsS "$BASE/.well-known/assetlinks.json" | json 'j[0].target.package_name')" = "com.tesarsoft.littlelight" ] \
-  || fail "assetlinks.json package_name is not com.tesarsoft.littlelight"
+[ "$(curl -fsS "$BASE/.well-known/assetlinks.json" | json 'j[0].target.package_name')" = "com.tesarsoft.tinyglow" ] \
+  || fail "assetlinks.json package_name is not com.tesarsoft.tinyglow"
 # CORS preflight through the web proxy (:8080): the two app origins are allowed, without credentials
 for ORIGIN in 'capacitor://localhost' 'https://localhost'; do
   PH="$(curl -si -X OPTIONS "$BASE/api/me" -H "origin: $ORIGIN" -H 'access-control-request-method: GET' \
-    -H 'access-control-request-headers: authorization,x-littlelight-client')"
+    -H 'access-control-request-headers: authorization,x-tinyglow-client')"
   grep -qi "^access-control-allow-origin: $ORIGIN" <<<"$PH" || fail "preflight from $ORIGIN has no matching allow-origin: $PH"
   grep -qi 'access-control-allow-credentials' <<<"$PH" && fail "preflight from $ORIGIN carries Access-Control-Allow-Credentials"
 done
@@ -371,11 +371,11 @@ EVIL="$(curl -si -X OPTIONS "$BASE/api/me" -H 'origin: https://evil.example' -H 
 [ "$EVIL" = "0" ] || fail "preflight from a foreign origin got an allow-origin header"
 # an allowed origin without the native client header is refused (csrf), not served
 C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/auth/otp" -H 'origin: https://localhost' -H 'content-type: application/json' -d '{"email":"x@example.com"}')"
-[ "$C" = "403" ] || fail "an app origin without X-Littlelight-Client answered $C, expected 403"
+[ "$C" = "403" ] || fail "an app origin without X-Tinyglow-Client answered $C, expected 403"
 
 # native sign-in (bearer tokens in the body, no cookie), then the push device route
 N_EMAIL="smoke-native-$(date +%s)-$RANDOM@example.com"
-NH='X-Littlelight-Client: native'
+NH='X-Tinyglow-Client: native'
 curl -fsS -o /dev/null -X POST "$BASE/api/auth/otp" -H 'content-type: application/json' -H "$NH" -d "{\"email\":\"$N_EMAIL\"}" || fail "native OTP request failed"
 N_CODE=""
 for _ in $(seq 1 30); do
@@ -403,7 +403,7 @@ PUSH_BODY="{\"platform\":\"ios\",\"provider\":\"apns\",\"token\":\"$PUSH_TOKEN\"
 C="$(curl -s -o "$TMP/push.json" -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H "$NH" -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' -d "$PUSH_BODY")"
 [ "$C" = "201" ] || fail "POST /api/me/push-devices (native) answered $C: $(cat "$TMP/push.json")"
 grep -qF "$PUSH_TOKEN" "$TMP/push.json" && fail "the push device response echoes the device token"
-C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H 'X-Littlelight-Client: web' -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' -d "$PUSH_BODY")"
+C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H 'X-Tinyglow-Client: web' -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' -d "$PUSH_BODY")"
 [ "$C" = "400" ] || fail "POST /api/me/push-devices as the web client answered $C, expected 400"
 C="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/me/push-devices" -H "$NH" -H "authorization: Bearer $N_TOK" -H 'content-type: application/json' \
   -d "{\"platform\":\"ios\",\"provider\":\"fcm\",\"token\":\"$PUSH_TOKEN\",\"appVersion\":\"1.0.0\"}")"
@@ -418,7 +418,7 @@ grep -qF "$N_TOK" <<<"$PLOG" && fail "the native bearer token appears in api/wor
 
 # demo family media: every demo photo has real thumbnails (200 image/jpeg), not placeholders
 DEMO_IDS='["00000000-0000-4000-8000-000000000301","00000000-0000-4000-8000-000000000302","00000000-0000-4000-8000-000000000303","00000000-0000-4000-8000-000000000304","00000000-0000-4000-8000-000000000305","00000000-0000-4000-8000-000000000306","00000000-0000-4000-8000-000000000307","00000000-0000-4000-8000-000000000308","00000000-0000-4000-8000-000000000309","00000000-0000-4000-8000-000000000310","00000000-0000-4000-8000-000000000311","00000000-0000-4000-8000-000000000312"]'
-DEMO_URLS="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/photos/urls" -H 'content-type: application/json' -H 'X-Littlelight-Client: web' -d "{\"photoIds\":$DEMO_IDS}")" \
+DEMO_URLS="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/photos/urls" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d "{\"photoIds\":$DEMO_IDS}")" \
   || fail "POST photos/urls for the demo photos failed"
 for u in $(printf '%s' "$DEMO_URLS" | json 'Object.values(j.urls).map(x=>x.thumbUrl).join(" ")'); do
   THUMB="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$u")"

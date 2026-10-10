@@ -17,7 +17,7 @@ import {
   photosSummaryResponseSchema,
   photoUrlsRequestSchema,
   photoUrlsResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit, requireAuth, requireConsent, type Tx, withClaims } from "../auth";

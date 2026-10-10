@@ -1,6 +1,6 @@
 # Native builds (Capacitor)
 
-App id `com.tesarsoft.littlelight` (permanent), name Littlelight, iPhone only for v1.
+App id `com.tesarsoft.tinyglow` (permanent), name Tinyglow, iPhone only for v1.
 The native shells are `ios/` (Swift Package Manager, no CocoaPods) and `android/`.
 Config: `capacitor.config.ts` (`loggingBehavior: "none"` must stay: debug logging would print tokens
 and presigned URLs).
@@ -9,18 +9,18 @@ and presigned URLs).
 
 All commands from the repo root with the pnpm on PATH (`export PATH="$HOME/.cache/littlelight-pnpm/bin:$PATH"`).
 
-- Sync web build into both shells: `pnpm --filter @littlelight/mobile-web native:sync`
+- Sync web build into both shells: `pnpm --filter @tinyglow/mobile-web native:sync`
   (or `native:sync:ios` / `native:sync:android`). `VITE_API_URL` defaults to `http://localhost:8080`;
   `VITE_DEEPLINK_DEV_SCHEME=1` by default (debug scheme on).
-- iOS (macOS, Xcode): `pnpm --filter @littlelight/mobile-web ios:build:sim`, or open
+- iOS (macOS, Xcode): `pnpm --filter @tinyglow/mobile-web ios:build:sim`, or open
   `ios/App/App.xcodeproj`. Needs an iOS Simulator runtime to run. The script builds **ad-hoc signed**
   (`CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES`, no team, no
   certificate). Do not use `CODE_SIGNING_ALLOWED=NO`: an unsigned app drops its entitlements and the
   simulator then cannot test push registration or Associated Domains. Install and launch:
   `xcrun simctl install booted ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app`
-  then `xcrun simctl launch booted com.tesarsoft.littlelight`.
+  then `xcrun simctl launch booted com.tesarsoft.tinyglow`.
 - Android: Gradle needs **JDK 21**. Do not change the global default or pin it in the repo:
-  `JAVA_HOME=<path to JDK 21> pnpm --filter @littlelight/mobile-web android:build:debug`
+  `JAVA_HOME=<path to JDK 21> pnpm --filter @tinyglow/mobile-web android:build:debug`
   (runs `assembleDebug`; also try `./gradlew lintDebug` in `android/`). SDK at `~/Library/Android/sdk`
   (platform 36, build-tools 35 are enough).
 - Release builds use `native:build:release` (requires `VITE_API_URL=https://...`, refuses live-reload
@@ -28,18 +28,18 @@ All commands from the repo root with the pnpm on PATH (`export PATH="$HOME/.cach
 
 ## Uploads (in-house uploader)
 
-Photo bytes are uploaded by our own `LittlelightUploader` Capacitor plugin, not a third-party one
+Photo bytes are uploaded by our own `TinyglowUploader` Capacitor plugin, not a third-party one
 (`@capgo/capacitor-uploader` was removed). It does a raw-body `PUT` of the file to a presigned URL
 (no multipart, no extra headers) and reports `progress`, `done` and `error` events.
 
-- iOS: `ios/App/App/LittlelightUploader.swift`, a background `URLSession`
-  (`com.tesarsoft.littlelight.upload`), so uploads continue after the app is suspended and the system
+- iOS: `ios/App/App/TinyglowUploader.swift`, a background `URLSession`
+  (`com.tesarsoft.tinyglow.upload`), so uploads continue after the app is suspended and the system
   can relaunch the app to deliver results.
-- Android: `LittlelightUploaderPlugin.java` and `UploadWorker.java` (expedited WorkManager work
+- Android: `TinyglowUploaderPlugin.java` and `UploadWorker.java` (expedited WorkManager work
   promoted to a visible `dataSync` foreground service, "Uploading N photos").
 - Presigned URLs carry a signature: neither side logs URLs or paths. The web layer is
   `src/platform/native/nativeUploader.ts`.
-- After changing plugin dependencies run `pnpm --filter @littlelight/mobile-web native:sync` so
+- After changing plugin dependencies run `pnpm --filter @tinyglow/mobile-web native:sync` so
   `ios/App/CapApp-SPM/Package.swift` and `android/app/capacitor.build.gradle` match.
 
 ## Icons and splash
@@ -47,7 +47,7 @@ Photo bytes are uploaded by our own `LittlelightUploader` Capacitor plugin, not 
 Sources are `resources/*.svg` (coral #E8836B, dark #F0957F, per docs/DESIGN.md). Regenerate every
 iOS (light, dark, tinted 1024 px; light and dark splash) and Android (adaptive, monochrome, legacy,
 round, notification, splash icon, Play Store icon) image with
-`pnpm --filter @littlelight/mobile-web native:assets`; the output is deterministic. Edit the SVGs,
+`pnpm --filter @tinyglow/mobile-web native:assets`; the output is deterministic. Edit the SVGs,
 never the PNGs. Colour resources are in `android/app/src/main/res/values{,-night}/colors.xml`.
 
 ## Store drafts
@@ -60,9 +60,9 @@ review drafts in `store/`. `sh store/check-limits.sh` checks the character limit
 - iOS: the system permission alert and notification banners are outside the app's web view, so
   tapping them needs **XCUITest** (an XCTest UI test target using `XCUIApplication` and
   `XCUIApplication(bundleIdentifier: "com.apple.springboard")` for the alert's "Allow" button and for
-  banner taps). `simctl` can deliver a payload (`xcrun simctl push booted com.tesarsoft.littlelight
+  banner taps). `simctl` can deliver a payload (`xcrun simctl push booted com.tesarsoft.tinyglow
   payload.apns`) but cannot tap anything. The e2e native gate will add the test target.
-- Android: `adb shell pm grant com.tesarsoft.littlelight android.permission.POST_NOTIFICATIONS` skips
+- Android: `adb shell pm grant com.tesarsoft.tinyglow android.permission.POST_NOTIFICATIONS` skips
   the prompt; tap the notification with `adb shell input` or UI Automator.
 
 ## Android emulator
@@ -84,12 +84,12 @@ from a normal terminal: `~/Library/Android/sdk/emulator/emulator -avd <name>`, t
 ## Deep links
 
 Universal Links / App Links claim only `/invite/*`, `/s/*`, `/signin/native` on
-`littlelight.tesarsoft.com` (not `/signin/callback`). A `littlelight://` scheme exists for testing:
+`tinyglow.app` (not `/signin/callback`). A `tinyglow://` scheme exists for testing:
 iOS `Info-Debug.plist` (Debug configuration only; the JS router ignores it unless built with `VITE_DEEPLINK_DEV_SCHEME=1`); Android
 debug source set only.
 
-- `xcrun simctl openurl booted littlelight://s/<token>`
-- `adb shell am start -W -a android.intent.action.VIEW -d littlelight://s/<token>`
+- `xcrun simctl openurl booted tinyglow://s/<token>`
+- `adb shell am start -W -a android.intent.action.VIEW -d tinyglow://s/<token>`
 
 ## Placeholders to replace later (need store accounts)
 
@@ -105,8 +105,8 @@ debug source set only.
 
 ## Album sync (PhotoKit)
 
-iPhone only, parents only (the JS side decides). Plugin `LittlelightPhotoSync`
-(`ios/App/App/LittlelightPhotoSync.swift`, JS bridge `src/platform/native/photoSync.ts`). Calls:
+iPhone only, parents only (the JS side decides). Plugin `TinyglowPhotoSync`
+(`ios/App/App/TinyglowPhotoSync.swift`, JS bridge `src/platform/native/photoSync.ts`). Calls:
 `authorizationStatus`, `requestAuthorization` (the only call that shows the Photos prompt, run only
 when a parent taps Set up), `listAlbums` (user albums only), `listPendingAssets`, `exportAssets`,
 `discardFiles`, `recordOutcomes`, `ledgerSummary`, `resetLedger`, `conditions`,
@@ -121,19 +121,19 @@ EXIF and GPS needs it; only the chosen album is read and nothing is ever deleted
   sweep delete files the sync still needs, and `discardFiles` refuses anything outside
   `ll-sync-export`. Both directories are excluded from backup.
 - Wi-Fi session: the uploader has a second background `URLSession`
-  (`com.tesarsoft.littlelight.upload.wifi`, `allowsCellularAccess = false`). Sync uploads pass
+  (`com.tesarsoft.tinyglow.upload.wifi`, `allowsCellularAccess = false`). Sync uploads pass
   `wifiOnly: true` unless the parent allows cellular. iCloud original downloads follow the system
   cellular setting and are not controlled by the app.
-- Background refresh: `BGAppRefreshTask` id `com.tesarsoft.littlelight.sync` (listed in
+- Background refresh: `BGAppRefreshTask` id `com.tesarsoft.tinyglow.sync` (listed in
   `BGTaskSchedulerPermittedIdentifiers`). iOS decides when it runs, often never, so launch,
   foreground and Sync now are the real triggers. The simulator cannot fire it from the shell. Run
   the app from Xcode, pause, and at the LLDB prompt enter:
-  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.littlelight.sync"]`
+  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.tinyglow.sync"]`
   then resume. Treat this as a manual check; unit tests cover the JS path.
 - XCUITest: the Photos alert is a system alert, so the e2e test taps it through
   `XCUIApplication(bundleIdentifier: "com.apple.springboard")` and presses **Allow Full Access**
   (not "Limited Access"; the app sets `PHPhotoLibraryPreventAutomaticLimitedAccessAlert`).
-  `simctl privacy booted grant photos com.tesarsoft.littlelight` is a shortcut that skips the alert.
+  `simctl privacy booted grant photos com.tesarsoft.tinyglow` is a shortcut that skips the alert.
 
 ## Google import on devices
 
@@ -180,6 +180,6 @@ cannot hang the UI. Keep them when refactoring.
 
 `ios/debug.xcconfig` sets `INFOPLIST_FILE = App/Info-Debug.plist` and `ios/release.xcconfig` sets
 `App/Info.plist`. `Info-Debug.plist` is `Info.plist` plus exactly `NSAppTransportSecurity`
-(`NSAllowsLocalNetworking`) and the `littlelight://` `CFBundleURLTypes`, so Release builds carry
-neither. `pnpm --filter @littlelight/mobile-web check:ios-plists` enforces this; edit both plists
+(`NSAllowsLocalNetworking`) and the `tinyglow://` `CFBundleURLTypes`, so Release builds carry
+neither. `pnpm --filter @tinyglow/mobile-web check:ios-plists` enforces this; edit both plists
 together.

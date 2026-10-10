@@ -1,5 +1,5 @@
-import { type MeResponse, meResponseSchema, type ProfileUpdate } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import { type MeResponse, meResponseSchema, type ProfileUpdate } from "@tinyglow/shared";
 import { useCallback, useEffect, useState } from "react";
 import { ME_KEY, useAuth } from "../../auth/AuthProvider";
 import { SubPage } from "../../components/Page";

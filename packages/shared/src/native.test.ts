@@ -15,10 +15,10 @@ const t = (n: number) => "A".repeat(n);
 
 describe("native identity constants", () => {
   it("has the published identifiers", () => {
-    expect(APP_ID).toBe("com.tesarsoft.littlelight");
-    expect(APP_UA_TOKEN).toBe("Littlelight");
-    expect(APP_LINK_HOST_DEFAULT).toBe("littlelight.tesarsoft.com");
-    expect(DEV_URL_SCHEME).toBe("littlelight");
+    expect(APP_ID).toBe("com.tesarsoft.tinyglow");
+    expect(APP_UA_TOKEN).toBe("Tinyglow");
+    expect(APP_LINK_HOST_DEFAULT).toBe("tinyglow.app");
+    expect(DEV_URL_SCHEME).toBe("tinyglow");
     expect(NATIVE_AUTH_CALLBACK_PATH).toBe("/signin/native");
     expect([...NATIVE_ORIGINS_DEFAULT]).toEqual(["capacitor://localhost", "https://localhost"]);
     expect(NATIVE_UPLOAD_PICK_MAX).toBe(UPLOAD_MAX_FILES_PER_SESSION);

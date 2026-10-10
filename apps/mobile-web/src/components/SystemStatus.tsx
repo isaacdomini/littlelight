@@ -1,11 +1,11 @@
-import { healthzResponseSchema } from "@littlelight/shared";
 import { useQuery } from "@tanstack/react-query";
+import { healthzResponseSchema } from "@tinyglow/shared";
 import { apiUrl, authUrl } from "../platform/apiBase";
 import { clientKind, isNative } from "../platform/platform";
 
 async function fetchApi(): Promise<"ok" | "degraded"> {
   const res = await fetch(apiUrl("/healthz"), {
-    headers: { "X-Littlelight-Client": clientKind() },
+    headers: { "X-Tinyglow-Client": clientKind() },
   });
   // 503 still carries a valid body with status "degraded".
   // Production returns only `{status}` to non-loopback callers; dev returns the full body.

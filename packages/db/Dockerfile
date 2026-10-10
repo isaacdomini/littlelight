@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
-# Littlelight database tools image (Compose one-shots `db-init` and `migrate`). Build context:
+# Tinyglow database tools image (Compose one-shots `db-init` and `migrate`). Build context:
 # repo root (docs/plans/step-1.md 2.13, step-2.md 2.13).
 #   db-init : pnpm db:bootstrap   roles (GoTrue's supabase_auth_admin, app roles) + auth schema
 #   migrate : pnpm db:migrate     (re-runs the idempotent bootstrap) + SQL migrations; dev also seeds
 # Same image in dev and prod.
 #
-# `pnpm deploy` makes a standalone copy with only @littlelight/db's own dependencies (pg,
+# `pnpm deploy` makes a standalone copy with only @tinyglow/db's own dependencies (pg,
 # node-pg-migrate, tsx). A filtered `pnpm install` would also pull in the workspace root's
 # devDependencies (biome, vitest -> vite, ...), roughly 4x the size.
 ARG NODE_IMAGE=node:22.23.3-alpine
@@ -30,7 +30,7 @@ COPY packages/shared/package.json packages/shared/
 COPY tsconfig.base.json ./
 COPY packages/db packages/db
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm --filter @littlelight/db deploy --store-dir /pnpm/store /app \
+    pnpm --filter @tinyglow/db deploy --store-dir /pnpm/store /app \
  && rm -f /app/Dockerfile \
  && chmod -R a+rX,go-w /app /repo/tsconfig.base.json
 

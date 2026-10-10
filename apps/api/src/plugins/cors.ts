@@ -1,4 +1,4 @@
-import { CLIENT_HEADER } from "@littlelight/shared";
+import { CLIENT_HEADER } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ApiError } from "../lib/errors";
 import { clientKindHeader } from "../lib/request";
@@ -16,7 +16,7 @@ import { clientKindHeader } from "../lib/request";
 //   stream and error responses, without any change to the route modules.
 // - A preflight (`OPTIONS` + `Access-Control-Request-Method`) from an allowed origin is answered
 //   here with 204 and never reaches auth or a route.
-// - An actual request from an allowed origin must declare `X-Littlelight-Client: native`, else
+// - An actual request from an allowed origin must declare `X-Tinyglow-Client: native`, else
 //   403 `csrf_rejected` (same code as the step-3 cookie CSRF guard). The CORS headers are set
 //   first so the app can read that error.
 //
@@ -27,7 +27,7 @@ export const CORS_ALLOW_HEADERS = `authorization, content-type, accept, ${CLIENT
 export const CORS_MAX_AGE_SEC = 600;
 export const CORS_EXPOSE_HEADERS = "Retry-After";
 
-/** 403 for a native-origin request without `X-Littlelight-Client: native`. */
+/** 403 for a native-origin request without `X-Tinyglow-Client: native`. */
 export const nativeHeaderRejected = () =>
   new ApiError(403, "csrf_rejected", "Missing client header on a cross-origin request");
 

@@ -18,7 +18,7 @@ import {
   reindexJobSchema,
   type ShareApplyJob,
   shareApplyJobSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { PgBoss, type SendOptions } from "pg-boss";
 import type { ApiConfig } from "../config";
@@ -30,7 +30,7 @@ import { errorCategory } from "../routes/healthz";
 // changes a photo's search document (details, milestone rename/delete, linked measurement).
 //
 // `boss.send` is the ONLY database call the API makes outside `runAs`: it runs on pg-boss's own
-// small pool as `littlelight_api` (which has grants on the `pgboss` schema, see
+// small pool as `tinyglow_api` (which has grants on the `pgboss` schema, see
 // packages/db/README.md "pg-boss and the API") with no role switch and no claims. It must never
 // run inside a `runAs` transaction: that one is `SET LOCAL ROLE authenticated`, which has no
 // `pgboss` grants. Callers send only after their transaction committed.
@@ -242,7 +242,7 @@ export interface JobQueueOptions {
 export function sendOnlyBoss(config: Pick<ApiConfig, "DATABASE_URL">): BossLike {
   return new PgBoss({
     connectionString: config.DATABASE_URL,
-    application_name: "littlelight-api-jobs",
+    application_name: "tinyglow-api-jobs",
     max: 2,
     createSchema: false,
     migrate: false,

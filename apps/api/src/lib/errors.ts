@@ -8,7 +8,7 @@ import {
   type PasscodeInvalidDetails,
   SHARE_EXPIRED_MESSAGE,
   SHARE_LINKS_PER_BABY_MAX,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 

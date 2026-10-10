@@ -10,7 +10,7 @@ import {
   uploadFilesRegisterResponseSchema,
   uploadPartsResponseSchema,
   uploadSessionSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import {
   getUploader,
   type NativeFileRef,

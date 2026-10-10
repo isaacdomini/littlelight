@@ -14,7 +14,7 @@ const sessions = new Map<DemoUser, Awaited<ReturnType<ApiClient["storageState"]>
 
 /** Sign a seeded demo user in through the API (code from Mailpit) and accept consent if pending. */
 export async function demoClient(user: DemoUser): Promise<ApiClient> {
-  const email = `${user}@littlelight.local`;
+  const email = `${user}@tinyglow.local`;
   const saved = sessions.get(user);
   if (saved) {
     const reused = await ApiClient.create(email, saved);

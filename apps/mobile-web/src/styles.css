@@ -1,5 +1,5 @@
 /*
- * Littlelight design system (docs/DESIGN.md): one stylesheet.
+ * Tinyglow design system (docs/DESIGN.md): one stylesheet.
  *
  *   1. Ionic structure CSS (no Ionic palette: dark mode is ours, below)
  *   2. Tokens: CSS custom properties on :root, dark variants via prefers-color-scheme

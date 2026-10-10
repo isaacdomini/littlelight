@@ -6,7 +6,7 @@
 	<string>development</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:littlelight.tesarsoft.com</string>
+		<string>applinks:tinyglow.app</string>
 	</array>
 </dict>
 </plist>

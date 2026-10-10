@@ -19,11 +19,11 @@ export const U = {
   stranger: id(1, 5),
 } as const;
 export const EMAIL = {
-  adminA1: "fx-admin-a1@littlelight.test",
-  adminA2: "fx-admin-a2@littlelight.test",
-  contribA: "fx-contrib-a@littlelight.test",
-  adminB: "fx-admin-b@littlelight.test",
-  stranger: "fx-stranger@littlelight.test",
+  adminA1: "fx-admin-a1@tinyglow.test",
+  adminA2: "fx-admin-a2@tinyglow.test",
+  contribA: "fx-contrib-a@tinyglow.test",
+  adminB: "fx-admin-b@tinyglow.test",
+  stranger: "fx-stranger@tinyglow.test",
 } as const;
 
 export const BABY = {
@@ -260,8 +260,8 @@ export async function createFixtures(admin: pg.Client): Promise<void> {
     }
     await admin.query(
       `INSERT INTO public.invites (id, baby_id, email, role, token_hash, invited_by)
-       VALUES ($1, $2, 'fx-invitee-a@littlelight.test', 'contributor', ${hash("inviteA")}, $3),
-              ($4, $5, 'fx-invitee-b@littlelight.test', 'contributor', ${hash("inviteB")}, $6)`,
+       VALUES ($1, $2, 'fx-invitee-a@tinyglow.test', 'contributor', ${hash("inviteA")}, $3),
+              ($4, $5, 'fx-invitee-b@tinyglow.test', 'contributor', ${hash("inviteB")}, $6)`,
       [INVITE_A, BABY.A, U.adminA1, INVITE_B, BABY.B, U.adminB],
     );
 

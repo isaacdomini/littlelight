@@ -122,7 +122,7 @@ export interface SetPlanResult {
 
 /** Hint printed after an upgrade (FR-5.8: one backfill batch for existing photos). */
 export function backfillHint(babyId: string): string {
-  return `pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"babyId":"${babyId}","reason":"upgrade"}'`;
+  return `pnpm --filter @tinyglow/worker run-job --enqueue ai.backfill '{"babyId":"${babyId}","reason":"upgrade"}'`;
 }
 
 /**
@@ -132,7 +132,7 @@ export function backfillHint(babyId: string): string {
  * when the descriptions land).
  */
 export function searchBackfillHint(babyId: string): string {
-  return `pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"${babyId}","reason":"upgrade"}'`;
+  return `pnpm --filter @tinyglow/worker run-job --enqueue search.backfill '{"babyId":"${babyId}","reason":"upgrade"}'`;
 }
 
 /**
@@ -153,7 +153,7 @@ export async function setPlan(
   const databaseUrl = options.databaseUrl ?? requireDatabaseUrl(env);
   const client = new Client({
     connectionString: databaseUrl,
-    application_name: "littlelight-set-plan",
+    application_name: "tinyglow-set-plan",
   });
   try {
     await client.connect();

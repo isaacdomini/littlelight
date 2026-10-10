@@ -6,7 +6,7 @@ import {
   aiOverrideValueSchema,
   applyAiOverrides,
   EXPORT_FORMAT_VERSION,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { type CsvValue, csvHeader, csvRow } from "./csv";
 
 // Pure content builders of the export ZIP (docs/plans/review-fixes.md 2.3, layout version
@@ -384,7 +384,7 @@ export function albumJson(input: {
 /** `README.txt` (plain text, CRLF so Notepad shows it too). */
 export function readmeText(input: { exportedAt: Date; includeLocation: boolean }): string {
   const lines = [
-    "Littlelight album export",
+    "Tinyglow album export",
     "========================",
     "",
     `format_version: ${EXPORT_FORMAT_VERSION}`,

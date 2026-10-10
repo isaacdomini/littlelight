@@ -7,7 +7,7 @@ import {
   profileUpdateSchema,
   TERMS_VERSION,
   type Units,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { requireAuth, requireConsent, type Tx, type TxContext, withClaims } from "../auth";
@@ -140,7 +140,7 @@ export function meRoutes(app: FastifyInstance): void {
       return withClaims(request, async (client, ctx) => {
         // Nothing is stored for a minor (PRD "Block under-18 sign-ups").
         if (!body.isAdult) {
-          throw new ApiError(403, "under_18", "You must be 18 or older to use Littlelight");
+          throw new ApiError(403, "under_18", "You must be 18 or older to use Tinyglow");
         }
         if (body.termsVersion !== TERMS_VERSION || body.privacyVersion !== PRIVACY_VERSION) {
           throw new ApiError(

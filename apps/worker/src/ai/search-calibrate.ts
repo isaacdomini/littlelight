@@ -12,7 +12,7 @@
  *
  * Data: the Golden search seed (`pnpm search:seed`; the gate trashes it unless `--keep`), read with
  * the local superuser (`CALIBRATE_DATABASE_URL`, default postgres://postgres:dev@localhost:5432/
- * littlelight; local hosts only). Stored vectors are reused when they were written by the same
+ * tinyglow; local hosts only). Stored vectors are reused when they were written by the same
  * embedder (`embed_model` = the provider's tag), otherwise every document is embedded too.
  *
  * `--provider real` uses `createEmbedder` with `VISION_PROVIDER=openai` and the `OPENAI_API_KEY`
@@ -29,8 +29,8 @@ import {
   type Embedder,
   embedModelTag,
   planFakeToolCalls,
-} from "@littlelight/ai";
-import { EMBED_DIMS, SEARCH_SEED_IDS } from "@littlelight/shared";
+} from "@tinyglow/ai";
+import { EMBED_DIMS, SEARCH_SEED_IDS } from "@tinyglow/shared";
 import pg from "pg";
 import { GOLDEN_TARGETS } from "./search-content";
 
@@ -140,7 +140,7 @@ function arg(name: string): string | undefined {
 
 function adminUrl(): string {
   const url =
-    process.env.CALIBRATE_DATABASE_URL ?? "postgres://postgres:dev@localhost:5432/littlelight";
+    process.env.CALIBRATE_DATABASE_URL ?? "postgres://postgres:dev@localhost:5432/tinyglow";
   if (!["localhost", "127.0.0.1", "::1"].includes(new URL(url).hostname)) {
     throw new Error("search:calibrate only reads a local database");
   }

@@ -1,4 +1,4 @@
-import { AI_DESCRIPTION_LIMITS, type Photo, type PhotoAiOverridePatch } from "@littlelight/shared";
+import { AI_DESCRIPTION_LIMITS, type Photo, type PhotoAiOverridePatch } from "@tinyglow/shared";
 import { useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";

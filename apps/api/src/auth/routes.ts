@@ -12,7 +12,7 @@ import {
   signOutRequestSchema,
   TERMS_VERSION,
   verifyRequestSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { ApiError, forbidden, rateLimited, safeErrorLog } from "../lib/errors";

@@ -247,7 +247,7 @@ GRANT EXECUTE ON FUNCTION public.photo_editable(uuid) TO authenticated, service_
 -------------------------------------------------------------------------------------------------
 -- Triggers (SECURITY DEFINER).
 -------------------------------------------------------------------------------------------------
--- Free tier: 1,000 non-deleted photos per baby (FREE_TIER_PHOTO_LIMIT in @littlelight/shared).
+-- Free tier: 1,000 non-deleted photos per baby (FREE_TIER_PHOTO_LIMIT in @tinyglow/shared).
 CREATE OR REPLACE FUNCTION public.photos_free_tier_cap() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public

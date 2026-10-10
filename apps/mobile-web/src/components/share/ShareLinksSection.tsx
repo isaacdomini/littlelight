@@ -1,4 +1,4 @@
-import type { ShareLink, ShareLinkCreatedResponse } from "@littlelight/shared";
+import type { ShareLink, ShareLinkCreatedResponse } from "@tinyglow/shared";
 import { linkOutline } from "ionicons/icons";
 import { useState } from "react";
 import { t } from "../../i18n";

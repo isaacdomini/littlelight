@@ -8,7 +8,7 @@ import {
   uploadPartsResponseSchema,
   uploadSessionCreateSchema,
   uploadSessionSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { requireAuth } from "../auth";

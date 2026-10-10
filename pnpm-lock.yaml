@@ -214,18 +214,18 @@ importers:
       '@fastify/cookie':
         specifier: 11.1.2
         version: 11.1.2
-      '@littlelight/ai':
-        specifier: workspace:*
-        version: link:../../packages/ai
-      '@littlelight/db':
-        specifier: workspace:*
-        version: link:../../packages/db
-      '@littlelight/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@sentry/node':
         specifier: 11.6.0
         version: 11.6.0
+      '@tinyglow/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@tinyglow/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@tinyglow/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       fastify:
         specifier: 5.12.5
         version: 5.12.5
@@ -323,15 +323,15 @@ importers:
       '@ionic/react-router':
         specifier: 9.0.6
         version: 9.0.6(@stencil/core@4.45.2)(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-router-dom@6.30.6(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-router@6.30.6(react@19.3.0))(react@19.3.0)
-      '@littlelight/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@sentry/react':
         specifier: 11.6.0
         version: 11.6.0(react-router@6.30.6(react@19.3.0))(react@19.3.0)
       '@tanstack/react-query':
         specifier: 5.104.1
         version: 5.104.1(react@19.3.0)
+      '@tinyglow/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       exifr:
         specifier: 7.1.3
         version: 7.1.3
@@ -408,15 +408,15 @@ importers:
       '@aws-sdk/lib-storage':
         specifier: 3.1147.0
         version: 3.1147.0(@aws-sdk/client-s3@3.1147.0)
-      '@littlelight/ai':
-        specifier: workspace:*
-        version: link:../../packages/ai
-      '@littlelight/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@sentry/node':
         specifier: 11.6.0
         version: 11.6.0
+      '@tinyglow/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@tinyglow/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       archiver:
         specifier: 8.0.0
         version: 8.0.0
@@ -481,7 +481,7 @@ importers:
 
   packages/ai:
     dependencies:
-      '@littlelight/shared':
+      '@tinyglow/shared':
         specifier: workspace:*
         version: link:../shared
       zod:

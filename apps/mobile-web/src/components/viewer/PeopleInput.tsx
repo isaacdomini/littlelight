@@ -1,4 +1,4 @@
-import { PHOTO_DETAILS_LIMITS } from "@littlelight/shared";
+import { PHOTO_DETAILS_LIMITS } from "@tinyglow/shared";
 import { useState } from "react";
 import { t } from "../../i18n";
 

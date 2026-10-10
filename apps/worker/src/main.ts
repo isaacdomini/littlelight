@@ -1,5 +1,5 @@
 import os from "node:os";
-import { googleImportMediaAllowList, IMPORT_MAX_FILE_BYTES } from "@littlelight/shared";
+import { googleImportMediaAllowList, IMPORT_MAX_FILE_BYTES } from "@tinyglow/shared";
 import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
 import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
@@ -32,7 +32,7 @@ import { captureJobError, closeTelemetry, initTelemetry } from "./telemetry";
 import { WORKER_VERSION } from "./version";
 
 // Worker entry (docs/plans/step-1.md 2.9, docs/plans/step-4.md 2.5–2.9). pg-boss runs as
-// `littlelight_worker` (owns the pgboss schema: migrations, maintenance, cron); every app-table
+// `tinyglow_worker` (owns the pgboss schema: migrations, maintenance, cron); every app-table
 // query runs as `pipeline` through `runAsPipeline`. Job payloads carry ids and a time zone name
 // only, never photo bytes, GPS, notes or keys with signatures. Step 6 (docs/plans/step-6.md 2.7):
 // the vision describer is created once here (null without a key: AI flush/poll then skip with one
@@ -94,7 +94,7 @@ try {
 // short transactions only, none held across a download).
 const pool = createPool(
   config,
-  `littlelight-worker:${id}`,
+  `tinyglow-worker:${id}`,
   config.INGEST_CONCURRENCY + 10 + config.IMPORT_CONCURRENCY + 1,
 );
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
@@ -108,7 +108,7 @@ const disk = createDiskMonitor({
 
 const boss = new PgBoss({
   connectionString: config.DATABASE_URL,
-  application_name: `littlelight-worker-boss:${id}`,
+  application_name: `tinyglow-worker-boss:${id}`,
   useListenNotify: true,
 });
 boss.on("error", (err) => {

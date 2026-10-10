@@ -207,7 +207,7 @@ describe.skipIf(!databaseUrl)("search and chat database rules (step 7)", () => {
     for (const [k, id] of Object.entries(U)) {
       await q(
         "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())",
-        [id, `sc-fx-${k}@littlelight.test`],
+        [id, `sc-fx-${k}@tinyglow.test`],
       );
       await q("INSERT INTO public.profiles (user_id, display_name) VALUES ($1, $2)", [id, k]);
     }

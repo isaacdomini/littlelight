@@ -11,20 +11,20 @@ export { SYNC_BG_TASK_ID } from "./imports";
 // CORS allow-list and the worker's APNs topic default.
 
 /** iOS bundle id and Android applicationId (D1; permanent once published). */
-export const APP_ID = "com.tesarsoft.littlelight";
+export const APP_ID = "com.tesarsoft.tinyglow";
 /**
  * Product token Capacitor appends to the WebView User-Agent (`appendUserAgent:
- * "Littlelight/<version>"`); `userAgentLabel()` maps it to "Littlelight app on …".
+ * "Tinyglow/<version>"`); `userAgentLabel()` maps it to "Tinyglow app on …".
  */
-export const APP_UA_TOKEN = "Littlelight";
+export const APP_UA_TOKEN = "Tinyglow";
 /** Universal Links / App Links host (overridable in the SPA via `VITE_APP_LINK_HOSTS`). */
-export const APP_LINK_HOST_DEFAULT = "littlelight.tesarsoft.com";
+export const APP_LINK_HOST_DEFAULT = "tinyglow.app";
 /**
- * Debug-only custom URL scheme (`littlelight://s/<token>`) registered by both apps so the
+ * Debug-only custom URL scheme (`tinyglow://s/<token>`) registered by both apps so the
  * Simulator/emulator can test routing without association. The SPA honours it only in builds
  * with `VITE_DEEPLINK_DEV_SCHEME=1` (D12).
  */
-export const DEV_URL_SCHEME = "littlelight";
+export const DEV_URL_SCHEME = "tinyglow";
 
 /**
  * In-app path of the native-initiated auth callback (D8). Deliberately not

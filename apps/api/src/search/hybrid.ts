@@ -1,5 +1,5 @@
-import type { ChatModel, Embedder } from "@littlelight/ai";
-import { SEARCH_CANDIDATES, SEARCH_RERANK_CANDIDATES } from "@littlelight/shared";
+import type { ChatModel, Embedder } from "@tinyglow/ai";
+import { SEARCH_CANDIDATES, SEARCH_RERANK_CANDIDATES } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { rerankWithChat } from "./rerank";
 import { reciprocalRankFusion } from "./rrf";

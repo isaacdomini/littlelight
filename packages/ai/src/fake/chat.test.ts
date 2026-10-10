@@ -1,4 +1,4 @@
-import { CHAT_MESSAGES, CHAT_TOOL_DEFINITIONS, parseChatToolArguments } from "@littlelight/shared";
+import { CHAT_MESSAGES, CHAT_TOOL_DEFINITIONS, parseChatToolArguments } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { AiNotConfiguredError } from "../errors";
 import { CHAT_SYSTEM_PROMPT_V1 } from "../prompts/chat-v1";

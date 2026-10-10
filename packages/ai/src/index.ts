@@ -1,5 +1,5 @@
 /**
- * `@littlelight/ai`: the only place in the codebase that talks to model providers
+ * `@tinyglow/ai`: the only place in the codebase that talks to model providers
  * (PRD "Build handoff for Claude Code" -> "Conventions"). Call sites use the factories below
  * and the interfaces in `./types`; the provider is selected by env, never by code.
  *
@@ -13,7 +13,7 @@
  * exported here (they import `node:http` / the filesystem); tests import them by path.
  */
 
-import { aiPipelineEnvSchema, chatEnvSchema } from "@littlelight/shared";
+import { aiPipelineEnvSchema, chatEnvSchema } from "@tinyglow/shared";
 import { createAnthropicVisionDescriber } from "./anthropic/vision";
 import {
   type AiEnv,

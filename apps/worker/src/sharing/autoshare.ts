@@ -7,7 +7,7 @@ import {
   searchTagsFor,
   shareRuleMatches,
   shareRuleModeSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type pg from "pg";
 import { errorCategory } from "../clients";
 import { type PipelineClient, type PipelinePool, runAsPipeline, sqlState } from "../db";

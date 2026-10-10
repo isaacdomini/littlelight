@@ -1,5 +1,5 @@
 import { IonAlert } from "@ionic/react";
-import { CHAT_LIMITS, type PhotoSummary } from "@littlelight/shared";
+import { CHAT_LIMITS, type PhotoSummary } from "@tinyglow/shared";
 import { chatbubbleEllipsesOutline } from "ionicons/icons";
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";

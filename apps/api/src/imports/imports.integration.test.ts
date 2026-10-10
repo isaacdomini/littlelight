@@ -11,7 +11,7 @@ import {
   importBatchResponseSchema,
   importSourceResponseSchema,
   importSourcesListResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   type FakeGoogleServer,

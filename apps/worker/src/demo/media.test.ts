@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { DEMO_IDS } from "@littlelight/shared";
+import { DEMO_IDS } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import { jpegWithExif } from "../testing/exif-writer";
 import { sceneJpeg } from "../testing/images";

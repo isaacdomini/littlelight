@@ -1,10 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   authConfigResponseSchema,
   deletionPreviewResponseSchema,
   membersListResponseSchema,
   sessionsListResponseSchema,
-} from "@littlelight/shared";
-import { useQuery } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { apiFetch } from "../api";
 
 export function useAuthConfig() {

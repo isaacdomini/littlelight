@@ -1,4 +1,4 @@
-import { babyPrefix, type DerivativeKind } from "@littlelight/shared";
+import { babyPrefix, type DerivativeKind } from "@tinyglow/shared";
 import sharp from "sharp";
 import { decodeImage } from "../ingest/decode";
 import { renderDerivative } from "../ingest/derivatives";

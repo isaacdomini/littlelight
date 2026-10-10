@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Embedder } from "@littlelight/ai";
+import type { Embedder } from "@tinyglow/ai";
 import {
   AI_PIPELINE_DEFAULTS,
   buildSearchDocument,
@@ -7,7 +7,7 @@ import {
   type ReindexReason,
   type SearchBackfillJob,
   type SearchDocument,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { type PipelinePool, runAsPipeline } from "../db";
 import type { WorkerLog } from "../log-types";
 import {

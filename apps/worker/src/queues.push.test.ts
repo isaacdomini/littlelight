@@ -1,8 +1,4 @@
-import {
-  JOBS,
-  PUSH_MIN_GAP_MIN_DEFAULT,
-  PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
-} from "@littlelight/shared";
+import { JOBS, PUSH_MIN_GAP_MIN_DEFAULT, PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { PushSender } from "./push";
 import {

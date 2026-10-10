@@ -1,4 +1,4 @@
-import { CHAT_TOOL_DEFINITIONS } from "@littlelight/shared";
+import { CHAT_TOOL_DEFINITIONS } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AiProviderError } from "../errors";
 import {
@@ -80,7 +80,7 @@ describe("request body (docs/plans/step-7.md 2.5)", () => {
       prompt_cache_key: CHAT_PROMPT_CACHE_KEY,
       stream: true,
     });
-    expect(CHAT_PROMPT_CACHE_KEY).toBe("littlelight-chat-v1");
+    expect(CHAT_PROMPT_CACHE_KEY).toBe("tinyglow-chat-v1");
     expect(body.tools).toHaveLength(4);
     for (const t of body.tools) {
       expect(t).toMatchObject({ type: "function", strict: true });

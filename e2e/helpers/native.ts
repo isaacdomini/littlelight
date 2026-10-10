@@ -1,6 +1,6 @@
 import { codeAfter } from "./mailpit";
 
-// Bearer-token API client for the native client kind (`X-Littlelight-Client: native`), used by the
+// Bearer-token API client for the native client kind (`X-Tinyglow-Client: native`), used by the
 // push gate and the Android gate. Plain fetch: there is no cookie jar, and every response is
 // checked for a stray Set-Cookie (native transport must never set one).
 const BASE = process.env.E2E_BASE_URL ?? `http://localhost:${process.env.WEB_PORT ?? 8080}`;
@@ -28,7 +28,7 @@ export class NativeClient {
     data?: unknown,
     headers: Record<string, string> = {},
   ): Promise<NativeRes<T>> {
-    const h: Record<string, string> = { "x-littlelight-client": "native", ...headers };
+    const h: Record<string, string> = { "x-tinyglow-client": "native", ...headers };
     if (this.accessToken && !h.authorization) h.authorization = `Bearer ${this.accessToken}`;
     if (data !== undefined) h["content-type"] = "application/json";
     const res = await fetch(`${this.origin}/api${path}`, {

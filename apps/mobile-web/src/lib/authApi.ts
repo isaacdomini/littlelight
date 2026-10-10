@@ -1,4 +1,4 @@
-import { type SessionResponse, sessionResponseSchema } from "@littlelight/shared";
+import { type SessionResponse, sessionResponseSchema } from "@tinyglow/shared";
 import { isNative } from "../platform/platform";
 import { getTokenStore } from "../platform/tokenStore";
 import { apiFetch } from "./api";

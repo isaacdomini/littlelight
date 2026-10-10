@@ -21,7 +21,7 @@ import {
   type PhotosListDir,
   type PhotosView,
   type PhotoUrlSet,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { ApiError } from "../lib/errors";
 import type { UrlSigner } from "../storage/sign";

@@ -1,9 +1,5 @@
-import type { ShareRuleInput, ShareRuleMode } from "@littlelight/shared";
-import {
-  normalizeShareTag,
-  SHARE_RULE_TAG_MAX_CHARS,
-  SHARE_RULE_TAGS_MAX,
-} from "@littlelight/shared";
+import type { ShareRuleInput, ShareRuleMode } from "@tinyglow/shared";
+import { normalizeShareTag, SHARE_RULE_TAG_MAX_CHARS, SHARE_RULE_TAGS_MAX } from "@tinyglow/shared";
 import { useId, useState } from "react";
 import { t } from "../../i18n";
 import { useSearchFacets } from "../../lib/queries/search";

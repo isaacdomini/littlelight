@@ -38,7 +38,7 @@ import {
   formatCitation,
   type MeasurementKind,
   MILESTONE_PRESETS,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { DEFAULT_CHAT_MODEL } from "../defaults";
 import { AiNotConfiguredError } from "../errors";
 import { drainChatStream } from "../openai/chat";

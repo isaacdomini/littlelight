@@ -12,7 +12,7 @@ import { connect, type Db, databaseUrl, ensureMigrated, env } from "./test/harne
 // Store-review family (docs/plans/step-9.md 2.9 item 6, 2.15; D4): provisions a synthetic baby for
 // an existing account, idempotently, with the guards that keep it away from real families.
 
-const EMAIL = "review-family-it@littlelight.test";
+const EMAIL = "review-family-it@tinyglow.test";
 const USER = randomUUID();
 const OTHER_USER = randomUUID();
 const REAL_BABY = randomUUID();
@@ -213,7 +213,7 @@ describe.skipIf(!databaseUrl)("review family", () => {
   });
 
   it("refuses an unknown email", async () => {
-    await expect(run({ email: "nobody-here@littlelight.test" })).rejects.toThrow(
+    await expect(run({ email: "nobody-here@tinyglow.test" })).rejects.toThrow(
       /no GoTrue user with that email/,
     );
   });
@@ -230,7 +230,7 @@ describe.skipIf(!databaseUrl)("review family", () => {
 
   describe("an account that already belongs to a real family", () => {
     beforeEach(async () => {
-      await addUser(OTHER_USER, "review-family-other@littlelight.test");
+      await addUser(OTHER_USER, "review-family-other@tinyglow.test");
       await db.admin.query(
         "INSERT INTO public.babies (id, name, birth_date, plan) VALUES ($1, 'Real', '2025-01-01', 'free')",
         [REAL_BABY],

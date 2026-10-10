@@ -1,9 +1,9 @@
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   type SearchQuery,
   searchFacetsResponseSchema,
   searchResponseSchema,
-} from "@littlelight/shared";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { apiFetch } from "../api";
 
 /** Filters as the UI holds them; empty values are never sent (an empty `q` is a 400). */

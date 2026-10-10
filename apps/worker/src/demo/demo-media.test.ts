@@ -90,11 +90,11 @@ describe("demoMediaRefusal", () => {
 describe("devDefaults / resolveDemoMediaEnv", () => {
   it("defaults to the dev stack's worker role and MinIO key on localhost, honouring DB_PORT / STORAGE_PORT", () => {
     expect(devDefaults({}).DATABASE_URL).toBe(
-      "postgres://littlelight_worker:dev@localhost:5432/littlelight",
+      "postgres://tinyglow_worker:dev@localhost:5432/tinyglow",
     );
     expect(devDefaults({}).S3_ENDPOINT).toBe("http://localhost:9000");
     expect(devDefaults({ DB_PORT: "55432", STORAGE_PORT: "59000" })).toMatchObject({
-      DATABASE_URL: "postgres://littlelight_worker:dev@localhost:55432/littlelight",
+      DATABASE_URL: "postgres://tinyglow_worker:dev@localhost:55432/tinyglow",
       S3_ENDPOINT: "http://localhost:59000",
     });
   });
@@ -103,12 +103,12 @@ describe("devDefaults / resolveDemoMediaEnv", () => {
     const env = resolveDemoMediaEnv({ S3_BUCKET: "other", DATABASE_URL: "postgres://u:p@h:1/d" });
     expect(env.S3_BUCKET).toBe("other");
     expect(env.DATABASE_URL).toBe("postgres://u:p@h:1/d");
-    expect(env.S3_ACCESS_KEY).toBe("littlelight-worker");
+    expect(env.S3_ACCESS_KEY).toBe("tinyglow-worker");
     expect(env.S3_PUBLIC_ENDPOINT).toBe(env.S3_ENDPOINT);
   });
 
   it("blank values count as unset", () => {
-    expect(resolveDemoMediaEnv({ S3_BUCKET: "  " }).S3_BUCKET).toBe("littlelight-dev");
+    expect(resolveDemoMediaEnv({ S3_BUCKET: "  " }).S3_BUCKET).toBe("tinyglow-dev");
   });
 
   it("in production there are NO defaults: missing settings fail, naming fields only", () => {
@@ -125,12 +125,12 @@ describe("devDefaults / resolveDemoMediaEnv", () => {
   it("in production an explicit full environment is accepted", () => {
     const env = resolveDemoMediaEnv({
       NODE_ENV: "production",
-      DATABASE_URL: "postgres://littlelight_worker:secret@db:5432/littlelight",
+      DATABASE_URL: "postgres://tinyglow_worker:secret@db:5432/tinyglow",
       S3_ENDPOINT: "http://storage:9000",
       S3_ACCESS_KEY: "k",
       S3_SECRET_KEY: "s3cretsecret",
-      S3_BUCKET: "littlelight",
+      S3_BUCKET: "tinyglow",
     });
-    expect(env.S3_BUCKET).toBe("littlelight");
+    expect(env.S3_BUCKET).toBe("tinyglow");
   });
 });

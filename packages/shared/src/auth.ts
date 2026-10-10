@@ -27,7 +27,7 @@ export const AUTH_COOKIE_REFRESH = "ll_refresh";
  * Cookie-authenticated non-GET requests without `web` here are rejected with 403 `csrf_rejected`;
  * `native` makes session endpoints return tokens in the body instead of setting cookies.
  */
-export const CLIENT_HEADER = "x-littlelight-client";
+export const CLIENT_HEADER = "x-tinyglow-client";
 export const clientKindSchema = z.enum(["web", "native"]);
 export type ClientKind = z.infer<typeof clientKindSchema>;
 
@@ -43,7 +43,7 @@ export const VIEWER_COOKIE = "ll_viewer";
 /** Browser-facing path of every viewer route (nginx/Vite strip `/api`; the API serves `/share/*`). */
 export const VIEWER_COOKIE_PATH = "/api/share";
 /** `aud` of viewer JWTs; `iss` is `${PUBLIC_URL}${VIEWER_COOKIE_PATH}`. GoTrue tokens never carry it. */
-export const VIEWER_JWT_AUDIENCE = "littlelight-viewer";
+export const VIEWER_JWT_AUDIENCE = "tinyglow-viewer";
 
 /** SPA route that receives magic links (`#token_hash=…&type=email`) and OAuth returns (`?code=…`). */
 export const SPA_AUTH_CALLBACK_PATH = "/signin/callback";
@@ -120,9 +120,9 @@ export function maskEmail(email: string): string {
   return `${local[0]}***@${domain}`;
 }
 
-/** The native apps' User-Agent product token, `Littlelight/<version>` (`appendUserAgent`). */
+/** The native apps' User-Agent product token, `Tinyglow/<version>` (`appendUserAgent`). */
 const APP_UA_RE = new RegExp(`(^|[\\s;(])${APP_UA_TOKEN}/[0-9A-Za-z.+-]+`);
-const APP_LABEL = "Littlelight app";
+const APP_LABEL = "Tinyglow app";
 
 const BROWSERS: ReadonlyArray<readonly [RegExp, string]> = [
   [APP_UA_RE, APP_LABEL],
@@ -147,7 +147,7 @@ const DEVICES: ReadonlyArray<readonly [RegExp, string]> = [
 /**
  * Coarse, non-identifying device label from a User-Agent string for the devices list and the
  * new-device email, e.g. "Safari on iPhone", "Chrome on Windows". Never includes versions. The
- * native apps (`Littlelight/<version>`) are "Littlelight app on iPhone" / "on iPad" / "on Android".
+ * native apps (`Tinyglow/<version>`) are "Tinyglow app on iPhone" / "on iPad" / "on Android".
  */
 export function userAgentLabel(ua: string | null | undefined): string {
   if (!ua) return "Unknown device";

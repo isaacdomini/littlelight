@@ -1,4 +1,4 @@
-package com.tesarsoft.littlelight.uploader;
+package com.tesarsoft.tinyglow.uploader;
 
 import android.app.Notification;
 import android.app.NotificationChannel;

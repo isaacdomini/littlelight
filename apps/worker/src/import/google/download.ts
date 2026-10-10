@@ -8,7 +8,7 @@ import {
   mediaDownloadUrl,
   parseAllowedMediaUrl,
   resolveMediaRedirect,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import {
   defaultSleep,
   type FetchLike,

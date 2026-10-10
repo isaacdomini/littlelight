@@ -4,7 +4,7 @@ import {
   aiDescriptionV1Schema,
   type MeasurementKind,
   MILESTONE_PRESETS,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 // Deterministic content of the dev search seed (docs/plans/step-7.md 2.6 "search-seed.ts", 2.12
 // golden set). Pure, like `tools/perf-content.ts`: same `count` ⇒ same photos, details, AI

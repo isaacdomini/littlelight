@@ -2,7 +2,7 @@ import {
   DERIVATIVE_JPEG_QUALITY,
   DERIVATIVE_LONG_EDGE,
   type DerivativeKind,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { type DecodedSource, DecodeError } from "./decode";
 
 // Derivatives (docs/plans/step-4.md 2.7 step 7; PRD FR-4.4, FR-5.1, FR-6.1, "Image compression

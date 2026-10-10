@@ -1,4 +1,4 @@
-import type { PhotoGroup } from "@littlelight/shared";
+import type { PhotoGroup } from "@tinyglow/shared";
 import { t } from "../../i18n";
 import { ageGroupText } from "../../lib/age";
 import { shortGroupLabel } from "./groups";

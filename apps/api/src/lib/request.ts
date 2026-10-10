@@ -1,10 +1,5 @@
 import { BlockList, isIP } from "node:net";
-import {
-  CLIENT_HEADER,
-  type ClientKind,
-  clientKindSchema,
-  userAgentLabel,
-} from "@littlelight/shared";
+import { CLIENT_HEADER, type ClientKind, clientKindSchema, userAgentLabel } from "@tinyglow/shared";
 import type { FastifyRequest } from "fastify";
 
 // Per-request client facts (docs/plans/step-3.md 2.2, 2.3). Hops: Cloudflare → cloudflared →
@@ -76,7 +71,7 @@ export function clientCountry(request: Req): string | null {
 }
 
 /**
- * The `X-Littlelight-Client` header parsed as a `ClientKind`, or `null` when absent/unknown.
+ * The `X-Tinyglow-Client` header parsed as a `ClientKind`, or `null` when absent/unknown.
  * Use this for the CSRF check (cookie transport + non-GET requires exactly `web`).
  */
 export function clientKindHeader(request: Req): ClientKind | null {

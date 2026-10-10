@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createFakeEmbedder, embedModelTag } from "@littlelight/ai";
+import { createFakeEmbedder, embedModelTag } from "@tinyglow/ai";
 import {
   buildSearchDocument,
   DEMO_IDS,
@@ -9,7 +9,7 @@ import {
   SEARCH_DOC_VERSION,
   SEARCH_SEED_IDS,
   SEARCH_SEED_MAX_PHOTOS,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import pg from "pg";
 import {
   goldenCollisions,
@@ -47,7 +47,7 @@ import { sha256Hex } from "./search-index";
 // Runs on the HOST against the dev stack with the Postgres superuser. Refuses NODE_ENV=production,
 // a non-local database host and any user other than `postgres`. Idempotent. Prints counts and
 // timings only, never document text, notes or names.
-//   DATABASE_URL=postgres://postgres:dev@localhost:${DB_PORT:-5432}/littlelight
+//   DATABASE_URL=postgres://postgres:dev@localhost:${DB_PORT:-5432}/tinyglow
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const CHUNK = 500;
@@ -286,10 +286,10 @@ async function main(): Promise<void> {
   }
   const url =
     process.env.DATABASE_URL?.trim() ||
-    `postgres://postgres:dev@localhost:${process.env.DB_PORT?.trim() || "5432"}/littlelight`;
+    `postgres://postgres:dev@localhost:${process.env.DB_PORT?.trim() || "5432"}/tinyglow`;
   const why = refusal(url, process.env);
   if (why) throw new Error(why);
-  const db = new pg.Client({ connectionString: url, application_name: "littlelight-search-seed" });
+  const db = new pg.Client({ connectionString: url, application_name: "tinyglow-search-seed" });
   await db.connect();
   try {
     if (removeOnly) await remove(db, console.log);

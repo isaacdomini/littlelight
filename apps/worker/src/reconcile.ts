@@ -1,4 +1,4 @@
-import type { IngestJob } from "@littlelight/shared";
+import type { IngestJob } from "@tinyglow/shared";
 import { errorCategory } from "./clients";
 import { type PipelinePool, runAsPipeline } from "./db";
 import type { WorkerLog } from "./log-types";

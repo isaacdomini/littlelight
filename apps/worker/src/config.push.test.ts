@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "./config";
 
 const env = {
-  DATABASE_URL: "postgres://littlelight_worker:pw@db:5432/littlelight",
+  DATABASE_URL: "postgres://tinyglow_worker:pw@db:5432/tinyglow",
   S3_ENDPOINT: "http://storage:9000",
   S3_PUBLIC_ENDPOINT: "http://localhost:9000",
   S3_ACCESS_KEY: "dev",
@@ -24,7 +24,7 @@ describe("worker loadConfig: step 9 push settings (pushEnvSchema)", () => {
     const c = loadConfig(env);
     expect(c.PUSH_PROVIDER).toBe("none");
     expect(c.APNS_ENVIRONMENT).toBe("sandbox");
-    expect(c.APNS_BUNDLE_ID).toBe("com.tesarsoft.littlelight");
+    expect(c.APNS_BUNDLE_ID).toBe("com.tesarsoft.tinyglow");
     expect(c.PUSH_PHOTOS_DEBOUNCE_SEC).toBe(600);
     expect(c.PUSH_SHARE_DEBOUNCE_SEC).toBe(60);
     expect(c.PUSH_MIN_GAP_MIN).toBe(60);

@@ -9,7 +9,7 @@ import {
   viewerDownloadResponseSchema,
   viewerPhotosResponseSchema,
   viewerUrlsResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { ZodType } from "zod";
 import { apiUrl } from "../platform/apiBase";
 import { clientKind, isNative } from "../platform/platform";
@@ -73,14 +73,14 @@ async function requestOnce<T>(path: string, opts: Opts<T>): Promise<T> {
       referrerPolicy: "no-referrer",
       headers: {
         Accept: "application/json",
-        "X-Littlelight-Client": clientKind(),
+        "X-Tinyglow-Client": clientKind(),
         ...(isNative() && viewerToken ? { Authorization: `Bearer ${viewerToken}` } : {}),
         ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new ShareApiError(0, "network", "Can't reach Littlelight. Check your connection.");
+    throw new ShareApiError(0, "network", "Can't reach Tinyglow. Check your connection.");
   }
   if (!res.ok) {
     let body: unknown;

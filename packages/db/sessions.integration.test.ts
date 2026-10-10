@@ -35,8 +35,8 @@ describe.skipIf(!databaseUrl)("auth.sessions functions", () => {
     db = await connect();
     await clean();
     for (const [id, email] of [
-      [U1, "sess-u1@littlelight.test"],
-      [U2, "sess-u2@littlelight.test"],
+      [U1, "sess-u1@tinyglow.test"],
+      [U2, "sess-u2@tinyglow.test"],
     ]) {
       await db.admin.query(
         "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())",
@@ -335,7 +335,7 @@ describe.skipIf(!databaseUrl)("auth.sessions functions", () => {
       }
     });
 
-    it("pipeline (worker) and the bare littlelight_api / littlelight_worker logins are denied", async () => {
+    it("pipeline (worker) and the bare tinyglow_api / tinyglow_worker logins are denied", async () => {
       const asPipeline = await db.asPipeline((c) =>
         tryQuery(c, "SELECT count(*) FROM auth.sessions"),
       );
@@ -359,8 +359,8 @@ describe.skipIf(!databaseUrl)("auth.sessions functions", () => {
         "viewer",
         "pipeline",
         "service_role",
-        "littlelight_api",
-        "littlelight_worker",
+        "tinyglow_api",
+        "tinyglow_worker",
         "anon",
       ];
       for (const role of roles) {
@@ -391,8 +391,8 @@ describe.skipIf(!databaseUrl)("auth.sessions functions", () => {
           "viewer",
           "pipeline",
           "service_role",
-          "littlelight_api",
-          "littlelight_worker",
+          "tinyglow_api",
+          "tinyglow_worker",
           "anon",
         ]) {
           const { rows } = await db.admin.query(

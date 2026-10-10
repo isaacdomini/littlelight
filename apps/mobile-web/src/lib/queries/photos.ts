@@ -1,4 +1,12 @@
 import {
+  type InfiniteData,
+  type QueryClient,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
   originalUrlResponseSchema,
   PHOTO_BATCH_MAX,
   type Photo,
@@ -15,15 +23,7 @@ import {
   photosListResponseSchema,
   photosSummaryResponseSchema,
   photoUrlsResponseSchema,
-} from "@littlelight/shared";
-import {
-  type InfiniteData,
-  type QueryClient,
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { useEffect } from "react";
 import { apiFetch } from "../api";
 import { uploadManager } from "../upload/manager";

@@ -1,5 +1,5 @@
-import type { ImportBatch } from "@littlelight/shared";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { ImportBatch } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResponse, setNativePlatform, stubFetch } from "../../testing/native";
 import { renderApp } from "../../testing/render";

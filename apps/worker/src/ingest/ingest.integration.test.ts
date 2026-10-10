@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { derivativeKey, originalKey, photoPrefixes } from "@littlelight/shared";
+import { derivativeKey, originalKey, photoPrefixes } from "@tinyglow/shared";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { handleIngestJob } from "../queues";

@@ -1,4 +1,4 @@
-import type { MailEnv } from "@littlelight/shared";
+import type { MailEnv } from "@tinyglow/shared";
 import { createTransport } from "nodemailer";
 import type { WorkerLog } from "../log-types";
 
@@ -84,7 +84,7 @@ export function formatExpiry(d: Date): string {
   return `${f.format(d)} UTC`;
 }
 
-const WHERE = "Open Littlelight, then Settings, then Export album data";
+const WHERE = "Open Tinyglow, then Settings, then Export album data";
 
 function html(paragraphs: string[]): string {
   const body = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("\n");
@@ -95,13 +95,13 @@ function html(paragraphs: string[]): string {
 export function exportReadyContent(mail: ExportReadyMail): MailContent {
   const name = plainName(mail.babyName);
   const paragraphs = [
-    `Your Littlelight export of ${name} is ready.`,
+    `Your Tinyglow export of ${name} is ready.`,
     `${WHERE} to download it. For your security you may be asked to sign in again first.`,
     `The download is available until ${formatExpiry(mail.expiresAt)}.`,
     "If you did not request this export, open the app and delete it there, and tell your co-parent.",
   ];
   return {
-    subject: `Your Littlelight export of ${name} is ready`,
+    subject: `Your Tinyglow export of ${name} is ready`,
     text: `${paragraphs.join("\n\n")}\n`,
     html: html(paragraphs),
   };
@@ -115,12 +115,12 @@ export function exportFailedContent(mail: ExportFailedMail): MailContent {
       ? "The album is larger than this server's export limit."
       : "Something went wrong while building it. Nothing was shared with anyone.";
   const paragraphs = [
-    `Your Littlelight export of ${name} could not be completed.`,
+    `Your Tinyglow export of ${name} could not be completed.`,
     why,
     `${WHERE} to try again.`,
   ];
   return {
-    subject: `Your Littlelight export of ${name} could not be completed`,
+    subject: `Your Tinyglow export of ${name} could not be completed`,
     text: `${paragraphs.join("\n\n")}\n`,
     html: html(paragraphs),
   };

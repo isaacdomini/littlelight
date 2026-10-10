@@ -26,7 +26,7 @@ export default defineConfig({
       {
         extends: "./apps/mobile-web/vitest.config.ts",
         test: {
-          name: "@littlelight/mobile-web",
+          name: "@tinyglow/mobile-web",
           root: "./apps/mobile-web",
           exclude: [...configDefaults.exclude, ...nativeExcludes],
         },

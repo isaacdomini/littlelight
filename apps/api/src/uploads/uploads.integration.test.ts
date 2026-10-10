@@ -8,7 +8,7 @@ import {
   UPLOAD_PART_BYTES,
   uploadFileSchema,
   uploadSessionSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { JobQueue } from "../plugins/jobs";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
@@ -40,7 +40,7 @@ describe.skipIf(!databaseUrl)("uploads (api + db, stubbed S3 and jobs)", () => {
       // connection may be sitting `idle in transaction` right now, and the photo row is visible.
       const { rows } = await h.admin.query(
         `SELECT count(*)::int AS n FROM pg_stat_activity
-          WHERE usename = 'littlelight_api' AND state LIKE 'idle in transaction%'`,
+          WHERE usename = 'tinyglow_api' AND state LIKE 'idle in transaction%'`,
       );
       openTxAtEnqueue.push(rows[0].n);
       const seen = await h.admin.query("SELECT 1 FROM public.photos WHERE id = $1", [job.photoId]);

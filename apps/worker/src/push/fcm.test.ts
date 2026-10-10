@@ -17,13 +17,13 @@ import type { PushMessage } from "./types";
 const BABY = "00000000-0000-4000-8000-000000000100";
 const LINK = "00000000-0000-4000-8000-000000000200";
 const share: PushMessage = {
-  title: "Littlelight",
+  title: "Tinyglow",
   body: "Someone opened your shared album.",
   data: { kind: "share_viewed", babyId: BABY, shareLinkId: LINK },
   collapseId: `share_viewed:${BABY}`,
 };
 const photos: PushMessage = {
-  title: "Littlelight",
+  title: "Tinyglow",
   body: "3 new photos are ready to search.",
   data: { kind: "photos_analyzed", babyId: BABY },
   collapseId: `photos_analyzed:${BABY}`,
@@ -86,7 +86,7 @@ describe("fcm", () => {
     expect(JSON.parse(mock.sent[0]?.body ?? "")).toEqual({
       message: {
         token: TOKEN("c0ffee"),
-        notification: { title: "Littlelight", body: "Someone opened your shared album." },
+        notification: { title: "Tinyglow", body: "Someone opened your shared album." },
         data: { kind: "share_viewed", babyId: BABY, shareLinkId: LINK },
         android: {
           priority: "NORMAL",

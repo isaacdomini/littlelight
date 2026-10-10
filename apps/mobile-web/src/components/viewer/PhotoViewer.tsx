@@ -1,6 +1,6 @@
 import { IonAlert, IonIcon, IonModal } from "@ionic/react";
-import type { PhotoSummary } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import type { PhotoSummary } from "@tinyglow/shared";
 import {
   arrowUndoOutline,
   closeOutline,
@@ -62,7 +62,7 @@ async function download(url: string, photoId: string) {
   if (isNative()) {
     // Fetch -> temp file -> share sheet ("Save Image"); the temp file is deleted afterwards.
     const { downloadAndShare } = await import("../../platform/native/share");
-    if (!(await downloadAndShare(url, `Littlelight-${photoId.slice(0, 8)}`))) {
+    if (!(await downloadAndShare(url, `Tinyglow-${photoId.slice(0, 8)}`))) {
       throw new Error("share failed");
     }
     return;

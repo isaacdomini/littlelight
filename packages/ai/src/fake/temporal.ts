@@ -23,7 +23,7 @@
  * `rest`, which the fake uses as the search query.
  */
 
-import { AGE_MONTH_DAYS } from "@littlelight/shared";
+import { AGE_MONTH_DAYS } from "@tinyglow/shared";
 
 export interface TemporalRange {
   dateFrom: string | null;

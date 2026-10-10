@@ -1,4 +1,4 @@
-import { derivativeKey, SIGNED_URL_TTL_SEC } from "@littlelight/shared";
+import { derivativeKey, SIGNED_URL_TTL_SEC } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { testConfig } from "../testing/support";
 import { clampTtl, createUrlSigner, shareMediaTtlSec } from "./sign";

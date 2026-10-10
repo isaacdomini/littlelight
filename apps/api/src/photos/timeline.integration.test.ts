@@ -7,7 +7,7 @@ import {
   photosSummaryResponseSchema,
   photoUrlsResponseSchema,
   type ReindexJob,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JobQueue } from "../plugins/jobs";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
@@ -37,7 +37,7 @@ describe.skipIf(!databaseUrl)("timeline + details (api + db)", () => {
     async enqueueReindex(job) {
       const { rows } = await h.admin.query(
         `SELECT count(*)::int AS n FROM pg_stat_activity
-          WHERE usename = 'littlelight_api' AND state LIKE 'idle in transaction%'`,
+          WHERE usename = 'tinyglow_api' AND state LIKE 'idle in transaction%'`,
       );
       committedAtEnqueue.push(rows[0].n === 0);
       reindexed.push(job);

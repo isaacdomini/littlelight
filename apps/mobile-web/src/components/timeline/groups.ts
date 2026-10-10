@@ -1,4 +1,4 @@
-import { ageGroupKey, type PhotoSummary } from "@littlelight/shared";
+import { ageGroupKey, type PhotoSummary } from "@tinyglow/shared";
 
 export interface TimelineGroup {
   key: string;

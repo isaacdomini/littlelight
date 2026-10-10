@@ -44,7 +44,7 @@ describe("needsCsrfHeader", () => {
   const c = (method: string, client?: string) =>
     ({
       method,
-      headers: client ? { "x-littlelight-client": client } : {},
+      headers: client ? { "x-tinyglow-client": client } : {},
       ip: "1.1.1.1",
     }) as unknown as CsrfReq;
 

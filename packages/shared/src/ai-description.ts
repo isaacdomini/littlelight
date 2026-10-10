@@ -25,7 +25,7 @@ export const AI_SCHEMA_VERSION = "v1";
 /** Bump when the system prompt in `packages/ai` changes (its sha256 is pinned by a test). */
 export const AI_PROMPT_VERSION = "v1";
 /** `text.format.name` of the OpenAI structured-output request (`^[a-zA-Z0-9_-]{1,64}$`). */
-export const AI_DESCRIPTION_V1_SCHEMA_NAME = "littlelight_photo_v1";
+export const AI_DESCRIPTION_V1_SCHEMA_NAME = "tinyglow_photo_v1";
 
 // ---------------------------------------------------------------------------------------------
 // Closed sets

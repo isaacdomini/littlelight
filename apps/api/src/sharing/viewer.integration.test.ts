@@ -9,7 +9,7 @@ import {
   viewerDownloadResponseSchema,
   viewerPhotosResponseSchema,
   viewerUrlsResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { LightMyRequestResponse } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loggerOptions } from "../app";
@@ -24,8 +24,8 @@ import { hashClientIp, hashShareToken } from "./crypto";
 // exchange and on an open cookie session) and sensitive photos never auto-share / never reach a
 // viewer's URLs. Media URLs are signed offline (no storage call).
 
-const WEB = { "x-littlelight-client": "web" };
-const NATIVE = { "x-littlelight-client": "native" };
+const WEB = { "x-tinyglow-client": "web" };
+const NATIVE = { "x-tinyglow-client": "native" };
 const PASSCODE = "739104";
 const SENTINEL_IP = "198.51.100.200";
 const LINK_NAME = "SENTINEL-LINK-NAME-Grandparents";
@@ -229,7 +229,7 @@ describe.skipIf(!databaseUrl)("share-link viewer (api + db)", () => {
       expect(payload.share_link_id).toBe(short.id);
     });
 
-    it("needs X-Littlelight-Client (403 csrf_rejected); a malformed token shape is 400; unknown is 410", async () => {
+    it("needs X-Tinyglow-Client (403 csrf_rejected); a malformed token shape is 400; unknown is 410", async () => {
       const bare = await h.app.inject({
         method: "POST",
         url: "/share/session",

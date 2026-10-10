@@ -1,4 +1,4 @@
-import { VIEWER_COOKIE } from "@littlelight/shared";
+import { VIEWER_COOKIE } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { JobQueue } from "../plugins/jobs";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
@@ -8,8 +8,8 @@ import { seedPhoto } from "../testing/photos";
 // enqueues exactly one push.notify per NEW viewer session, never for a reused session or a
 // refused exchange, never blocks the response, and the job carries only the link id.
 
-const WEB = { "x-littlelight-client": "web" };
-const NATIVE = { "x-littlelight-client": "native" };
+const WEB = { "x-tinyglow-client": "web" };
+const NATIVE = { "x-tinyglow-client": "native" };
 const PASSCODE = "739104";
 
 describe.skipIf(!databaseUrl)("share_viewed push enqueue (api + db)", () => {

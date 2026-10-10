@@ -1,4 +1,4 @@
-import { INSTALL_ID_KEY } from "@littlelight/shared";
+import { INSTALL_ID_KEY } from "@tinyglow/shared";
 import { type SecureKv, secureKv } from "./secureKv";
 
 // This install's id (`import_sources.device_id`): a random UUID kept in the Keychain, created on

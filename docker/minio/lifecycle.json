@@ -1,7 +1,7 @@
 {
   "Rules": [
     {
-      "ID": "littlelight-noncurrent-7d",
+      "ID": "tinyglow-noncurrent-7d",
       "Status": "Enabled",
       "Expiration": { "ExpiredObjectDeleteMarker": true },
       "NoncurrentVersionExpiration": { "NoncurrentDays": 7 }

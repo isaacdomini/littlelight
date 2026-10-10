@@ -1,4 +1,4 @@
-import { SEARCH_RRF_K } from "@littlelight/shared";
+import { SEARCH_RRF_K } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { reciprocalRankFusion } from "./rrf";
 

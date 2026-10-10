@@ -4,7 +4,7 @@ import { toAppPath } from "./deepLinks";
 // Deep-link allow-list (docs/plans/step-9.md 2.4, 2.15): the URL is only ever turned into an
 // in-app route; everything outside the allow-list is ignored.
 
-const HOST = "littlelight.tesarsoft.com";
+const HOST = "tinyglow.app";
 const INVITE = "A".repeat(43);
 const SHARE = "B".repeat(22);
 
@@ -17,7 +17,7 @@ describe("toAppPath: accepted links", () => {
   });
 
   it("is case-insensitive on the host", () => {
-    expect(toAppPath(`https://LittleLight.Tesarsoft.COM/s/${SHARE}`)).toBe(`/s/${SHARE}`);
+    expect(toAppPath(`https://TinyGlow.APP/s/${SHARE}`)).toBe(`/s/${SHARE}`);
   });
 
   it("accepts the token length range (share 22..64, invite 20..128) and url-safe characters", () => {
@@ -83,24 +83,24 @@ describe("toAppPath: rejected links", () => {
 
 describe("toAppPath: the debug URL scheme", () => {
   it("is ignored unless the build enables it", () => {
-    expect(toAppPath(`littlelight://s/${SHARE}`)).toBeNull();
+    expect(toAppPath(`tinyglow://s/${SHARE}`)).toBeNull();
     vi.stubEnv("VITE_DEEPLINK_DEV_SCHEME", "0");
-    expect(toAppPath(`littlelight://s/${SHARE}`)).toBeNull();
+    expect(toAppPath(`tinyglow://s/${SHARE}`)).toBeNull();
     vi.stubEnv("VITE_DEEPLINK_DEV_SCHEME", "true");
-    expect(toAppPath(`littlelight://s/${SHARE}`)).toBeNull();
+    expect(toAppPath(`tinyglow://s/${SHARE}`)).toBeNull();
   });
 
   it("with VITE_DEEPLINK_DEV_SCHEME=1 accepts the same paths", () => {
     vi.stubEnv("VITE_DEEPLINK_DEV_SCHEME", "1");
-    expect(toAppPath(`littlelight://s/${SHARE}`)).toBe(`/s/${SHARE}`);
-    expect(toAppPath(`littlelight://invite/${INVITE}`)).toBe(`/invite/${INVITE}`);
-    expect(toAppPath("littlelight://signin/native?code=1")).toBe("/signin/native?code=1");
+    expect(toAppPath(`tinyglow://s/${SHARE}`)).toBe(`/s/${SHARE}`);
+    expect(toAppPath(`tinyglow://invite/${INVITE}`)).toBe(`/invite/${INVITE}`);
+    expect(toAppPath("tinyglow://signin/native?code=1")).toBe("/signin/native?code=1");
   });
 
   it("still rejects paths outside the allow-list and other schemes", () => {
     vi.stubEnv("VITE_DEEPLINK_DEV_SCHEME", "1");
-    expect(toAppPath("littlelight://settings/account")).toBeNull();
-    expect(toAppPath(`littlelight://s/${"a".repeat(5)}`)).toBeNull();
+    expect(toAppPath("tinyglow://settings/account")).toBeNull();
+    expect(toAppPath(`tinyglow://s/${"a".repeat(5)}`)).toBeNull();
     expect(toAppPath(`otherapp://s/${SHARE}`)).toBeNull();
   });
 });

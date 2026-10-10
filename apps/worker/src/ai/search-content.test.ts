@@ -1,4 +1,4 @@
-import { aiDescriptionV1Schema, buildSearchDocument } from "@littlelight/shared";
+import { aiDescriptionV1Schema, buildSearchDocument } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import {
   GOLDEN_COUNT,

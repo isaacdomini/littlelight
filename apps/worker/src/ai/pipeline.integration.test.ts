@@ -1,8 +1,8 @@
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFakeVisionDescriber, type FakeOutcome } from "@littlelight/ai";
-import { aiDescriptionV1Schema, type ReindexJob } from "@littlelight/shared";
+import { createFakeVisionDescriber, type FakeOutcome } from "@tinyglow/ai";
+import { aiDescriptionV1Schema, type ReindexJob } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ingestPhoto } from "../ingest";
 import { createHarness, type Harness, integrationEnv } from "../testing/harness";

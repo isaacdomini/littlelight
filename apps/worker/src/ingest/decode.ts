@@ -1,4 +1,4 @@
-import type { PhotoMime } from "@littlelight/shared";
+import type { PhotoMime } from "@tinyglow/shared";
 import sharp, { type Sharp, type SharpOptions } from "sharp";
 import { isHeif } from "./sniff";
 

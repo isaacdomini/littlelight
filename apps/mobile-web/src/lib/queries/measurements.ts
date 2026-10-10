@@ -1,3 +1,4 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Measurement,
   type MeasurementCreate,
@@ -5,8 +6,7 @@ import {
   type MeasurementUpdate,
   measurementSchema,
   measurementsListResponseSchema,
-} from "@littlelight/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { apiFetch } from "../api";
 import { photoKey } from "./photos";
 

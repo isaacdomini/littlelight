@@ -1,4 +1,4 @@
-import type { BabySummary, PhotoSummary, SearchResponse } from "@littlelight/shared";
+import type { BabySummary, PhotoSummary, SearchResponse } from "@tinyglow/shared";
 import { searchOutline } from "ionicons/icons";
 import { t, tn } from "../../i18n";
 import { Thumb } from "../timeline/Thumb";

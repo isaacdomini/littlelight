@@ -51,8 +51,8 @@ describe("verifyAccessToken", () => {
   });
 
   it("derives the issuer from PUBLIC_URL", async () => {
-    const other = testConfig({ PUBLIC_URL: "https://littlelight.example" });
-    const token = await signAccessToken({ issuer: "https://littlelight.example/auth" });
+    const other = testConfig({ PUBLIC_URL: "https://tinyglow.example" });
+    const token = await signAccessToken({ issuer: "https://tinyglow.example/auth" });
     expect((await verifyAccessToken(token, other)).role).toBe("authenticated");
     // The same token no longer verifies against the dev issuer.
     expect(await codeOf(verifyAccessToken(token, config))).toBe("unauthorized");

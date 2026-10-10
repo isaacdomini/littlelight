@@ -1,5 +1,5 @@
-import type { PushData } from "@littlelight/shared";
 import { cleanup, waitFor } from "@testing-library/react";
+import type { PushData } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setNativePlatform } from "../../testing/native";
 import { renderApp } from "../../testing/render";
@@ -33,7 +33,7 @@ vi.mock("../../auth/AuthProvider", () => ({
 
 import { NativeEvents, NativeViewerEvents } from "./NativeEvents";
 
-const HOST = "https://littlelight.tesarsoft.com";
+const HOST = "https://tinyglow.app";
 const INVITE = "I".repeat(43);
 const SHARE = "S".repeat(22);
 const BABY = "11111111-1111-4111-8111-111111111111";
@@ -114,7 +114,7 @@ describe("NativeEvents: deep links", () => {
     ["a foreign host", `https://evil.example/invite/${INVITE}`],
     ["the web callback", `${HOST}/signin/callback#access_token=x`],
     ["an unknown path", `${HOST}/settings/account`],
-    ["a custom scheme without the debug flag", `littlelight://s/${SHARE}`],
+    ["a custom scheme without the debug flag", `tinyglow://s/${SHARE}`],
     ["a short token", `${HOST}/s/abc`],
     ["garbage", "not a url"],
   ])("ignores %s", async (_n, url) => {

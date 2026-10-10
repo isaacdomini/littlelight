@@ -4,7 +4,7 @@ import {
   CHAT_SSE_KEEPALIVE_MS,
   type ChatEvent,
   encodeChatEvent,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyReply } from "fastify";
 
 // Server-sent events of the chat turn (docs/plans/step-7.md 2.4, 2.8, R6). Wire format from

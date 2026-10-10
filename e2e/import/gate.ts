@@ -87,7 +87,7 @@ async function dc(args: string[]) {
     maxBuffer: 256 * 1024 * 1024,
   });
 }
-let BUCKET = "littlelight-dev";
+let BUCKET = "tinyglow-dev";
 async function mc(args: string): Promise<string> {
   const { stdout } = await dc([
     "exec",
@@ -228,7 +228,7 @@ async function main() {
   await fake("POST", "/__fake/consent", { decision: "ask" });
   // A leftover connection of an earlier run would hide step 1.
   await q(
-    "delete from google_accounts where user_id in (select id from auth.users where email in ('demo-mom@littlelight.local','demo-nanny@littlelight.local'))",
+    "delete from google_accounts where user_id in (select id from auth.users where email in ('demo-mom@tinyglow.local','demo-nanny@tinyglow.local'))",
   );
 
   const mom = await demoClient("demo-mom");
@@ -256,9 +256,9 @@ async function main() {
 
 async function walkthrough(mom: ApiClient, nanny: ApiClient, browser: Browser) {
   const momId =
-    (await q("select id from auth.users where email = 'demo-mom@littlelight.local'"))[0] ?? "";
+    (await q("select id from auth.users where email = 'demo-mom@tinyglow.local'"))[0] ?? "";
   const nannyId =
-    (await q("select id from auth.users where email = 'demo-nanny@littlelight.local'"))[0] ?? "";
+    (await q("select id from auth.users where email = 'demo-nanny@tinyglow.local'"))[0] ?? "";
 
   // ---- 1. connection and consent URL --------------------------------------------------------
   const c0 = await connection(mom);
@@ -660,7 +660,7 @@ async function cleanup() {
       `delete from upload_sessions where baby_id = '${MAYA}' and created_at >= '${startedAt}'`,
     );
     await q(
-      "delete from google_accounts where user_id in (select id from auth.users where email in ('demo-mom@littlelight.local','demo-nanny@littlelight.local'))",
+      "delete from google_accounts where user_id in (select id from auth.users where email in ('demo-mom@tinyglow.local','demo-nanny@tinyglow.local'))",
     );
     await q(`delete from import_sources where baby_id = '${MAYA}' and device_label = 'Gate phone'`);
     await q(
@@ -707,7 +707,7 @@ async function logScan() {
   must("picker URL", /\/picker\/(fake-session-)?[A-Za-z0-9-]{8,}/);
   must("presign signature", /X-Amz-Signature/);
   must("JWT", /eyJ[A-Za-z0-9_-]{10,}/);
-  must("demo address", /@littlelight\.local/);
+  must("demo address", /@tinyglow\.local/);
   must("baseUrl", /baseUrl/);
   must("googleusercontent URL", /googleusercontent\.com\/\S/);
   check(

@@ -1,5 +1,5 @@
 import { IonModal } from "@ionic/react";
-import type { ShareLink } from "@littlelight/shared";
+import type { ShareLink } from "@tinyglow/shared";
 import { useEffect, useState } from "react";
 import { t, tn } from "../../i18n";
 import { errorMessage } from "../../lib/api";

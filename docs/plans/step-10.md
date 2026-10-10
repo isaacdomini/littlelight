@@ -31,7 +31,7 @@ before any UI commit; cloudflared runs outside Compose.
 User decisions already taken (2026-10-09): build both (1) **Apple Photos album sync, iPhone only
 (PhotoKit)**: one album, automatic on open / foreground / `BGAppRefreshTask` (best effort), full
 metadata (original bytes, HEIC kept, EXIF, GPS, capture date), through the existing upload →
-dedupe → ingest pipeline with the in-house `LittlelightUploader`; (2) **Google Photos import via
+dedupe → ingest pipeline with the in-house `TinyglowUploader`; (2) **Google Photos import via
 the Google Photos Picker API** (web + Android + iPhone), per-batch picking (not automatic),
 originals downloaded with metadata, same pipeline, built and tested against a fake Picker server,
 real use waiting on the user's Google Cloud credentials. **Permission:** full Photos-library
@@ -50,7 +50,7 @@ What exists and is reused (verified in the repo):
   refs, details)`, `NativeFileRef {path,name,mime,size}`, `Uploader.putFile` (native background
   PUT), `copyIntoUploadCache`/`deleteNativeCopy` (`platform/native/files.ts`), `pickPhotos` via
   `@capawesome/capacitor-file-picker` (`skipTranscoding: true`, originals).
-- iOS: `LittlelightUploader.swift` (background `URLSession` `com.tesarsoft.littlelight.upload`,
+- iOS: `TinyglowUploader.swift` (background `URLSession` `com.tesarsoft.tinyglow.upload`,
   `handleEventsForBackgroundURLSession` in `AppDelegate`), `FreshInstall` Keychain wipe,
   `excludeFromBackup()` for `Caches/ll-*`, `Info.plist` + `Info-Debug.plist` kept equal except two
   keys (`check-ios-plists.ts`), `PrivacyInfo.xcprivacy` (Photos, Precise Location declared).
@@ -75,7 +75,7 @@ stored, deduplicated, analysed or shared. On iPhone, an admin picks one Apple Ph
 then on the app imports every new photo of that album (original bytes, HEIC kept, EXIF, GPS,
 capture date) whenever it launches, returns to the foreground, gets background-refresh time, or
 the parent taps "Sync now" — through the existing upload session / SHA-256 pre-check / background
-PUT / ingest pipeline, Wi-Fi only by default, never deleting anything from Littlelight, with the
+PUT / ingest pipeline, Wi-Fi only by default, never deleting anything from Tinyglow, with the
 PhotoKit identifiers kept only on the device and the server holding just per-device sync status.
 On web, Android and iPhone, any member connects their Google account once (server-side OAuth,
 refresh token encrypted at rest, `photospicker.mediaitems.readonly` only), then picks photos in
@@ -90,9 +90,9 @@ manifest, App Store privacy label, Data Safety answers, review notes and `NATIVE
 ### 2.1 Topology
 
 ```
-iPhone  LittlelightPhotoSync (Swift, PhotoKit) ── listPendingAssets/exportAssets(sha256) ──▶ src/platform/native/photoSync.ts
-        BGAppRefreshTask "com.tesarsoft.littlelight.sync" ── event backgroundSync ──▶ photoSync.runSync('background')
-        photoSync ──▶ UploadManager.addNative(lane:'sync', wifiOnly) ──▶ existing /uploads/* + LittlelightUploader (Wi-Fi-only session)
+iPhone  TinyglowPhotoSync (Swift, PhotoKit) ── listPendingAssets/exportAssets(sha256) ──▶ src/platform/native/photoSync.ts
+        BGAppRefreshTask "com.tesarsoft.tinyglow.sync" ── event backgroundSync ──▶ photoSync.runSync('background')
+        photoSync ──▶ UploadManager.addNative(lane:'sync', wifiOnly) ──▶ existing /uploads/* + TinyglowUploader (Wi-Fi-only session)
         photoSync ──▶ POST/PATCH /import-sources (status counters only; no PHAsset ids)
 
 web / Android / iPhone  "Connect Google Photos" ──▶ POST /me/import/google/connect ──▶ system browser (Google consent)
@@ -292,7 +292,7 @@ CREATE INDEX ON public.import_items (status) WHERE status IN ('pending','downloa
 - Regenerate `packages/db/src/generated`; README rows (tables, who writes what, retention: items
   of finished batches 30 days, batches kept).
 
-### 2.3 Shared contracts (`@littlelight/shared`; architect-defined here, **backend-engineer writes in 10.2** with orchestrator approval)
+### 2.3 Shared contracts (`@tinyglow/shared`; architect-defined here, **backend-engineer writes in 10.2** with orchestrator approval)
 
 - `src/jobs.ts`: `JOBS.importGoogle = "import.google"` (`importGoogleJobSchema = z.strictObject({
   batchId: z.uuid(), babyId: z.uuid() })`; `exclusive`, `singletonKey = batchId`, `retryLimit 2`,
@@ -306,7 +306,7 @@ CREATE INDEX ON public.import_items (status) WHERE status IN ('pending','downloa
   `IMPORT_ALBUM_TITLE_MAX = 120`, `SYNC_FOREGROUND_BATCH = 50`, `SYNC_BACKGROUND_BATCH = 25`,
   `SYNC_LANE_CONCURRENCY = 2`, `SYNC_ASSET_MAX_ATTEMPTS = 3`, `SYNC_MIN_INTERVAL_SEC = 60` (a
   resume within a minute of the last run does nothing), `SYNC_BG_TASK_ID =
-  "com.tesarsoft.littlelight.sync"`, `GOOGLE_PICKER_SCOPE =
+  "com.tesarsoft.tinyglow.sync"`, `GOOGLE_PICKER_SCOPE =
   "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"`, `GOOGLE_ENDPOINTS = {
   AUTH: "https://accounts.google.com/o/oauth2/v2/auth", TOKEN:
   "https://oauth2.googleapis.com/token", REVOKE: "https://oauth2.googleapis.com/revoke", PICKER:
@@ -369,10 +369,10 @@ CREATE INDEX ON public.import_items (status) WHERE status IN ('pending','downloa
   (the fake's token shapes), `/ll-uploads/[^\s"']+`.
 - `index.ts` re-exports.
 
-### 2.4 iOS native (mobile-engineer): `LittlelightPhotoSync` plugin, BGTask, Wi-Fi-only uploads, plists
+### 2.4 iOS native (mobile-engineer): `TinyglowPhotoSync` plugin, BGTask, Wi-Fi-only uploads, plists
 
-New `ios/App/App/LittlelightPhotoSync.swift` (registered in `LittlelightViewController.capacitorDidLoad`
-next to the uploader). JS name `LittlelightPhotoSync`. **Nothing in it logs or stores a path, a
+New `ios/App/App/TinyglowPhotoSync.swift` (registered in `TinyglowViewController.capacitorDidLoad`
+next to the uploader). JS name `TinyglowPhotoSync`. **Nothing in it logs or stores a path, a
 file name, a URL or an asset identifier outside the ledger file.**
 
 | Method | Returns | Behaviour |
@@ -398,13 +398,13 @@ file name, a URL or an asset identifier outside the ledger file.**
 - `AppDelegate`: `BGTaskScheduler.shared.register(forTaskWithIdentifier: SYNC_BG_TASK_ID)` in
   `didFinishLaunching` (before the scene exists), handler ⇒ `LLPhotoSync.shared.handle(task)`;
   `handleEventsForBackgroundURLSession` accepts both uploader identifiers (below).
-- `LittlelightUploader.swift`: `upload({ url, path, wifiOnly? })`; when `wifiOnly` is true the
-  task goes on a second background session `com.tesarsoft.littlelight.upload.wifi`
+- `TinyglowUploader.swift`: `upload({ url, path, wifiOnly? })`; when `wifiOnly` is true the
+  task goes on a second background session `com.tesarsoft.tinyglow.upload.wifi`
   (`allowsCellularAccess = false`, otherwise identical). `cancel` searches both.
 - Plists (**both** `Info.plist` and `Info-Debug.plist`, kept equal; `check-ios-plists.ts` still
   passes): `UIBackgroundModes = [fetch]`, `BGTaskSchedulerPermittedIdentifiers =
-  [com.tesarsoft.littlelight.sync]`, `PHPhotoLibraryPreventAutomaticLimitedAccessAlert = true`
-  (the app presents its own flow), `NSPhotoLibraryUsageDescription` rewritten: "Littlelight uses
+  [com.tesarsoft.tinyglow.sync]`, `PHPhotoLibraryPreventAutomaticLimitedAccessAlert = true`
+  (the app presents its own flow), `NSPhotoLibraryUsageDescription` rewritten: "Tinyglow uses
   your photo library to upload the photos you choose. If you turn on album sync, it also imports
   new photos from the one album you pick, so you don't have to add them by hand." `project.pbxproj`:
   add the new Swift file; no new entitlement (Background Modes is a plist key).
@@ -480,7 +480,7 @@ stated. Logs carry ids, counts and error categories only.
 | `PATCH /import-sources/:id` | owner (RLS UPDATE) | `patchImportSourceRequestSchema` → 200 | deltas applied as `col = col + $n` (no lost updates between devices), `lastError` nullable; 404 when RLS hides the row |
 | `DELETE /import-sources/:id` | owner or baby admin | → 204 | audit `import.source_deleted {source_id}` |
 | `GET /me/import/google/connection` | Auth | → 200 `googleConnectionSchema` | `available = GOOGLE_IMPORT_PROVIDER !== "none"`; row from `google_accounts` under claims (4 granted columns) |
-| `POST /me/import/google/connect` | Auth, Consent, throttle 10/user/h, 404 `feature_unavailable` when provider `none` | `googleConnectRequestSchema` → 200 `googleConnectResponseSchema` | mints `state` = HS256 JWT (HKDF key `google-oauth-state` from `JWT_SECRET`, like the viewer JWT; `aud: littlelight-google-state`, `sub: uid`, `sid`: GoTrue session id, `client`, `returnTo`, 10-min expiry, random `jti`); URL = `GOOGLE_ENDPOINTS.AUTH` (or `${FAKE_PUBLIC_URL}/o/oauth2/v2/auth`) with `client_id`, `redirect_uri = ${PUBLIC_URL}/api/import/google/callback`, `response_type=code`, `scope=GOOGLE_PICKER_SCOPE`, `access_type=offline`, `prompt=consent`, `include_granted_scopes=false`, `state` (D14) |
+| `POST /me/import/google/connect` | Auth, Consent, throttle 10/user/h, 404 `feature_unavailable` when provider `none` | `googleConnectRequestSchema` → 200 `googleConnectResponseSchema` | mints `state` = HS256 JWT (HKDF key `google-oauth-state` from `JWT_SECRET`, like the viewer JWT; `aud: tinyglow-google-state`, `sub: uid`, `sid`: GoTrue session id, `client`, `returnTo`, 10-min expiry, random `jti`); URL = `GOOGLE_ENDPOINTS.AUTH` (or `${FAKE_PUBLIC_URL}/o/oauth2/v2/auth`) with `client_id`, `redirect_uri = ${PUBLIC_URL}/api/import/google/callback`, `response_type=code`, `scope=GOOGLE_PICKER_SCOPE`, `access_type=offline`, `prompt=consent`, `include_granted_scopes=false`, `state` (D14) |
 | `GET /import/google/callback?code&state` (also `?error=`) | **no session required** (the native flow lands in SFSafariViewController / Custom Tabs with no app credentials): the `state` JWT is the credential; its `sid` must still be a live GoTrue session (step-3 helper) | → 302 | `error=access_denied` ⇒ redirect `${PUBLIC_URL}/import/google/connected?status=denied&client=…`; else exchange `code` at `TOKEN` (`client_secret`, `grant_type=authorization_code`), require `refresh_token` present and the scope granted (else `status=scope_missing`), `withServiceRole(app, "google import connect", …)`: `INSERT … google_accounts (user_id, refresh_token_enc = encrypt_secret($1), scope) ON CONFLICT (user_id) DO UPDATE …, needs_reconnect = false, refresh_failures = 0` with the data-key GUC bound; audit `import.google_connected`; redirect `…/connected?status=ok&client=<web|native>&returnTo=<allow-listed>`. The code, tokens and `state` are never logged (`redactUrl` drops query strings) |
 | `DELETE /me/import/google/connection` | Auth, Consent | → 204 | service_role: read `refresh_token_enc`, decrypt, `POST REVOKE token=…` (best effort, 5 s timeout), `DELETE` the row; audit `import.google_disconnected`; also cancels this user's `picking` batches (deletes their Google sessions best effort) |
 | `POST /babies/:id/imports/google` | member, Consent, throttle 10/user/h, provider ≠ `none` | `{}` → 201 `importBatchCreateResponseSchema` | `connected` else 409 `google_not_connected`; `needs_reconnect` ⇒ 409 `google_reconnect`; access token: service_role decrypt + `POST TOKEN grant_type=refresh_token` (**held in memory for this request only**; `invalid_grant` ⇒ set `needs_reconnect`, 409 `google_reconnect`); `POST ${PICKER}/v1/sessions` ⇒ under claims `INSERT import_batches (baby_id, requested_by, kind, tz_hint = profiles.timezone)` then `UPDATE provider_session_id, poll_interval_sec = max(IMPORT_PICKER_POLL_MIN_SEC, pollInterval), picker_expires_at = min(expireTime, now() + IMPORT_PICKING_TTL_MIN)`; triggers map: 'already in progress' ⇒ 409 `import_in_progress`, 'rate limit' ⇒ 429 `rate_limited`; audit `import.batch_created {batch_id, kind}`; response carries `pickerUri` once |
@@ -571,7 +571,7 @@ still exists; the row then goes with the profile cascade. Failure to revoke neve
 deletion (logged as `{ revoked: false }`). The deletion preview lists "Google Photos connection"
 when a row exists.
 
-### 2.9 Fake Google Picker server (backend-engineer, `apps/worker/src/import/google/fake-server.ts`; CLI `pnpm --filter @littlelight/worker google-fake`)
+### 2.9 Fake Google Picker server (backend-engineer, `apps/worker/src/import/google/fake-server.ts`; CLI `pnpm --filter @tinyglow/worker google-fake`)
 
 Plain `node:http`, in-memory state, port `GOOGLE_FAKE_PORT` (8099), used by dev Compose, unit and
 integration tests (in-process on an ephemeral port) and the gates. It mimics only what the real
@@ -581,7 +581,7 @@ the scrub patterns (`fake-access-…`, `fake-refresh-…`, `fake-code-…`) so l
 | Path | Behaviour |
 | --- | --- |
 | `GET /healthz` | `{ status: "ok" }` |
-| `GET /o/oauth2/v2/auth?client_id&redirect_uri&scope&state&…` | an HTML consent page (design-system-neutral, English): "Fake Google · Littlelight wants to see photos you pick" with buttons **Allow** (`302 redirect_uri?code=fake-code-…&state=…`) and **Deny** (`?error=access_denied&state=…`); `?account=<name>` lets tests connect distinct fake users; `?scope_missing=1` grants without the picker scope |
+| `GET /o/oauth2/v2/auth?client_id&redirect_uri&scope&state&…` | an HTML consent page (design-system-neutral, English): "Fake Google · Tinyglow wants to see photos you pick" with buttons **Allow** (`302 redirect_uri?code=fake-code-…&state=…`) and **Deny** (`?error=access_denied&state=…`); `?account=<name>` lets tests connect distinct fake users; `?scope_missing=1` grants without the picker scope |
 | `POST /token` | `authorization_code` ⇒ `{ access_token: "fake-access-…", expires_in: 3600, refresh_token: "fake-refresh-…", scope, token_type: "Bearer" }`; `refresh_token` ⇒ new access token or `{ error: "invalid_grant" }` when revoked |
 | `POST /revoke` | records the token in `/__fake/revocations` |
 | `POST /v1/sessions` (Bearer required) | `{ id, pickerUri: "<public base>/picker/<id>", pollingConfig: { pollInterval: "3s", timeoutIn: "1800s" }, expireTime, mediaItemsSet: false }` |
@@ -606,10 +606,10 @@ fixtures and omits `H-1`). Refused in production: the CLI exits when `NODE_ENV=p
 | Item | Change |
 | --- | --- |
 | `.env.dev` | `GOOGLE_IMPORT_PROVIDER=fake` documented (Compose interpolation default `fake`), `GOOGLE_FAKE_PORT=8099`, comments for `GOOGLE_IMPORT_CLIENT_ID/SECRET` (unset; a real dev run sets them plus `GOOGLE_IMPORT_PROVIDER=live` in `.env.local`), `IMPORT_CONCURRENCY=2` |
-| `docker-compose.dev.yml` | new service `google-fake` (worker image, `command: ["pnpm","--filter","@littlelight/worker","google-fake"]`, `ports: "${GOOGLE_FAKE_BIND:-127.0.0.1}:${GOOGLE_FAKE_PORT:-8099}:8099"`, env `GOOGLE_FAKE_PUBLIC_URL=http://localhost:${GOOGLE_FAKE_PORT:-8099}`, `GOOGLE_FAKE_INTERNAL_URL=http://google-fake:8099`, healthcheck `GET /healthz`, no DB/S3 env); `api` and `worker` get `GOOGLE_IMPORT_PROVIDER: ${GOOGLE_IMPORT_PROVIDER:-fake}`, `GOOGLE_IMPORT_FAKE_URL: http://google-fake:8099`, api `GOOGLE_IMPORT_FAKE_PUBLIC_URL: http://localhost:${GOOGLE_FAKE_PORT:-8099}`, `GOOGLE_IMPORT_CLIENT_ID/SECRET` from `.env.local` (empty = unset), worker `IMPORT_CONCURRENCY`; `depends_on: google-fake: service_healthy` for api and worker **only when provider is fake** (Compose cannot express that — make `google-fake` always start in dev; it is tiny) |
+| `docker-compose.dev.yml` | new service `google-fake` (worker image, `command: ["pnpm","--filter","@tinyglow/worker","google-fake"]`, `ports: "${GOOGLE_FAKE_BIND:-127.0.0.1}:${GOOGLE_FAKE_PORT:-8099}:8099"`, env `GOOGLE_FAKE_PUBLIC_URL=http://localhost:${GOOGLE_FAKE_PORT:-8099}`, `GOOGLE_FAKE_INTERNAL_URL=http://google-fake:8099`, healthcheck `GET /healthz`, no DB/S3 env); `api` and `worker` get `GOOGLE_IMPORT_PROVIDER: ${GOOGLE_IMPORT_PROVIDER:-fake}`, `GOOGLE_IMPORT_FAKE_URL: http://google-fake:8099`, api `GOOGLE_IMPORT_FAKE_PUBLIC_URL: http://localhost:${GOOGLE_FAKE_PORT:-8099}`, `GOOGLE_IMPORT_CLIENT_ID/SECRET` from `.env.local` (empty = unset), worker `IMPORT_CONCURRENCY`; `depends_on: google-fake: service_healthy` for api and worker **only when provider is fake** (Compose cannot express that — make `google-fake` always start in dev; it is tiny) |
 | `.env.example`, `docker-compose.yml` | `GOOGLE_IMPORT_PROVIDER` (default `none`), `GOOGLE_IMPORT_CLIENT_ID`, `GOOGLE_IMPORT_CLIENT_SECRET` → **api and worker only** (`check-compose-keys.mjs` learns the two names), `IMPORT_CONCURRENCY` (worker); no fake service in production; worker `tmpfs: /tmp:size=2g` if the service is `read_only` (verify; the download staging needs ≤ `IMPORT_CONCURRENCY × 100 MiB`) |
 | Android dev | `NATIVE.md` adds `adb reverse tcp:8099 tcp:8099` |
-| CI (10.14) | `import-hygiene.sh`: no `console.log`/`log.*(baseUrl|pickerUri|refresh_token|access_token)` under `apps/api/src/imports`, `apps/worker/src/import`, `apps/mobile-web/src/platform/native/photoSync.ts`; no `print(`/`NSLog(` in `LittlelightPhotoSync.swift`; both iOS plists carry `UIBackgroundModes` + `BGTaskSchedulerPermittedIdentifiers`; `loggingBehavior: "none"` unchanged; `GOOGLE_IMPORT_CLIENT_SECRET` reaches api + worker only; `@capacitor/browser` is the only new dependency (lockfile diff of `package.json` names). Dev-stack job: `google-fake` healthy, `pnpm e2e:import-gate` + log scan; `scan-logs-for-secrets.mjs` patterns of 2.3 |
+| CI (10.14) | `import-hygiene.sh`: no `console.log`/`log.*(baseUrl|pickerUri|refresh_token|access_token)` under `apps/api/src/imports`, `apps/worker/src/import`, `apps/mobile-web/src/platform/native/photoSync.ts`; no `print(`/`NSLog(` in `TinyglowPhotoSync.swift`; both iOS plists carry `UIBackgroundModes` + `BGTaskSchedulerPermittedIdentifiers`; `loggingBehavior: "none"` unchanged; `GOOGLE_IMPORT_CLIENT_SECRET` reaches api + worker only; `@capacitor/browser` is the only new dependency (lockfile diff of `package.json` names). Dev-stack job: `google-fake` healthy, `pnpm e2e:import-gate` + log scan; `scan-logs-for-secrets.mjs` patterns of 2.3 |
 
 ### 2.11 Frontend screens (frontend-engineer, `apps/mobile-web/src/**`; `docs/DESIGN.md`)
 
@@ -621,7 +621,7 @@ fixtures and omits `H-1`). Refused in production: the CLI exits when `NODE_ENV=p
   (`free_tier_limit` ⇒ "Free album is full (1,000 photos)"; `permission_denied` ⇒ "Allow full
   photo access in Settings"; `album_missing` ⇒ "That album no longer exists"), actions "Sync now"
   and an overflow with Pause/Resume, Wi-Fi only, Change album, Stop syncing (confirm; copy says
-  nothing is deleted from Littlelight).
+  nothing is deleted from Tinyglow).
 - **Set up sync sheet** (iOS): step 1 explanation + "Allow access to Photos" (**this button
   triggers the permission prompt**; `limited`/`denied` ⇒ explanation + "Open Settings" via
   `App.openSettings`?? — not in `@capacitor/app`; use the `app-settings:` URL scheme is rejected
@@ -635,7 +635,7 @@ fixtures and omits `H-1`). Refused in production: the CLI exits when `NODE_ENV=p
   album · 1 skipped (video) · 1 failed"; `google_reconnect` ⇒ "Reconnect Google"; contributor
   notice "Imported photos wait for a parent's approval". `pages/import/GoogleConnectedPage.tsx`
   at `/import/google/connected`: web ⇒ "Connected" + auto-return to `returnTo` after 1 s;
-  `client=native` ⇒ "Connected. Return to Littlelight." (no button needed; the user closes the
+  `client=native` ⇒ "Connected. Return to Tinyglow." (no button needed; the user closes the
   browser sheet); `status=denied|scope_missing` copy.
 - **Settings → Photo import** (`pages/settings/ImportPage.tsx`): Google connection row (connected
   since · Disconnect with confirm); "Album sync" list of every `import_sources` row of the current
@@ -683,7 +683,7 @@ ai-engineer has no task: the step makes no model call and leaves `packages/ai`, 
   e2e/native/ios-sync-gate.sh`); `apps/worker` `google-fake` (`tsx src/import/google/fake-server.ts`
   in dev; `node dist/import/google/fake-server.js` in the image — match how `run-job` is wired).
 - Done-when: `pnpm install --frozen-lockfile` is a no-op afterwards; `pnpm lint && pnpm typecheck
-  && pnpm test` green; `pnpm --filter @littlelight/mobile-web native:sync` updates
+  && pnpm test` green; `pnpm --filter @tinyglow/mobile-web native:sync` updates
   `ios/App/CapApp-SPM/Package.swift` and `android/app/capacitor.build.gradle` with the browser
   plugin (commit those generated files in 10.5).
 
@@ -733,8 +733,8 @@ ai-engineer has no task: the step makes no model call and leaves `packages/ai`, 
 
 ### 10.5 iOS plugin, BGTask, Wi-Fi-only session, plists, privacy manifest (mobile-engineer) — group 1 (parallel; after 10.1 for the browser plugin sync)
 
-- Owned: `apps/mobile-web/ios/**` (`App/App/LittlelightPhotoSync.swift` new, `AppDelegate.swift`,
-  `LittlelightUploader.swift`, `Info.plist`, `Info-Debug.plist`, `PrivacyInfo.xcprivacy`,
+- Owned: `apps/mobile-web/ios/**` (`App/App/TinyglowPhotoSync.swift` new, `AppDelegate.swift`,
+  `TinyglowUploader.swift`, `Info.plist`, `Info-Debug.plist`, `PrivacyInfo.xcprivacy`,
   `App.xcodeproj/project.pbxproj`, `CapApp-SPM/Package.swift`), `apps/mobile-web/android/**`
   (generated `capacitor.build.gradle` only), `capacitor.config.ts` (nothing expected),
   `apps/mobile-web/scripts/check-ios-plists.ts` (only if the equality check needs the new keys
@@ -744,12 +744,12 @@ ai-engineer has no task: the step makes no model call and leaves `packages/ai`, 
   `Application Support/ll-sync` excluded from backup; `requestAuthorization` is only ever called
   from the JS `enable()` path (the plugin has no implicit request); both plists edited together;
   Wi-Fi-only session identifier handled in `handleEventsForBackgroundURLSession`.
-- Done-when: `pnpm --filter @littlelight/mobile-web ios:build:sim` succeeds; `check:ios-plists`
+- Done-when: `pnpm --filter @tinyglow/mobile-web ios:build:sim` succeeds; `check:ios-plists`
   passes; `PlistBuddy -c 'Print :UIBackgroundModes' …/App.app/Info.plist` lists `fetch` and
-  `:BGTaskSchedulerPermittedIdentifiers` lists `com.tesarsoft.littlelight.sync` on **both**
+  `:BGTaskSchedulerPermittedIdentifiers` lists `com.tesarsoft.tinyglow.sync` on **both**
   configurations; `plutil -lint` on both source plists; `grep -nE 'print\(|NSLog\(|os_log'
-  apps/mobile-web/ios/App/App/LittlelightPhotoSync.swift` ⇒ exit 1; a throwaway JS call from the
-  simulator (`LittlelightPhotoSync.listAlbums()`) returns `{albums: []}` on a fresh simulator and
+  apps/mobile-web/ios/App/App/TinyglowPhotoSync.swift` ⇒ exit 1; a throwaway JS call from the
+  simulator (`TinyglowPhotoSync.listAlbums()`) returns `{albums: []}` on a fresh simulator and
   the album created in 4.4 step 3 afterwards.
 
 ### 10.6 Store copy, review notes, Data Safety, NATIVE.md (mobile-engineer) — group 2 (after 10.5, same lane)
@@ -779,7 +779,7 @@ ai-engineer has no task: the step makes no model call and leaves `packages/ai`, 
 - Build 2.9. Explicit: exits in production; no GPS IFD in any rendered file (assert at start by
   reading back with `exifr`); token/code shapes `fake-(access|refresh|code)-…`; `__fake/requests`
   records method + path only; the catalogue is deterministic (seeded) so tests can assert SHA-256s.
-- Done-when: `pnpm --filter @littlelight/worker google-fake` serves `/healthz`; `curl -s
+- Done-when: `pnpm --filter @tinyglow/worker google-fake` serves `/healthz`; `curl -s
   localhost:8099/__fake/items | jq length` ⇒ 12 (or 13 with the HEIC fixture dir); `exiftool`
   (via Docker, as in step 4) on `__fake/items/G-1` shows `DateTimeOriginal` and no `GPS*` tags.
 
@@ -829,7 +829,7 @@ ai-engineer has no task: the step makes no model call and leaves `packages/ai`, 
   power / thermal skip; `free_tier_limit` stops the run; background runs do one batch and call
   `completeBackgroundTask`; sign-out clears config + ledger and pauses the server row best
   effort; `docs/DESIGN.md` (one primary action, skeletons, 44 px, AA chips).
-- Done-when: `pnpm --filter @littlelight/mobile-web typecheck && test` green with a fake plugin
+- Done-when: `pnpm --filter @tinyglow/mobile-web typecheck && test` green with a fake plugin
   (unit tests of `PhotoSyncManager`: first run exports/uploads/records, `duplicate` outcome,
   `free_tier_limit` stop, Wi-Fi gate, min-interval skip, background single batch); screenshots
   of the Upload screen states and the setup sheet (light/dark × phone) reviewed.
@@ -947,7 +947,7 @@ every earlier gate the touched code could affect. Run from the repo root with Do
 pnpm install --frozen-lockfile
 pnpm lint && pnpm typecheck
 bash .github/scripts/import-hygiene.sh && bash .github/scripts/native-hygiene.sh && bash .github/scripts/ai-hygiene.sh && bash .github/scripts/share-hygiene.sh && bash .github/scripts/sentry-hygiene.sh
-pnpm --filter @littlelight/mobile-web check:ios-plists
+pnpm --filter @tinyglow/mobile-web check:ios-plists
 node .github/scripts/check-compose-keys.mjs
 git diff --stat 23ff8d6.. -- packages/ai apps/worker/src/ai apps/api/src/chat apps/api/src/search   # empty: no AI change
 pnpm test
@@ -959,7 +959,7 @@ git diff --exit-code -- packages/db/src/generated
 
 ```sh
 docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d --build --wait
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                                                  # 20
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 docker compose -f docker-compose.dev.yml logs worker | grep 'queues: 16'
@@ -970,7 +970,7 @@ pnpm e2e:import-gate && pnpm e2e:import-gate
 pnpm e2e:upload-gate && pnpm e2e:share-gate && pnpm e2e:export-gate && pnpm e2e:push-gate && pnpm e2e:ai-gate
 ```
 
-### 4.3 Google import walkthrough against the fake (`B=http://localhost:8080`, `G=http://localhost:8099`, cookie jar per user, `H='x-littlelight-client: web'`)
+### 4.3 Google import walkthrough against the fake (`B=http://localhost:8080`, `G=http://localhost:8099`, cookie jar per user, `H='x-tinyglow-client: web'`)
 
 1. As demo mom: `GET $B/api/me/import/google/connection` ⇒ `{available:true, connected:false,
    needsReconnect:false}`. `POST $B/api/me/import/google/connect -d '{"client":"web"}'` ⇒ `{url}`
@@ -993,7 +993,7 @@ pnpm e2e:upload-gate && pnpm e2e:share-gate && pnpm e2e:export-gate && pnpm e2e:
    and e.taken_at is not null"` ⇒ 5; `… and e.gps_lat_enc is not null` ⇒ **0** (Google strips
    location; the fake mirrors it); `GET $B/api/babies/<maya>/photos/<p>` shows `takenAt`
    2026-03-0N 10:00 +01:00 and `exif.cameraMake "Fake"`; `docker compose exec storage mc ls
-   local/littlelight/babies/<maya>/originals/ | wc -l` grew by 5 (no object for the duplicate,
+   local/tinyglow/babies/<maya>/originals/ | wc -l` grew by 5 (no object for the duplicate,
    skipped or failed items).
 7. As the nanny (contributor): connect with `?account=nanny` ⇒ import G-7, P-1 ⇒ `done`, 2
    photos `pending`, `approved_by IS NULL`; the approval queue lists them; as mom approve one ⇒
@@ -1006,21 +1006,21 @@ pnpm e2e:upload-gate && pnpm e2e:share-gate && pnpm e2e:export-gate && pnpm e2e:
 9. `DELETE $B/api/me/import/google/connection` ⇒ 204; `GET $G/__fake/revocations` lists the
    token; `connection.connected:false`. As the nanny: `POST $B/api/babies/<maya>/import-sources
    -d '{"kind":"apple_photos",…}'` ⇒ 403 `parents_only`.
-10. Logs: `docker compose logs api worker google-fake | grep -E "fake-(access|refresh|code)-|/media/|pickerUri|X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|@littlelight\.local"; echo "exit $?"` ⇒ exit 1.
+10. Logs: `docker compose logs api worker google-fake | grep -E "fake-(access|refresh|code)-|/media/|pickerUri|X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|@tinyglow\.local"; echo "exit $?"` ⇒ exit 1.
 
 ### 4.4 iOS album sync gate (`pnpm e2e:native-ios-sync`; needs the installed iOS 26.4 simulator runtime, Xcode; dev stack up)
 
 ```sh
 UDID=$(xcrun simctl list devices -j | node -e '…same lookup as ios-gate.sh…')   # iPhone 17 / iOS 26.4
-pnpm --filter @littlelight/mobile-web native:sync:ios && pnpm --filter @littlelight/mobile-web ios:build:sim
-xcrun simctl boot "$UDID"; xcrun simctl privacy "$UDID" reset photos com.tesarsoft.littlelight
+pnpm --filter @tinyglow/mobile-web native:sync:ios && pnpm --filter @tinyglow/mobile-web ios:build:sim
+xcrun simctl boot "$UDID"; xcrun simctl privacy "$UDID" reset photos com.tesarsoft.tinyglow
 xcrun simctl install "$UDID" apps/mobile-web/ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app
 # runner may use PhotoKit without a prompt (its bundle id is the UI-test bundle id + ".xctrunner")
-xcrun simctl privacy "$UDID" grant photos com.tesarsoft.littlelight.LLUITests.xctrunner
+xcrun simctl privacy "$UDID" grant photos com.tesarsoft.tinyglow.LLUITests.xctrunner
 # 1. seed the library: 3 HEIC (one with GPS, one with a tz offset) + 2 JPEG
 xcrun simctl addmedia "$UDID" e2e/fixtures/heic/gps-640x480.heic e2e/fixtures/heic/datetime-tz.heic e2e/fixtures/heic/plain-640x480.heic e2e/fixtures/bakeoff-sample/sample-1-gradient.jpg e2e/fixtures/bakeoff-sample/sample-2-blocks.jpg
 uitest testCreateAlbum LL_ALBUM="LL Sync Test" LL_ALBUM_COUNT=5
-# 2. one album photo is already in Littlelight (cross-device dedupe): upload plain-640x480.heic via the API as demo mom
+# 2. one album photo is already in Tinyglow (cross-device dedupe): upload plain-640x480.heic via the API as demo mom
 # 3. sign in (ios-gate helper), then enable sync; the permission alert must appear HERE and not earlier
 uitest testEnableSync LL_ALBUM="LL Sync Test" LL_EXPECT="4 imported"      # taps "Allow Full Access"
 ```
@@ -1046,13 +1046,13 @@ Then (`$PSQL` as in 4.2, `M=<maya>`):
   becomes `launch` after a run (or the min-interval skip leaves `manual`; accept either within
   60 s of the previous run).
 - Sign out (ios-gate helper) ⇒ `paused = t, last_error = 'signed_out'`; the ledger directory is
-  gone (`xcrun simctl get_app_container "$UDID" com.tesarsoft.littlelight data` → no
+  gone (`xcrun simctl get_app_container "$UDID" com.tesarsoft.tinyglow data` → no
   `Library/Application Support/ll-sync/*.json`); `Caches/ll-uploads` empty.
 - Log scan: `xcrun simctl spawn "$UDID" log show --last 20m --predicate 'process == "App"' |
   grep -E "ll-uploads/|X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|-?[0-9]{1,3}\.[0-9]{3,},\s*-?[0-9]{1,3}\.[0-9]{3,}|/var/mobile/Media"; echo "exit $?"` ⇒ exit 1; api + worker logs as in 4.3.10.
 - Manual checklist printed by the gate: **background refresh** — with the app running under
   Xcode, pause and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler]
-  _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.littlelight.sync"]`, resume ⇒ one batch
+  _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.tinyglow.sync"]`, resume ⇒ one batch
   imports and `last_trigger = 'background'`; cannot be automated from the shell (best effort by
   design, D13). Wi-Fi only: Settings → simulate "cellular" is not possible on the simulator; the
   unit test covers the gate; verify on a device in part B.
@@ -1092,7 +1092,7 @@ decisions of section 5 recorded; the user-blocked list (5.3) copied to open issu
   minute except "Sync now". A 3,000-photo album at ~3 photos/s is ~17 min of foreground time
   (background PUTs continue after the app is suspended; hashing/exporting needs the app awake).
   Override: oldest first; smaller batches.
-- **D5 — Deletions.** Never delete from Littlelight when a photo leaves the album (the ledger
+- **D5 — Deletions.** Never delete from Tinyglow when a photo leaves the album (the ledger
   keeps it as done; a re-add is a no-op). Stopping sync deletes nothing. Recommended as asked.
 - **D6 — Google tokens and downloads.** Server-side OAuth (one Google **web** client; the api
   owns the redirect URI), refresh token encrypted with pgcrypto under `DATA_ENCRYPTION_KEY`
@@ -1136,7 +1136,7 @@ decisions of section 5 recorded; the user-blocked list (5.3) copied to open issu
   (the web client uses its secret; PKCE adds nothing server-to-server). Override: a
   `google_oauth_states` table.
 - **D15 — Returning to the app after consent/picking.** The callback redirects to a plain SPA
-  page ("Connected. Return to Littlelight."); the app re-checks the connection on `resume` /
+  page ("Connected. Return to Tinyglow."); the app re-checks the connection on `resume` /
   `browserFinished` and polls batch status, so no deep link or Universal Link is involved and
   the dev simulator works without association. Override: a `/import/google/done` universal link.
 - **D16 — New dependency**: `@capacitor/browser` (SFSafariViewController / Custom Tabs). Google
@@ -1207,15 +1207,15 @@ make it `not_member` if cheap).
 - **Needs the user (blocks real Google use, not the gate):**
   1. Google Cloud project (recommend reusing the one planned for Google sign-in) with the
      **Google Photos Picker API** enabled.
-  2. OAuth consent screen: External; app name "Littlelight", support email, logo, home page /
-     privacy policy / terms URLs on `littlelight.tesarsoft.com`, authorized domain
-     `tesarsoft.com`; scope `…/auth/photospicker.mediaitems.readonly` added.
+  2. OAuth consent screen: External; app name "Tinyglow", support email, logo, home page /
+     privacy policy / terms URLs on `tinyglow.app`, authorized domain
+     `tinyglow.app`; scope `…/auth/photospicker.mediaitems.readonly` added.
   3. Publishing status **Testing** with test users (≤ 100 Google accounts; refresh tokens
      expire after 7 days in this state), then **In production** + Google's brand/scope
      verification for the sensitive scope (verified domain, privacy policy, possibly a demo
      video; allow days to weeks).
   4. OAuth client, type **Web application**: authorized redirect URIs
-     `https://littlelight.tesarsoft.com/api/import/google/callback` and, for a real-Google dev
+     `https://tinyglow.app/api/import/google/callback` and, for a real-Google dev
      run, `http://localhost:8080/api/import/google/callback`. iOS/Android client ids are **not**
      needed for this design (D18).
   5. Production `.env`: `GOOGLE_IMPORT_PROVIDER=live`, `GOOGLE_IMPORT_CLIENT_ID`,

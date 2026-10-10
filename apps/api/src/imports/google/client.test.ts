@@ -1,4 +1,4 @@
-import { GOOGLE_PICKER_SCOPE } from "@littlelight/shared";
+import { GOOGLE_PICKER_SCOPE } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   createGoogleClient,

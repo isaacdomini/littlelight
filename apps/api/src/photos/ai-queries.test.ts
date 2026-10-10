@@ -1,4 +1,4 @@
-import { aiDescriptionV1Schema, type PhotoAiOverridePatch } from "@littlelight/shared";
+import { aiDescriptionV1Schema, type PhotoAiOverridePatch } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { Tx } from "../auth";
 import { sampleDescription } from "../testing/ai";

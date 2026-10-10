@@ -7,14 +7,14 @@
 #   3. run restore-test.sh against the newest restored pg_dump
 # Never touches the live database or STORAGE_PATH. The scratch dir is deleted on exit.
 #
-# Reads /etc/littlelight/offsite.env (see offsite-backup.sh) and the stack's .env for
+# Reads /etc/tinyglow/offsite.env (see offsite-backup.sh) and the stack's .env for
 # S3_ROOT_USER / S3_ROOT_PASSWORD (MinIO root: the restored data's IAM store belongs to it) /
 # S3_BUCKET / MINIO_IMAGE / MC_IMAGE.
-#   APP_DIR=/srv/littlelight/app docker/backup/offsite-restore-test.sh
+#   APP_DIR=/srv/tinyglow/app docker/backup/offsite-restore-test.sh
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
-OFFSITE_ENV="${OFFSITE_ENV:-/etc/littlelight/offsite.env}"
+OFFSITE_ENV="${OFFSITE_ENV:-/etc/tinyglow/offsite.env}"
 RESTIC_IMAGE="${RESTIC_IMAGE:-restic/restic:0.19.1}"
 PG_IMAGE="${PG_IMAGE:-pgvector/pgvector:0.8.7-pg17}"
 SCRATCH_PARENT="${SCRATCH_PARENT:-/var/tmp}"
@@ -31,9 +31,9 @@ set +a
 MINIO_IMAGE="${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
 MC_IMAGE="${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}"
 
-SCRATCH="$(mktemp -d "$SCRATCH_PARENT/littlelight-restore.XXXXXX")"
-NET="littlelight-restore-$$"
-MINIO_C="littlelight-restore-minio-$$"
+SCRATCH="$(mktemp -d "$SCRATCH_PARENT/tinyglow-restore.XXXXXX")"
+NET="tinyglow-restore-$$"
+MINIO_C="tinyglow-restore-minio-$$"
 cleanup() {
   docker rm -f "$MINIO_C" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
@@ -46,9 +46,9 @@ docker run --rm \
   -e RESTIC_REPOSITORY -e RESTIC_PASSWORD \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
   -e B2_ACCOUNT_ID -e B2_ACCOUNT_KEY \
-  -v littlelight-restic-cache:/root/.cache/restic \
+  -v tinyglow-restic-cache:/root/.cache/restic \
   -v "$SCRATCH:/restore" \
-  "$RESTIC_IMAGE" restore latest --tag littlelight --target /restore
+  "$RESTIC_IMAGE" restore latest --tag tinyglow --target /restore
 
 [ -d "$SCRATCH/data/storage" ] || { log "FAIL snapshot has no /data/storage"; exit 1; }
 [ -d "$SCRATCH/data/backups" ] || { log "FAIL snapshot has no /data/backups"; exit 1; }
@@ -71,7 +71,7 @@ count_objects() { # network, endpoint
 restored="$(count_objects "$NET" http://minio:9000)"
 log "restored bucket $S3_BUCKET: $restored objects"
 
-live_net="$(docker network ls --format '{{.Name}}' | grep -x 'littlelight_default' || true)"
+live_net="$(docker network ls --format '{{.Name}}' | grep -x 'tinyglow_default' || true)"
 if [ -n "$live_net" ]; then
   live="$(count_objects "$live_net" http://storage:9000)"
   log "live bucket $S3_BUCKET: $live objects"

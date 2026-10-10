@@ -159,13 +159,13 @@ try {
         "storage",
         "sh",
         "-c",
-        `cd /data/littlelight-dev/babies/${MAYA} && rm -rf ${rm}`,
+        `cd /data/tinyglow-dev/babies/${MAYA} && rm -rf ${rm}`,
       ],
       { cwd: ROOT },
     ).catch(() => undefined);
   }
   await psql(
-    `delete from google_accounts where user_id = (select id from auth.users where email = 'demo-mom@littlelight.local')`,
+    `delete from google_accounts where user_id = (select id from auth.users where email = 'demo-mom@tinyglow.local')`,
   ).catch(() => undefined);
   await restoreMayaSeedState();
   console.log(`cleaned: ${added.length} photos, ${batches.length} batches`);

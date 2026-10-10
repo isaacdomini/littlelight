@@ -1,6 +1,6 @@
-import type { DataExport } from "@littlelight/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
+import type { DataExport } from "@tinyglow/shared";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonResponse, setNativePlatform, stubFetch } from "../../testing/native";

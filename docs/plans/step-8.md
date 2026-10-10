@@ -13,7 +13,7 @@ created/renewed/revoked), "Non-functional requirements → Privacy and child saf
 until an admin explicitly shares them; GPS/EXIF stripped from viewer derivatives), "Security"
 (tokens ≥ 128-bit random, stored hashed; passcode attempts 5 / 15 min per IP + token; share-link
 access through a separate narrowly scoped role), "Mobile and Capacitor → Capacitor plugins" (deep
-link `littlelight.tesarsoft.com/s/{token}`: the web route now, native association in step 9),
+link `tinyglow.app/s/{token}`: the web route now, native association in step 9),
 "Responsive web" (installable PWA for viewers; share links work in any mobile browser), FR-8.4
 ("add to shared album" in the photo viewer), "AI pipeline" stage 6 ("Post-process: auto-share
 rules run"), FR-5.8 (sharing is in the free tier; AI is not), "Conventions".
@@ -60,7 +60,7 @@ sensitive gate (FR-9.5) is a database rule in four places: a rule can never inse
 unanalysed photo, a photo that becomes sensitive loses its rule shares instantly, a hand-added
 sensitive photo is shown to viewers as a hidden ("blurred") tile with **no image URL at all**
 until an admin explicitly chooses "Show to family" for that link, and the viewer role cannot even
-read the storage key of such a photo. A viewer opens `https://littlelight.tesarsoft.com/s/{token}`
+read the storage key of such a photo. A viewer opens `https://tinyglow.app/s/{token}`
 in any mobile browser (FR-9.6); the SPA exchanges the token (POST body, never a path segment the
 API logs) for an httpOnly `ll_viewer` cookie holding a short JWT (`role=viewer`, `share_link_id`,
 `exp` = the link's expiry, `jti` = the `viewer_sessions` row) whose session the API re-checks
@@ -100,10 +100,10 @@ No new service, no new dependency (passcodes use `node:crypto` scrypt; JWTs use 
 | Stored | `share_links.token_hash = sha256(token utf-8)` (bytea 32; high-entropy input, so a fast hash is correct). Lookup `WHERE token_hash = $1` under `service_role` only (users cannot read the column) |
 | URL | `${PUBLIC_URL}${SHARE_PATH}/${token}` with `SHARE_PATH = "/s"`. Returned **only** in the create and regenerate responses (D1); never logged, never stored in plaintext, never in an audit row |
 | Passcode | exactly 6 ASCII digits. Hash `scrypt$1$<N=16384>$<r=8>$<p=1>$<salt b64url 16 B>$<dk b64url 32 B>` via `crypto.scrypt`; verify with `timingSafeEqual`. Never logged; `req.body.passcode` redacted (2.9) |
-| IP / UA hashes | `HMAC-SHA256(k_ip, ip)` and `HMAC-SHA256(k_ip, userAgentLabel(ua))` (32 B) where `k_ip = HKDF-SHA256(JWT_SECRET, salt "littlelight", info "share-ip-v1", 32)`. Keyed so a DB leak cannot brute-force the IPv4 space |
-| Viewer JWT | HS256 with `k_viewer = HKDF-SHA256(JWT_SECRET, salt "littlelight", info "viewer-session-v1", 32)` (a different key from GoTrue's, so a viewer token can never verify as a user token or vice versa, R2); `iss = ${PUBLIC_URL}/api/share`, `aud = "littlelight-viewer"`; payload exactly `viewerClaimsSchema`: `{ role: "viewer", share_link_id, exp, iat, jti }` with `jti = viewer_sessions.id` and `exp = min(share_links.expires_at, now + SHARE_LINK_MAX_TTL_HOURS)` (PRD: `exp` = the link's expiry). Clock tolerance 5 s like `jwt.ts` |
+| IP / UA hashes | `HMAC-SHA256(k_ip, ip)` and `HMAC-SHA256(k_ip, userAgentLabel(ua))` (32 B) where `k_ip = HKDF-SHA256(JWT_SECRET, salt "tinyglow", info "share-ip-v1", 32)`. Keyed so a DB leak cannot brute-force the IPv4 space |
+| Viewer JWT | HS256 with `k_viewer = HKDF-SHA256(JWT_SECRET, salt "tinyglow", info "viewer-session-v1", 32)` (a different key from GoTrue's, so a viewer token can never verify as a user token or vice versa, R2); `iss = ${PUBLIC_URL}/api/share`, `aud = "tinyglow-viewer"`; payload exactly `viewerClaimsSchema`: `{ role: "viewer", share_link_id, exp, iat, jti }` with `jti = viewer_sessions.id` and `exp = min(share_links.expires_at, now + SHARE_LINK_MAX_TTL_HOURS)` (PRD: `exp` = the link's expiry). Clock tolerance 5 s like `jwt.ts` |
 | Cookie | `ll_viewer` (`VIEWER_COOKIE`), `HttpOnly; SameSite=Lax; Path=/api/share; Max-Age = exp − now`, `Secure` under the same rule as `ll_access` (`apps/api/src/auth/session.ts` `secure(config)`). Separate name **and** path from the parent session (`ll_access` Path `/api`, `ll_refresh` Path `/api/auth`): the viewer cookie never reaches a parent route, so a viewer can never call chat, search or any `/babies` route |
-| Native (step 9 seam) | `X-Littlelight-Client: native` on the exchange ⇒ the JWT comes back in the body (`viewerToken`) instead of a cookie, and viewer routes accept `Authorization: Bearer <viewer JWT>` (same transport rule as step 3). The web never uses it |
+| Native (step 9 seam) | `X-Tinyglow-Client: native` on the exchange ⇒ the JWT comes back in the body (`viewerToken`) instead of a cookie, and viewer routes accept `Authorization: Bearer <viewer JWT>` (same transport rule as step 3). The web never uses it |
 
 ### 2.3 Database (migration `1792100000100_sharing-v1.sql`, security-engineer)
 
@@ -221,7 +221,7 @@ that hold parent text; every policy change tested; nothing echoes tokens, passco
 
 Contributors: nothing new (every sharing policy requires `is_baby_admin`).
 
-### 2.4 Shared contracts (`@littlelight/shared`; architect-defined, security-engineer writes in 8.2 with orchestrator approval)
+### 2.4 Shared contracts (`@tinyglow/shared`; architect-defined, security-engineer writes in 8.2 with orchestrator approval)
 
 `src/constants.ts` (append): `SHARE_PATH = "/s"`, `SHARE_TOKEN_BYTES = 16`,
 `SHARE_LINK_TTL_CHOICES_HOURS = [24, 72, 168, 720] as const` (UI choices; default stays
@@ -233,7 +233,7 @@ Contributors: nothing new (every sharing policy requires `is_baby_admin`).
 `SHARE_DOWNLOAD_URL_TTL_SEC = 60`, `DEMO_IDS.shareToken = "demo-grandparents-share-token"` (dev only).
 
 `src/auth.ts`: `VIEWER_COOKIE = "ll_viewer"`, `VIEWER_COOKIE_PATH = "/api/share"`,
-`VIEWER_JWT_AUDIENCE = "littlelight-viewer"`. `AUDIT_EVENTS` append: `share_link.created`,
+`VIEWER_JWT_AUDIENCE = "tinyglow-viewer"`. `AUDIT_EVENTS` append: `share_link.created`,
 `share_link.updated` (name/download/passcode/ttl; metadata says which, never values),
 `share_link.renewed`, `share_link.regenerated`, `share_link.revoked`, `share_link.deleted`,
 `share_link.rule_updated`, `share_link.rule_removed`, `share_link.photos_added`,
@@ -351,9 +351,9 @@ their baby with `share_link_baby()` under the caller's claims (a stranger's id �
 
 **`viewer-auth.ts`**: `registerViewerAuth(app, config)` adds an `onRequest` hook for URLs under
 `/share/` only that sets `request.viewer: { claims, transport } | null` and `request.viewerError`
-from the `ll_viewer` cookie (or `Authorization: Bearer` when `X-Littlelight-Client: native`),
+from the `ll_viewer` cookie (or `Authorization: Bearer` when `X-Tinyglow-Client: native`),
 verified with `k_viewer`/iss/aud (2.2) and `viewerClaimsSchema` (`jti` required). Cookie-transport
-non-GET requests need `X-Littlelight-Client: web` (403 `csrf_rejected`, same rule as step 3).
+non-GET requests need `X-Tinyglow-Client: web` (403 `csrf_rejected`, same rule as step 3).
 `requireViewer` preHandler ⇒ 401 `unauthorized` "Open the link again" when absent/invalid/expired
 JWT. `withViewer(request, reply, fn)`: `runAs(app.db, "viewer", { claimsJson:
 claimsToSql(claims) }, …)`; first statement `SELECT … FROM public.viewer_session_check($jti)`; no
@@ -364,13 +364,13 @@ The step-3 user auth hook is untouched and ignored on `/share/*`.
 
 | Method, path | Behaviour |
 | --- | --- |
-| `POST /share/session` | Body `shareSessionRequest`; requires `X-Littlelight-Client`. In-memory throttle `SHARE_EXCHANGES_PER_IP_PER_HOUR` per IP ⇒ 429. One `withServiceRole(app, "share token exchange")` transaction (the **only** service_role site of this step): look up by `sha256(token)` joined to the live baby. Unknown / revoked / expired / trashed baby ⇒ **410 `share_link_expired`** (one response for all, no timing-relevant branches beyond the lookup). If the request already carries a valid viewer JWT for this link whose session is live ⇒ reuse it (no passcode prompt on reload, no new session, no view count). Else, passcode set: (a) ≥ `SHARE_PASSCODE_FAILURES_PER_LINK` failures in 60 min (after `token_rotated_at`) ⇒ 429 `passcode_locked` + `Retry-After`; (b) ≥ 5 failures for `(link, ip_hash)` in 15 min ⇒ 429 `rate_limited` + `Retry-After` — both checked **before** verifying, so a locked caller learns nothing; (c) no passcode ⇒ 401 `passcode_required` (not a failure); (d) wrong ⇒ insert a failure row (and prune that link's rows older than 24 h), 401 `passcode_invalid {attemptsLeft}`; reaching the per-link threshold writes `share_link.passcode_locked` once. Success ⇒ insert `viewer_sessions (share_link_id, expires_at = link.expires_at, ip_hash, user_agent_hash, last_seen_at = now())`, `view_count + 1, last_viewed_at = now()`; mint JWT; `Set-Cookie`; 200 `shareSessionResponse` (album read in the same transaction). Never logs the token, its hash or the passcode |
+| `POST /share/session` | Body `shareSessionRequest`; requires `X-Tinyglow-Client`. In-memory throttle `SHARE_EXCHANGES_PER_IP_PER_HOUR` per IP ⇒ 429. One `withServiceRole(app, "share token exchange")` transaction (the **only** service_role site of this step): look up by `sha256(token)` joined to the live baby. Unknown / revoked / expired / trashed baby ⇒ **410 `share_link_expired`** (one response for all, no timing-relevant branches beyond the lookup). If the request already carries a valid viewer JWT for this link whose session is live ⇒ reuse it (no passcode prompt on reload, no new session, no view count). Else, passcode set: (a) ≥ `SHARE_PASSCODE_FAILURES_PER_LINK` failures in 60 min (after `token_rotated_at`) ⇒ 429 `passcode_locked` + `Retry-After`; (b) ≥ 5 failures for `(link, ip_hash)` in 15 min ⇒ 429 `rate_limited` + `Retry-After` — both checked **before** verifying, so a locked caller learns nothing; (c) no passcode ⇒ 401 `passcode_required` (not a failure); (d) wrong ⇒ insert a failure row (and prune that link's rows older than 24 h), 401 `passcode_invalid {attemptsLeft}`; reaching the per-link threshold writes `share_link.passcode_locked` once. Success ⇒ insert `viewer_sessions (share_link_id, expires_at = link.expires_at, ip_hash, user_agent_hash, last_seen_at = now())`, `view_count + 1, last_viewed_at = now()`; mint JWT; `Set-Cookie`; 200 `shareSessionResponse` (album read in the same transaction). Never logs the token, its hash or the passcode |
 | `DELETE /share/session` | Clears the cookie; marks the session revoked through `withServiceRole("viewer sign-out")` only if the JWT verifies; 204 |
 | `GET /share/album` | `requireViewer` + `withViewer`: `shareAlbum` from `viewer_session_check` + counts under `viewer` RLS |
 | `GET /share/photos` | Keyset page (reuse the step-5 cursor encoding; `ORDER BY p.sort_at DESC, p.id DESC`) of `shared_photos ⋈ photos ⋈ photo_details ⋈ milestones` under `viewer` RLS; `hidden = p.is_sensitive AND NOT (added_by='user' AND sensitive_released_at IS NOT NULL)`; thumb URLs only for non-hidden rows, read from `photo_derivatives` (RLS already refuses hidden ones), signed with `ttlSec = min(SHARE_MEDIA_URL_TTL_SEC, link expiry − now)` and `cacheControl: "private, max-age=<ttl>"` |
 | `POST /share/photos/urls` | `viewerUrlsRequest` ⇒ fresh `thumb` or `display` URLs (same TTL rule) for visible ids only |
 | `POST /share/photos/:id/download` | 403 `forbidden` "Downloads are turned off for this album" unless `allow_download`; else the **`display` derivative** (1600 px, all metadata stripped; never the original, D9) signed for `SHARE_DOWNLOAD_URL_TTL_SEC` with `contentDisposition: attachment; filename="<baby>-<YYYY-MM-DD>.jpg"` (ASCII-safe) and `cacheControl: private`; hidden photo ⇒ 404 |
-| `GET /share/manifest.webmanifest?t=<token>` | Public, no DB: validates `t` with `shareTokenSchema` and returns `application/manifest+json` `{ name: "Family album · Littlelight", short_name: "Album", start_url: "/s/<t>", scope: "/s/", display: "standalone", background_color, theme_color, icons: [/icons/viewer-192.png, /icons/viewer-512.png (+ maskable)] }`, `Cache-Control: no-store`. Gives the installed PWA the exact link as its start URL (D11). The query string never reaches a log (`redactUrl`, nginx `$ll_log_path`) |
+| `GET /share/manifest.webmanifest?t=<token>` | Public, no DB: validates `t` with `shareTokenSchema` and returns `application/manifest+json` `{ name: "Family album · Tinyglow", short_name: "Album", start_url: "/s/<t>", scope: "/s/", display: "standalone", background_color, theme_color, icons: [/icons/viewer-192.png, /icons/viewer-512.png (+ maskable)] }`, `Cache-Control: no-store`. Gives the installed PWA the exact link as its start URL (D11). The query string never reaches a log (`redactUrl`, nginx `$ll_log_path`) |
 
 Logging in `sharing/**`: link ids, session ids, counts, outcomes, durations. **Never** tokens, token
 hashes, passcodes, passcode hashes, IPs, IP hashes, user agents, names or tags. `req.body.token`,
@@ -493,7 +493,7 @@ export function createAutoSharer(deps: AutoSharerDeps): {
 **Viewer side (8.9)** — public, no `AuthProvider` dependency, no tab bar, no chat, no search:
 - `App.tsx`: route `/s/:token` → `pages/share/SharedAlbumPage.tsx` outside every auth guard
   (`TAB_ROUTES` unchanged, so the tab bar stays hidden). `lib/shareApi.ts`: fetch wrapper for
-  `/api/share/*` (credentials same-origin, `X-Littlelight-Client: web`, shared schemas, never logs
+  `/api/share/*` (credentials same-origin, `X-Tinyglow-Client: web`, shared schemas, never logs
   the token; on 401/410 mid-session it re-runs the exchange once, then shows the expired state).
 - Flow: mount ⇒ `POST /api/share/session {token}` ⇒ 200 album | 401 `passcode_required` ⇒
   `components/share/PasscodeForm.tsx` (`share-passcode`, reuses `CodeEntry`, shows
@@ -528,7 +528,7 @@ export function createAutoSharer(deps: AutoSharerDeps): {
 | `docker-compose.dev.yml` | api gets `SHARE_MEDIA_URL_TTL_SEC: ${SHARE_MEDIA_URL_TTL_SEC:-300}` as a Compose interpolation so the gate can recreate the api with 30 s (like `VISION_PROVIDER`) |
 | `docker/nginx/default.conf` | `location ^~ /s/ { expires -1; add_header Referrer-Policy "no-referrer" always; add_header X-Robots-Tag "noindex, nofollow" always; <repeat the four server-level security headers>; try_files /index.html =404; }` (the access-log token mask already covers `/s/<token>`; add a comment); `location ^~ /api/share/` nested like the chat block is **not** needed (normal buffering) — but ensure `/api/share/manifest.webmanifest` keeps `Content-Type` from the api |
 | Vite | nothing (SPA fallback serves `/s/*`; `/api/share` goes through the `/api` proxy) — verify in 8.9 |
-| `docker/cloudflared/config.example.yml` | comment block: on the Cloudflare dashboard add a Cache Rule "Bypass cache" for `files.littlelight.tesarsoft.com` (belt and braces; responses already say `private`); production action for the user (D6) |
+| `docker/cloudflared/config.example.yml` | comment block: on the Cloudflare dashboard add a Cache Rule "Bypass cache" for `files.tinyglow.app` (belt and braces; responses already say `private`); production action for the user (D6) |
 | Root `package.json` | `"e2e:share-gate": "tsx e2e/sharing/gate.ts"` |
 | CI (8.12) | integration suite names for step 8 in `check-integration-report.mjs`; dev-stack job runs `pnpm e2e:share-gate` after the search gate (15-min timeout, upload `e2e/share-gate/` on failure); hygiene step: `grep -rn "withServiceRole" apps/api/src/sharing` ⇒ exactly 2 call sites (exchange, viewer sign-out); `grep -rnE "gps_lat_enc\|gps_lng_enc\|decrypt_coord\|dataKey" apps/worker/src/sharing` ⇒ empty; the "no token/passcode in logs" proof is the sentinel integration test (8.10) plus the gate's log scan |
 
@@ -705,7 +705,7 @@ links for `/s` are step 9; no model calls here).
   people column selected (extend the step-6 hygiene grep to `apps/worker/src/sharing`); sensitive
   and unanalysed photos never inserted (and the DB refuses anyway); auto-share runs before indexing
   and cannot fail the reindex batch; no model call.
-- Done-when: `queues: 12` in the boot log; on the fake dev stack `pnpm --filter @littlelight/worker
+- Done-when: `queues: 12` in the boot log; on the fake dev stack `pnpm --filter @tinyglow/worker
   run-job share.reconcile` exits 0 and adds no rule row for Maya's bath photo; 8.10's worker tests
   green.
 
@@ -743,7 +743,7 @@ links for `/s` are step 9; no model calls here).
 - Done-when: on the dev stack as mom: create link → URL sheet → copy; renew/regenerate/revoke update
   the card; rule editor saves on Maya (Plus) and shows the upsell on a free baby; timeline
   multi-select adds to a link with a toast; viewer share sheet toggles membership; nanny sees none
-  of it; `pnpm --filter @littlelight/mobile-web typecheck && test` green.
+  of it; `pnpm --filter @tinyglow/mobile-web typecheck && test` green.
 
 ### 8.9 Frontend viewer UI: `/s/:token`, passcode, expired page, album, PWA (frontend-engineer) — group 3 (after 8.8; integrates with 8.7)
 
@@ -795,7 +795,7 @@ links for `/s` are step 9; no model calls here).
 
 Seams for step 9: native deep link `/s/{token}` (AASA/assetlinks paths, `@capacitor/app` URL
 open ⇒ the same `SharedAlbumPage`), `@capacitor/share` for the URL sheet, the viewer bearer
-transport (`X-Littlelight-Client: native`), push "Grandma viewed the album" (the visit counter in
+transport (`X-Tinyglow-Client: native`), push "Grandma viewed the album" (the visit counter in
 `viewer_session_check` is the hook), full service worker/offline for the viewer PWA.
 
 ## 4. Acceptance checks
@@ -827,7 +827,7 @@ CI=1 pnpm e2e -- e2e/sharing/share.spec.ts
 ### 4.2 Database proof of "sensitive photos never auto-share"
 
 ```sh
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                                             # 15
 $PSQL "select count(*) from shared_photos sp join photos p on p.id=sp.photo_id where sp.added_by='rule' and p.is_sensitive"   # 0
 $PSQL "select count(*) from shared_photos sp where sp.added_by='rule' and not exists (select 1 from photo_ai a where a.photo_id=sp.photo_id)"   # 0
@@ -837,7 +837,7 @@ $PSQL "insert into shared_photos (share_link_id, photo_id, added_by) values ('00
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 ```
 
-### 4.3 API walkthrough (`B=http://localhost:8080`, `H='x-littlelight-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, `a.jar` = demo mom, `n.jar` = nanny, `v.jar` = a fresh viewer jar)
+### 4.3 API walkthrough (`B=http://localhost:8080`, `H='x-tinyglow-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, `a.jar` = demo mom, `n.jar` = nanny, `v.jar` = a fresh viewer jar)
 
 1. `curl -s -b a.jar "$B/api/babies/$MAYA/share-links" | jq '.links[0] | .name, .status, .photoCount, .hiddenCount'` → `"Grandparents"`, `"active"`, 4, 1; as the nanny → 403 `forbidden`.
 2. `curl -s -b a.jar -H "$H" -H 'content-type: application/json' -X POST $B/api/babies/$MAYA/share-links -d '{"name":"Gate","passcode":"482913"}' | tee /tmp/l.json | jq -r '.url, .link.expiresAt, .link.hasPasscode'` → `http://localhost:8080/s/<22 chars>`, ≈ now + 24 h, `true`.
@@ -868,12 +868,12 @@ docker stop ll-web-prod
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
 WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true \
 JWT_SECRET=dev-only-jwt-secret-at-least-32-characters PUBLIC_URL=http://localhost:8080 \
-MAIL_FROM=noreply@littlelight.local SMTP_HOST=localhost \
+MAIL_FROM=noreply@tinyglow.local SMTP_HOST=localhost \
 S3_ENDPOINT=http://localhost:9000 S3_PUBLIC_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev \
-S3_BUCKET=littlelight-test VISION_PROVIDER=fake pnpm test:integration
+S3_BUCKET=tinyglow-test VISION_PROVIDER=fake pnpm test:integration
 pnpm smoke && CI=1 pnpm e2e
 grep -rn "withServiceRole" apps/api/src/sharing | wc -l        # 2 (token exchange, viewer sign-out)
 grep -rnE "gps_lat_enc|gps_lng_enc|decrypt_coord|dataKey|\.note\b|\.people\b" apps/worker/src/sharing ; echo "exit $?"   # exit 1
@@ -923,7 +923,7 @@ a deep `GET /api/share/photos` page as its viewer ⇒ p95 < 300 ms; remove the l
   link's expiry; parents keep 1 h); every presigned GET carries `response-cache-control: private,
   max-age=<ttl>`, so Cloudflare (or any shared cache) never stores a photo and there is nothing to
   purge. Production action for the user: a Cloudflare Cache Rule "Bypass cache" on
-  `files.littlelight.tesarsoft.com` (documented in `docker/cloudflared/config.example.yml`). A
+  `files.tinyglow.app` (documented in `docker/cloudflared/config.example.yml`). A
   proxying media endpoint (instant revocation of bytes) was rejected: the PRD keeps photo bytes off
   the API server.
 - **D7 — scrypt (node:crypto) instead of argon2id for passcodes.** No new native dependency; a
@@ -986,6 +986,6 @@ a deep `GET /api/share/photos` page as its viewer ⇒ p95 < 300 ms; remove the l
   step 3); the persistent passcode ledger covers the brute-force case that matters.
 - **Needs the user:** nothing for the gate. Confirmations: D1 (show-once link vs encrypted copy),
   D2 (30-day maximum), D3 (auto-share Plus-only), D9 (downloads at 1600 px). Production only: the
-  Cloudflare cache-bypass rule for `files.littlelight.tesarsoft.com` (D6). Still open from earlier
+  Cloudflare cache-bypass rule for `files.tinyglow.app` (D6). Still open from earlier
   steps: production credentials (tunnel config, SMTP, B2, storage keys), Apple/Google IDs,
   Turnstile, legal text, CSAM provider.

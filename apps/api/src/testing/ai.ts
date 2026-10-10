@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { fakeDescription } from "@littlelight/ai";
-import type { AiDescriptionV1 } from "@littlelight/shared";
+import { fakeDescription } from "@tinyglow/ai";
+import type { AiDescriptionV1 } from "@tinyglow/shared";
 import type pg from "pg";
 
 // Superuser fixtures for the AI tests (apps/api integration). Test-only.

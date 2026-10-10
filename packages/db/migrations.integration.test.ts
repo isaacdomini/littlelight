@@ -1,6 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-// packages/db has no dependency on @littlelight/shared: relative import on purpose.
+// packages/db has no dependency on @tinyglow/shared: relative import on purpose.
 import { MILESTONE_PRESETS } from "../shared/src/constants";
 import { bootstrapFromEnv, ensureAuthSchemaStub, runMigrations } from "./src/index";
 import { databaseUrl, env } from "./test/harness";
@@ -133,7 +133,7 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     expect(misnamed).toEqual([]);
   });
 
-  it("seeds the global milestone presets exactly as @littlelight/shared MILESTONE_PRESETS", async () => {
+  it("seeds the global milestone presets exactly as @tinyglow/shared MILESTONE_PRESETS", async () => {
     const r = await rows(
       "SELECT id, name, category, sort_order FROM public.milestones WHERE baby_id IS NULL ORDER BY sort_order, id",
     );
@@ -154,8 +154,8 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
           "viewer",
           "pipeline",
           "service_role",
-          "littlelight_api",
-          "littlelight_worker",
+          "tinyglow_api",
+          "tinyglow_worker",
           "supabase_auth_admin",
         ],
       ],
@@ -164,14 +164,14 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     expect(Object.keys(by).sort()).toEqual([
       "anon",
       "authenticated",
-      "littlelight_api",
-      "littlelight_worker",
+      "tinyglow_api",
+      "tinyglow_worker",
       "pipeline",
       "service_role",
       "supabase_auth_admin",
       "viewer",
     ]);
-    for (const name of ["littlelight_api", "littlelight_worker"]) {
+    for (const name of ["tinyglow_api", "tinyglow_worker"]) {
       expect(by[name], name).toMatchObject({
         rolcanlogin: true,
         rolsuper: false,
@@ -190,8 +190,8 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
       "authenticated",
       "viewer",
       "pipeline",
-      "littlelight_api",
-      "littlelight_worker",
+      "tinyglow_api",
+      "tinyglow_worker",
     ]) {
       expect(by[name]?.rolbypassrls, name).toBe(false);
     }
@@ -206,13 +206,13 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     const r = await rows(
       `SELECT g.rolname AS grantee, m.rolname AS member, am.inherit_option, am.set_option
          FROM pg_auth_members am JOIN pg_roles g ON g.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
-        WHERE m.rolname IN ('littlelight_api', 'littlelight_worker') ORDER BY 2, 1`,
+        WHERE m.rolname IN ('tinyglow_api', 'tinyglow_worker') ORDER BY 2, 1`,
     );
     expect(r.map((x) => `${x.member}->${x.grantee}`)).toEqual([
-      "littlelight_api->authenticated",
-      "littlelight_api->service_role",
-      "littlelight_api->viewer",
-      "littlelight_worker->pipeline",
+      "tinyglow_api->authenticated",
+      "tinyglow_api->service_role",
+      "tinyglow_api->viewer",
+      "tinyglow_worker->pipeline",
     ]);
     for (const x of r)
       expect(x, `${x.member}->${x.grantee}`).toMatchObject({
@@ -225,7 +225,7 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     const r = await scalar(
       "SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'pgboss'",
     );
-    expect(r.owner).toBe("littlelight_worker");
+    expect(r.owner).toBe("tinyglow_worker");
   });
 
   it("nothing in public is reachable through PUBLIC: tables, sequences and helper functions", async () => {
@@ -267,15 +267,15 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     const r = await scalar(
       `SELECT bool_or(has_table_privilege(role, 'public.pgmigrations', 'SELECT')) AS mig,
               bool_or(has_table_privilege(role, 'auth.users', 'SELECT')) AS users
-         FROM unnest(ARRAY['anon','authenticated','viewer','pipeline','service_role','littlelight_api','littlelight_worker']) AS role`,
+         FROM unnest(ARRAY['anon','authenticated','viewer','pipeline','service_role','tinyglow_api','tinyglow_worker']) AS role`,
     );
     expect(r).toEqual({ mig: false, users: false });
   });
 
   it("the worker_heartbeats table is reachable only by the worker login role", async () => {
     const r = await scalar(
-      `SELECT has_table_privilege('littlelight_worker', 'public.worker_heartbeats', 'SELECT,INSERT,UPDATE,DELETE') AS worker,
-              has_table_privilege('littlelight_api', 'public.worker_heartbeats', 'SELECT') AS api,
+      `SELECT has_table_privilege('tinyglow_worker', 'public.worker_heartbeats', 'SELECT,INSERT,UPDATE,DELETE') AS worker,
+              has_table_privilege('tinyglow_api', 'public.worker_heartbeats', 'SELECT') AS api,
               has_table_privilege('authenticated', 'public.worker_heartbeats', 'SELECT') AS authed,
               has_table_privilege('pipeline', 'public.worker_heartbeats', 'SELECT') AS pipeline,
               has_table_privilege('anon', 'public.worker_heartbeats', 'SELECT') AS anon`,
@@ -303,8 +303,8 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
 
   it("the app roles can actually log in with their passwords (api, worker)", async () => {
     for (const [user, password] of [
-      ["littlelight_api", env.API_DB_PASSWORD],
-      ["littlelight_worker", env.WORKER_DB_PASSWORD],
+      ["tinyglow_api", env.API_DB_PASSWORD],
+      ["tinyglow_worker", env.WORKER_DB_PASSWORD],
     ] as const) {
       const url = new URL(databaseUrl as string);
       url.username = user;
@@ -447,7 +447,7 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
     expect(defacl).toEqual([]);
     // Roles survive (cluster-level, owned by the bootstrap).
     const roles = await rows(
-      "SELECT rolname FROM pg_roles WHERE rolname IN ('littlelight_api','pipeline','viewer')",
+      "SELECT rolname FROM pg_roles WHERE rolname IN ('tinyglow_api','pipeline','viewer')",
     );
     expect(roles).toHaveLength(3);
   });

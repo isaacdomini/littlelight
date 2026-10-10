@@ -410,7 +410,7 @@ describe.skipIf(!databaseUrl)("step 2 review-fix hardening", () => {
       }
     });
 
-    it("the real pipeline login (littlelight_worker) can call encrypt_coord", async () => {
+    it("the real pipeline login (tinyglow_worker) can call encrypt_coord", async () => {
       await db.asPipeline(async (c) => {
         await c.query("SELECT set_config('app.data_key', $1, true)", [DATA_KEY]);
         const r = await c.query("SELECT public.encrypt_coord(1.25) AS v");

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-// packages/db has no dependency on @littlelight/shared: relative import on purpose.
+// packages/db has no dependency on @tinyglow/shared: relative import on purpose.
 import { DEMO_IDS } from "../shared/src/constants";
 import { DEMO, type SeedResult, seed, seedFromEnv } from "./src/index";
 import { connect, DATA_KEY, type Db, databaseUrl, ensureMigrated, env } from "./test/harness";
@@ -186,9 +186,9 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
       [Object.values(DEMO_IDS.users)],
     );
     expect(u.rows.map((r) => r.email)).toEqual([
-      "demo-mom@littlelight.local",
-      "demo-dad@littlelight.local",
-      "demo-nanny@littlelight.local",
+      "demo-mom@tinyglow.local",
+      "demo-dad@tinyglow.local",
+      "demo-nanny@tinyglow.local",
     ]);
     for (const r of u.rows) {
       expect(r).toMatchObject({

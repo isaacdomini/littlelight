@@ -1,4 +1,4 @@
-import type { PushData, PushDeliveryStatus, PushEnv, PushProvider } from "@littlelight/shared";
+import type { PushData, PushDeliveryStatus, PushEnv, PushProvider } from "@tinyglow/shared";
 
 // Push sender contracts (docs/plans/step-9.md 2.8). Everything that reaches Apple or Google is a
 // `PushMessage`: the generic text of `pushMessage(kind, count)` (D10: no baby name, link name,

@@ -1,5 +1,5 @@
 // Prints which placeholders remain in the app-association files. Warning only: it never fails
-// the web build (docs/plans/step-9.md 2.4). Run: pnpm --filter @littlelight/mobile-web exec tsx scripts/check-association.ts
+// the web build (docs/plans/step-9.md 2.4). Run: pnpm --filter @tinyglow/mobile-web exec tsx scripts/check-association.ts
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

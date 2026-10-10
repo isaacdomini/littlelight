@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Littlelight worker (pg-boss). Build context: repo root (see docs/plans/step-1.md 2.13).
+# Tinyglow worker (pg-boss). Build context: repo root (see docs/plans/step-1.md 2.13).
 #   dev  : deps installed, source copied; docker-compose.dev.yml bind-mounts the src dirs over it
 #   prod : slim node:22 alpine, non-root, tsup bundle + production node_modules only
 ARG NODE_IMAGE=node:22.23.3-alpine
@@ -25,7 +25,7 @@ COPY packages/shared/package.json packages/shared/
 # ---------------------------------------------------------------------------
 FROM pnpm AS base
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@littlelight/worker..."
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@tinyglow/worker..."
 
 # ---------------------------------------------------------------------------
 FROM base AS dev
@@ -34,17 +34,17 @@ COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/ai packages/ai
 COPY apps/worker apps/worker
-CMD ["pnpm", "--filter", "@littlelight/worker", "dev"]
+CMD ["pnpm", "--filter", "@tinyglow/worker", "dev"]
 
 # ---------------------------------------------------------------------------
 FROM dev AS build
-RUN pnpm --filter @littlelight/worker build
+RUN pnpm --filter @tinyglow/worker build
 
 # ---------------------------------------------------------------------------
 # Production dependencies only. Workspace packages are bundled into dist by tsup.
 FROM pnpm AS prod-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@littlelight/worker" \
+    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@tinyglow/worker" \
  && find node_modules -path '*/@sentry*/*' -name '*.map' -type f -delete
 # ^ Sentry ships source maps for every build flavour (~35 MB); production stack traces point at
 # its compiled JS instead (our own dist keeps its maps for --enable-source-maps). Deleted in

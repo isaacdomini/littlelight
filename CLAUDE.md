@@ -1,6 +1,6 @@
-# Littlelight: build orchestration
+# Tinyglow: build orchestration
 
-You are the **orchestrator** for building Littlelight, a private, AI-organized baby photo album
+You are the **orchestrator** for building Tinyglow, a private, AI-organized baby photo album
 (web + iOS + Android via Capacitor, self-hosted with Docker Compose).
 
 - The full spec is `docs/PRD.md`. Read it completely before doing anything else. It is the source of truth.

@@ -50,7 +50,7 @@ describe("photo import constants (docs/plans/step-10.md 2.3)", () => {
     expect(SYNC_LANE_CONCURRENCY).toBe(2);
     expect(SYNC_ASSET_MAX_ATTEMPTS).toBe(3);
     expect(SYNC_MIN_INTERVAL_SEC).toBe(60);
-    expect(SYNC_BG_TASK_ID).toBe("com.tesarsoft.littlelight.sync");
+    expect(SYNC_BG_TASK_ID).toBe("com.tesarsoft.tinyglow.sync");
   });
 
   it("asks for the Picker scope only, over https endpoints", () => {

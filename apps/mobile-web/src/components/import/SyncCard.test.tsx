@@ -1,5 +1,5 @@
-import type { ImportSource } from "@littlelight/shared";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { ImportSource } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncConfig, SyncStatus } from "../../platform/native/photoSync";
 import { jsonResponse, stubFetch } from "../../testing/native";
@@ -162,7 +162,7 @@ describe("syncStatusLine", () => {
     ["free_tier_limit", "Free album is full (1,000 photos)"],
     ["permission_denied", "Allow full photo access in Settings"],
     ["album_missing", "That album no longer exists"],
-    ["network", "Couldn't reach Littlelight. It will try again later."],
+    ["network", "Couldn't reach Tinyglow. It will try again later."],
     ["storage_error", "Couldn't store some photos. It will try again later."],
     ["baby_trashed", "This album is in the trash"],
   ] as const)("error %s", (err, line) => {
@@ -259,12 +259,12 @@ describe("SyncCard", () => {
     expect(sync.setPaused).toHaveBeenCalledWith(false);
   });
 
-  it("Stop syncing asks first, says nothing is deleted from Littlelight, and only then disables", () => {
+  it("Stop syncing asks first, says nothing is deleted from Tinyglow, and only then disables", () => {
     renderApp(<SyncCard />);
     fireEvent.click(screen.getByTestId("sync-stop"));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.textContent).toMatch(/Stop syncing this album\?/);
-    expect(dialog.textContent).toMatch(/Photos already in Littlelight stay where they are/);
+    expect(dialog.textContent).toMatch(/Photos already in Tinyglow stay where they are/);
     expect(sync.disable).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByText("Stop syncing").at(-1) as HTMLElement);
     expect(sync.disable).toHaveBeenCalled();

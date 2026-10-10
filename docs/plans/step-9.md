@@ -33,13 +33,13 @@ What already exists (verified in the repo):
 - `apps/mobile-web/src/platform/platform.ts` (`isNative()` returns `false`; `clientKind()`),
   `platform/tokenStore.ts` (`TokenStore {get,set,clear}`, web no-op, `setTokenStore()`),
   `platform/uploader.ts` (`Uploader.putPart(url, blob)`, `setUploader()`); `lib/api.ts` already
-  sends `X-Littlelight-Client: native` + `Authorization: Bearer` and refreshes with
+  sends `X-Tinyglow-Client: native` + `Authorization: Bearer` and refreshes with
   `{refreshToken}` in the body when `isNative()`; `lib/sse.ts`, `lib/shareApi.ts` and
   `components/SystemStatus.tsx` use relative `/api` / `/auth` URLs.
 - API (step 3): native transport returns tokens in the body (no cookies) for `/auth/verify`,
   `/auth/refresh`, `/auth/pkce`, `/auth/id-token`; `/auth/id-token` implemented but providers are
   off; sessions list with `userAgentLabel()` (`packages/shared/src/auth.ts`); GoTrue session
-  inactivity 90 d. Step 8: viewer exchange with `X-Littlelight-Client: native` returns
+  inactivity 90 d. Step 8: viewer exchange with `X-Tinyglow-Client: native` returns
   `viewerToken` in the body and viewer routes accept `Authorization: Bearer` (the native seam);
   pino already redacts `req.body.token`.
 - Upload (step 4): resumable multipart, 16 MiB parts, presigned PUTs with no custom headers, the
@@ -61,7 +61,7 @@ Ship the existing React/Ionic app as real iOS and Android apps from the same cod
 everything that needs no Apple/Google account built and proven now on the iOS Simulator and an
 Android emulator, and a short, exact checklist for the parts that need the user's accounts
 (TestFlight, Play internal testing, APNs/FCM, social sign-in, store listings). Concretely: Capacitor
-projects for both platforms (bundle id `com.tesarsoft.littlelight`, D1) with plain-language
+projects for both platforms (bundle id `com.tesarsoft.tinyglow`, D1) with plain-language
 permission strings, an iOS privacy manifest, Android Photo Picker (no media permission), no-backup
 rules for tokens and cached photos, splash and adaptive icons; a native platform layer that points
 the bundled app at the API origin (`VITE_API_URL`), stores GoTrue access/refresh tokens only in the
@@ -84,14 +84,14 @@ install; links open the app) is **user-blocked** and is listed with exact steps 
 ### 2.1 Topology
 
 ```
-iOS app  (WKWebView origin capacitor://localhost)  ┐  fetch ${VITE_API_URL}/api/*   X-Littlelight-Client: native
+iOS app  (WKWebView origin capacitor://localhost)  ┐  fetch ${VITE_API_URL}/api/*   X-Tinyglow-Client: native
 Android  (WebView  origin https://localhost)       ┘  Authorization: Bearer <GoTrue access JWT>  (no cookies, CORS, 2.3)
    │  tokens ⇄ Keychain / Keystore (secure-storage plugin)           presigned PUT/GET ⇄ S3_PUBLIC_ENDPOINT (MinIO)
    │  background PUT of whole-file parts ⇄ native uploader (URLSession background / WorkManager)
-   │  appUrlOpen https://littlelight.tesarsoft.com/{invite/…, s/…, signin/native…} ⇒ router path (2.4)
+   │  appUrlOpen https://tinyglow.app/{invite/…, s/…, signin/native…} ⇒ router path (2.4)
    │  push token ⇒ POST /api/me/push-devices                          APNs / FCM ⇐ worker push.notify (2.8)
 dev:  iOS Simulator ⇒ http://localhost:8080 (+ :9000)   Android emulator ⇒ adb reverse tcp:8080 / tcp:9000 ⇒ localhost
-prod: https://littlelight.tesarsoft.com (nginx ⇒ api)   https://files.littlelight.tesarsoft.com (MinIO)
+prod: https://tinyglow.app (nginx ⇒ api)   https://files.tinyglow.app (MinIO)
 ```
 
 No new server-side service. New client dependencies are listed in 2.2 and need approval (R1).
@@ -102,13 +102,13 @@ CORS allow-list for the two Capacitor origins.
 
 | Item | Decision |
 | --- | --- |
-| Bundle id / applicationId | `com.tesarsoft.littlelight` (D1; permanent once published) |
-| Display name | `Littlelight` |
+| Bundle id / applicationId | `com.tesarsoft.tinyglow` (D1; permanent once published) |
+| Display name | `Tinyglow` |
 | Version | `1.0.0`, build `1` (iOS `CFBundleVersion`, Android `versionCode`), bumped by the release lanes |
 | Capacitor | latest stable major (8.x at time of writing) past pnpm's release-age gate; iOS project uses **Swift Package Manager** (Capacitor 8 default; no CocoaPods/Ruby needed to build) |
 | iOS | deployment target = Capacitor's default minimum; device family **iPhone only for v1** (D6); Xcode 27.0 |
 | Android | `compileSdk`/`targetSdk` **36** (Play's requirement for new apps from 31 Aug 2026; confirm in Play Console), `minSdk` = Capacitor default; JDK 21 (asdf); Gradle wrapper from the Capacitor template |
-| `capacitor.config.ts` | `appId`, `appName`, `webDir: "dist"`, `loggingBehavior: "none"` (**always**: Capacitor's debug logging prints plugin call arguments, which would put tokens and presigned URLs into logcat / the Xcode console), `appendUserAgent: "Littlelight/<version>"`, `server.androidScheme: "https"`, `CapacitorHttp.enabled: false`, `CapacitorCookies.enabled: false`, `android.allowMixedContent` only when `CAP_DEV_MIXED_CONTENT=1` (R6), `server.url` only when `CAP_LIVE_RELOAD_URL` is set (dev live reload; the release scripts refuse to build with it set), plugin config for SplashScreen (`launchAutoHide: false`), Keyboard (`resize: "native"`), PushNotifications (`presentationOptions: ["alert","sound"]`) |
+| `capacitor.config.ts` | `appId`, `appName`, `webDir: "dist"`, `loggingBehavior: "none"` (**always**: Capacitor's debug logging prints plugin call arguments, which would put tokens and presigned URLs into logcat / the Xcode console), `appendUserAgent: "Tinyglow/<version>"`, `server.androidScheme: "https"`, `CapacitorHttp.enabled: false`, `CapacitorCookies.enabled: false`, `android.allowMixedContent` only when `CAP_DEV_MIXED_CONTENT=1` (R6), `server.url` only when `CAP_LIVE_RELOAD_URL` is set (dev live reload; the release scripts refuse to build with it set), plugin config for SplashScreen (`launchAutoHide: false`), Keyboard (`resize: "native"`), PushNotifications (`presentationOptions: ["alert","sound"]`) |
 
 Client dependencies (added once, by 9.1; each needs orchestrator approval, R1):
 
@@ -138,19 +138,19 @@ Icons/splash are generated by an in-repo sharp script (sharp is already a root d
 - **API origin**: `src/platform/apiBase.ts` → `apiUrl(path)` = `${VITE_API_URL}/api${path}` when
   `isNative()`, else `/api${path}` (web unchanged). Same for `authUrl()` (`/auth/health` only).
   `VITE_API_URL` is an origin (`http://localhost:8080` for simulator/emulator builds,
-  `https://littlelight.tesarsoft.com` for release, a LAN IP for a physical phone per "Phones in
+  `https://tinyglow.app` for release, a LAN IP for a physical phone per "Phones in
   dev"). Baked at build time; contains no secret. Every caller (`lib/api.ts`, `lib/sse.ts`,
   `lib/shareApi.ts`, `components/SystemStatus.tsx`) goes through it.
 - **CORS (API, `apps/api/src/plugins/cors.ts`)**: only for `Origin` ∈ `NATIVE_APP_ORIGINS`
   (default `capacitor://localhost,https://localhost`). Preflight `OPTIONS` ⇒ 204 with
   `Access-Control-Allow-Origin: <origin>`, `-Methods: GET, POST, PUT, PATCH, DELETE`,
-  `-Headers: authorization, content-type, accept, x-littlelight-client`, `-Max-Age: 600`,
+  `-Headers: authorization, content-type, accept, x-tinyglow-client`, `-Max-Age: 600`,
   `Vary: Origin`. Actual responses: `Access-Control-Allow-Origin`, `Vary: Origin`,
   `Access-Control-Expose-Headers: Retry-After`. **Never** `Access-Control-Allow-Credentials` (no
   cookie ever crosses origins). Headers are set with `reply.raw.setHeader` in an `onRequest` hook
   so the chat SSE route (which writes the raw response; ai-engineer-owned) carries them without
   any change to `apps/api/src/chat/**`. A request from a native origin must carry
-  `X-Littlelight-Client: native` (else 403 `csrf_rejected`, same code as step 3). Unknown origins
+  `X-Tinyglow-Client: native` (else 403 `csrf_rejected`, same code as step 3). Unknown origins
   get no CORS headers (browser blocks; server behaviour unchanged).
 - **MinIO CORS** (`S3_CORS_ALLOW_ORIGIN`): production default becomes
   `${PUBLIC_URL},capacitor://localhost,https://localhost` (the foreground XHR part upload and
@@ -167,34 +167,34 @@ Icons/splash are generated by an in-repo sharp script (sharp is already a root d
 
 ### 2.4 Deep links
 
-| Path (host `littlelight.tesarsoft.com`) | App route | Notes |
+| Path (host `tinyglow.app`) | App route | Notes |
 | --- | --- | --- |
 | `/invite/{token}` | `/invite/:token` (existing `InvitePage`) | PRD "Invites" |
 | `/s/{token}` | `/s/:token` (existing `SharedAlbumPage`, native transport 2.7) | PRD "Share-link viewers" |
 | `/signin/native` (+ `?code=` / `#…`) | `/signin/native` (new route; 9b uses it for Android Apple web OAuth PKCE) | the PRD's "auth callback". Deliberately **not** `/signin/callback`: the web OAuth and magic-link callback stays a web page, so a phone with the app installed never steals a web sign-in whose PKCE verifier lives in the browser (D8) |
 
 - **AASA** (`public/.well-known/apple-app-site-association`, served as `application/json`):
-  `{"applinks":{"details":[{"appIDs":["APPLE_TEAM_ID.com.tesarsoft.littlelight"],"components":[{"/":"/invite/*"},{"/":"/s/*"},{"/":"/signin/native*"}]}]}}`.
+  `{"applinks":{"details":[{"appIDs":["APPLE_TEAM_ID.com.tesarsoft.tinyglow"],"components":[{"/":"/invite/*"},{"/":"/s/*"},{"/":"/signin/native*"}]}]}}`.
   `APPLE_TEAM_ID` is a literal placeholder until the user provides the team id (5.2).
-- **assetlinks.json**: `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.tesarsoft.littlelight","sha256_cert_fingerprints":["PLAY_APP_SIGNING_SHA256","UPLOAD_KEY_SHA256"]}}]`
+- **assetlinks.json**: `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.tesarsoft.tinyglow","sha256_cert_fingerprints":["PLAY_APP_SIGNING_SHA256","UPLOAD_KEY_SHA256"]}}]`
   (placeholders until Play App Signing exists). `apps/mobile-web/scripts/check-association.ts`
   prints which placeholders remain (warning only; never fails the web build).
 - **iOS**: `App.entitlements` `com.apple.developer.associated-domains =
-  ["applinks:littlelight.tesarsoft.com"]` (works only once signed with the real team, R5).
+  ["applinks:tinyglow.app"]` (works only once signed with the real team, R5).
 - **Android**: one `VIEW` intent filter, `android:autoVerify="true"`, scheme `https`, host
-  `littlelight.tesarsoft.com`, `pathPrefix` `/invite/`, `/s/`, `/signin/native`.
-- **Debug scheme**: both apps also register `littlelight://` so the simulator/emulator can test
-  routing without association (`xcrun simctl openurl booted littlelight://s/<t>`). The JS router
+  `tinyglow.app`, `pathPrefix` `/invite/`, `/s/`, `/signin/native`.
+- **Debug scheme**: both apps also register `tinyglow://` so the simulator/emulator can test
+  routing without association (`xcrun simctl openurl booted tinyglow://s/<t>`). The JS router
   honours custom-scheme URLs **only** when built with `VITE_DEEPLINK_DEV_SCHEME=1` (debug builds);
   release ignores them, so the scheme carries nothing worth intercepting.
 - **JS rule** (`src/platform/native/deepLinks.ts`): `toAppPath(url): string | null` accepts only
-  `https://<host in VITE_APP_LINK_HOSTS, default littlelight.tesarsoft.com>` (and the dev scheme
+  `https://<host in VITE_APP_LINK_HOSTS, default tinyglow.app>` (and the dev scheme
   when enabled) with a path matching `^/invite/[A-Za-z0-9_-]{20,128}$`, `^/s/[A-Za-z0-9_-]{22,64}$`
   or `^/signin/native$` (query/fragment kept only for `/signin/native`); anything else ⇒ `null`
   (ignored). The URL is never logged, stored or sent anywhere except as the in-app route.
 - **Android emulator test without verification**: `adb shell pm set-app-links-user-selection
-  --user 0 --package com.tesarsoft.littlelight true littlelight.tesarsoft.com` then
-  `adb shell am start -W -a android.intent.action.VIEW -d https://littlelight.tesarsoft.com/s/<t>`
+  --user 0 --package com.tesarsoft.tinyglow true tinyglow.app` then
+  `adb shell am start -W -a android.intent.action.VIEW -d https://tinyglow.app/s/<t>`
   (the OS routes to the app because the user-selection is granted; real verification needs the
   production file with the Play fingerprint, 5.2).
 
@@ -202,7 +202,7 @@ Icons/splash are generated by an in-repo sharp script (sharp is already a root d
 
 - **Email OTP (primary, now)**: unchanged screens; `CodeEntry` keeps
   `autocomplete="one-time-code"`, `inputmode="numeric"` (iOS Mail/Messages and Android autofill).
-  `POST /api/auth/verify` with `X-Littlelight-Client: native` returns `{tokens}`; the app stores
+  `POST /api/auth/verify` with `X-Tinyglow-Client: native` returns `{tokens}`; the app stores
   them via `setTokenStore(secureTokenStore)` at startup.
 - **Secure token store** (`src/platform/native/secureTokenStore.ts`): one entry `ll.session.v1`
   = JSON `{accessToken, refreshToken}`; iOS Keychain accessibility
@@ -215,8 +215,8 @@ Icons/splash are generated by an in-repo sharp script (sharp is already a root d
   within 5 minutes (decoded locally, never logged).
 - **Sign-out** (local, device, everywhere, account deletion): `DELETE /api/me/push-devices/current`
   (best effort) → existing sign-out call → `tokenStore.clear()` → `imageCache` cleared (exists).
-- **Device label**: `appendUserAgent` adds `Littlelight/<version>`; `userAgentLabel()` maps it to
-  "Littlelight app on iPhone" / "on iPad" / "on Android" in the Devices list.
+- **Device label**: `appendUserAgent` adds `Tinyglow/<version>`; `userAgentLabel()` maps it to
+  "Tinyglow app on iPhone" / "on iPad" / "on Android" in the Devices list.
 - **Apple / Google on native**: hidden on native until 9b (the providers are disabled in
   `/api/auth/config` anyway). Rule for 9b, enforced in the client: on iOS, Google is shown only if
   Apple is also enabled (App Store guideline 4.8; PRD "Apple Sign-In mandatory on iOS when Google
@@ -262,7 +262,7 @@ export interface Uploader {
   iOS background `URLSession` (`uploadTask(with:fromFile:)`), continues when the app is suspended;
   Android WorkManager (expedited / foreground `dataSync` with an "Uploading N photos" notification
   where required); progress events; resolves with the HTTP status; never logs URLs (they carry
-  `X-Amz-Signature`). If the in-house plugin is needed, its bridge is `LittlelightUploader`:
+  `X-Amz-Signature`). If the in-house plugin is needed, its bridge is `TinyglowUploader`:
   `upload({ url, path }) → { id }`, `cancel({ id })`, events `progress { id, sent, total }`,
   `done { id, status }`, `error { id, message }`.
 - **Background semantics**: JS does prep/hash/register in the foreground (the screen says "Keep
@@ -276,7 +276,7 @@ export interface Uploader {
 
 ### 2.7 Share-link viewing in the app
 
-`lib/shareApi.ts` on native: `POST /api/share/session` with `X-Littlelight-Client: native` ⇒
+`lib/shareApi.ts` on native: `POST /api/share/session` with `X-Tinyglow-Client: native` ⇒
 `viewerToken` kept **in a module variable only** (never stored), sent as `Authorization: Bearer` on
 `/api/share/*`. On 401/410 it re-runs the exchange once (covers a renewed link: the step-8 seam
 "native clients re-run the exchange after a renew"), then shows `share-expired`. The PWA manifest
@@ -291,8 +291,8 @@ Image"; temp file deleted after the sheet closes).
 
 | Kind | Trigger | Recipients | Text (fixed, English, i18n key on device unused) | Data |
 | --- | --- | --- | --- | --- |
-| `photos_analyzed` | worker `photo.reindex` jobs with `reason: "ai"` ⇒ enqueue per baby | admins of a **Plus** baby with the pref on | title "Littlelight", body "{n} new photos are ready to search." (n = 1 ⇒ "1 new photo is ready to search.") | `{kind, babyId}` |
-| `share_viewed` | API viewer exchange that **creates a new viewer session** (not a reused cookie/bearer) | admins of the link's baby with the pref on | title "Littlelight", body "Someone opened your shared album." | `{kind, babyId, shareLinkId}` |
+| `photos_analyzed` | worker `photo.reindex` jobs with `reason: "ai"` ⇒ enqueue per baby | admins of a **Plus** baby with the pref on | title "Tinyglow", body "{n} new photos are ready to search." (n = 1 ⇒ "1 new photo is ready to search.") | `{kind, babyId}` |
+| `share_viewed` | API viewer exchange that **creates a new viewer session** (not a reused cookie/bearer) | admins of the link's baby with the pref on | title "Tinyglow", body "Someone opened your shared album." | `{kind, babyId, shareLinkId}` |
 
 No baby name, link name, caption, count of sensitive photos or any parent text ever goes to
 Apple/Google (D10). Contributors get no push. Tap routing: `photos_analyzed` ⇒ select `babyId`,
@@ -308,7 +308,7 @@ registration runs only when built with `VITE_PUSH_ANDROID=1` (requires `google-s
 
 | Method, path | Guards | Request → Response | Behaviour |
 | --- | --- | --- | --- |
-| `POST /me/push-devices` | Auth, Consent, `X-Littlelight-Client: native` (else 400 `validation_failed` "Notifications are only available in the app") | `pushDeviceRegisterRequest` → 201 `pushDeviceResponse` | in-memory throttle 20/h/user ⇒ 429; `SELECT register_push_device(...)` under the caller's claims; `req.body.token` is already pino-redacted; never logged |
+| `POST /me/push-devices` | Auth, Consent, `X-Tinyglow-Client: native` (else 400 `validation_failed` "Notifications are only available in the app") | `pushDeviceRegisterRequest` → 201 `pushDeviceResponse` | in-memory throttle 20/h/user ⇒ 429; `SELECT register_push_device(...)` under the caller's claims; `req.body.token` is already pino-redacted; never logged |
 | `DELETE /me/push-devices/current` | Auth | → 204 | `unregister_push_devices_for_session()` |
 | `PATCH /me/profile` (existing) | Auth, Consent | gains `notifyPhotosAnalyzed?`, `notifyShareViewed?` | column grants (2.9) |
 | `GET /me` (existing) | Auth | `profile` gains both booleans | |
@@ -425,11 +425,11 @@ every policy change tested, nothing logs tokens).
 7. Regenerate `packages/db/src/generated`; README rows (push tables, functions, who may write
    what, review-family runbook). `pgmigrations` becomes **16**.
 
-### 2.10 Shared contracts (`@littlelight/shared`; architect-defined, backend-engineer writes in 9.2 with orchestrator approval)
+### 2.10 Shared contracts (`@tinyglow/shared`; architect-defined, backend-engineer writes in 9.2 with orchestrator approval)
 
-- `src/native.ts` (new): `APP_ID = "com.tesarsoft.littlelight"`, `APP_NAME = "Littlelight"`,
-  `APP_UA_TOKEN = "Littlelight"`, `APP_LINK_HOST_DEFAULT = "littlelight.tesarsoft.com"`,
-  `DEV_URL_SCHEME = "littlelight"`, `DEEP_LINK_PATTERNS` (the three regexes of 2.4),
+- `src/native.ts` (new): `APP_ID = "com.tesarsoft.tinyglow"`, `APP_NAME = "Tinyglow"`,
+  `APP_UA_TOKEN = "Tinyglow"`, `APP_LINK_HOST_DEFAULT = "tinyglow.app"`,
+  `DEV_URL_SCHEME = "tinyglow"`, `DEEP_LINK_PATTERNS` (the three regexes of 2.4),
   `NATIVE_ORIGINS_DEFAULT = ["capacitor://localhost", "https://localhost"]`,
   `NATIVE_UPLOAD_PICK_MAX = 500` (= `UPLOAD_MAX_FILES_PER_SESSION`).
 - `src/push.ts` (new, browser-safe): `pushPlatformSchema`, `pushProviderSchema`,
@@ -453,7 +453,7 @@ every policy change tested, nothing logs tokens).
   `NATIVE_APP_ORIGINS` comma list, each `^(capacitor|https?)://[A-Za-z0-9.-]+(:\d{1,5})?$`),
   `reviewAccountEnvSchema` (api: both or neither of `REVIEW_ACCOUNT_EMAIL`,
   `REVIEW_ACCOUNT_CODE_HASH`; hash must start `scrypt$1$`).
-- `src/auth.ts`: `userAgentLabel()` recognises `Littlelight/<ver>` ⇒ "Littlelight app on iPhone|
+- `src/auth.ts`: `userAgentLabel()` recognises `Tinyglow/<ver>` ⇒ "Tinyglow app on iPhone|
   iPad|Android"; `auditMetadataSchema` gains `method: z.enum(["review"]).optional()` (D4).
 - `index.ts` re-exports.
 
@@ -480,15 +480,15 @@ every policy change tested, nothing logs tokens).
 ### 2.12 Native projects (mobile-engineer)
 
 **iOS (`apps/mobile-web/ios/**`)**
-- `Info.plist`: `NSPhotoLibraryUsageDescription` "Littlelight lets you choose photos of your baby
+- `Info.plist`: `NSPhotoLibraryUsageDescription` "Tinyglow lets you choose photos of your baby
   to add to your private album. Only the photos you pick are uploaded.";
-  `NSPhotoLibraryAddUsageDescription` "Littlelight saves photos you download from your album to
-  your photo library."; `NSCameraUsageDescription` "Littlelight uses the camera so you can take a
+  `NSPhotoLibraryAddUsageDescription` "Tinyglow saves photos you download from your album to
+  your photo library."; `NSCameraUsageDescription` "Tinyglow uses the camera so you can take a
   photo of your baby and add it straight to your private album."; **no** location, contacts,
   microphone or tracking keys; `ITSAppUsesNonExemptEncryption = NO` (HTTPS only);
   `NSAppTransportSecurity.NSAllowsLocalNetworking = YES` (dev localhost; no arbitrary loads);
-  `CFBundleURLTypes` `littlelight`; portrait on iPhone; `UIViewControllerBasedStatusBarAppearance`
-  per Capacitor; display name "Littlelight".
+  `CFBundleURLTypes` `tinyglow`; portrait on iPhone; `UIViewControllerBasedStatusBarAppearance`
+  per Capacitor; display name "Tinyglow".
 - `App.entitlements`: associated domains (2.4), `aps-environment = development` (production set by
   the release export). Team: `DEVELOPMENT_TEAM` empty in the repo (simulator builds sign ad hoc).
 - `PrivacyInfo.xcprivacy` (app target): `NSPrivacyTracking = false`, `NSPrivacyTrackingDomains =
@@ -512,7 +512,7 @@ every policy change tested, nothing logs tokens).
   it; `android:allowBackup="false"`, `android:fullBackupContent="false"`,
   `android:dataExtractionRules="@xml/data_extraction_rules"` excluding everything (tokens, WebView
   storage and cached photos never go to Google backups); deep-link intent filter (2.4) +
-  `littlelight` scheme; `windowSoftInputMode="adjustResize"`.
+  `tinyglow` scheme; `windowSoftInputMode="adjustResize"`.
 - `network_security_config`: main = no cleartext; `src/debug/res/xml/…` permits cleartext for
   `localhost`, `127.0.0.1`, `10.0.2.2` only.
 - FCM: the Capacitor template applies `com.google.gms.google-services` only when
@@ -539,7 +539,7 @@ for light/dark.
 - Listing copy must include the **AI disclosure** ("Plus uses AI from our model provider to
   describe your photos so you can search them; free accounts are never analysed; your photos are
   never used to train models"), "no ads, no tracking", age rating 4+ / Everyone, privacy policy URL
-  `https://littlelight.tesarsoft.com/legal/privacy` (page exists; real text is a user item).
+  `https://tinyglow.app/legal/privacy` (page exists; real text is a user item).
 - `apps/mobile-web/store/`: `privacy-nutrition-label.md` (App Store Connect answers, mirroring
   `PrivacyInfo.xcprivacy`), `data-safety.md` (Play form answers: data types collected, purposes,
   encrypted in transit, deletion request supported, not shared — model providers are service
@@ -560,7 +560,7 @@ for light/dark.
 | `.env.example`, `docker-compose.yml` | `NATIVE_APP_ORIGINS` (api); `PUSH_PROVIDER=none`, `APNS_*`, `FCM_*` (**worker only**); `REVIEW_ACCOUNT_EMAIL`, `REVIEW_ACCOUNT_CODE_HASH` (**api only**, commented out); `S3_CORS_ALLOW_ORIGIN` default `${PUBLIC_URL},capacitor://localhost,https://localhost`; comments on how to produce each value |
 | nginx | nothing new (`/.well-known/*` served, `/api/` passes `OPTIONS`); verify `/signin/native` falls to the SPA |
 | `.gitignore`, `biome.json`, vitest excludes | ignore `apps/mobile-web/ios/App/App/public`, `ios/App/build`, `ios/DerivedData`, `android/app/src/main/assets/public`, `android/**/build`, `android/.gradle`, `android/app/google-services.json`, `android/keystore.properties`, `*.jks`, `*.keystore` (except none committed), `ios/App/App/GoogleService-Info.plist`, `apps/mobile-web/fastlane/report.xml`, `e2e/native-results/` |
-| CI (9.16) | job `android-debug` (ubuntu, JDK 21, Android SDK from the runner image): `pnpm --filter @littlelight/mobile-web native:sync:android && ./gradlew assembleDebug lintDebug`, then the manifest-permission check; job `ios-sim-build` on `macos-latest` **manual (`workflow_dispatch`) only** (cost): `native:sync:ios` + `xcodebuild … -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build`; integration report names for step 9; hygiene step (2.15) |
+| CI (9.16) | job `android-debug` (ubuntu, JDK 21, Android SDK from the runner image): `pnpm --filter @tinyglow/mobile-web native:sync:android && ./gradlew assembleDebug lintDebug`, then the manifest-permission check; job `ios-sim-build` on `macos-latest` **manual (`workflow_dispatch`) only** (cost): `native:sync:ios` + `xcodebuild … -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build`; integration report names for step 9; hygiene step (2.15) |
 
 ### 2.15 Tests and gates (test-engineer)
 
@@ -607,7 +607,7 @@ for light/dark.
 - **Push gate** `e2e/native/push-gate.ts` (`pnpm e2e:push-gate`, no device needed): recreate worker
   with `PUSH_PROVIDER=fake PUSH_PHOTOS_DEBOUNCE_SEC=0 PUSH_SHARE_DEBOUNCE_SEC=0 PUSH_MIN_GAP_MIN=0
   VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0` (restored in `finally`); fresh admin signs in with
-  `X-Littlelight-Client: native` (bearer tokens, asserts no `Set-Cookie`), registers a fake APNs
+  `X-Tinyglow-Client: native` (bearer tokens, asserts no `Set-Cookie`), registers a fake APNs
   device, baby set Plus, uploads 3 photos, forces flush/poll ⇒ a `fake` `photos_analyzed` delivery
   with `item_count` 3; a free baby's uploads ⇒ none; a share-link exchange in a fresh client ⇒ one
   `share_viewed` delivery, a reused session ⇒ none; `DELETE /me/push-devices/current` + sign-out ⇒
@@ -619,12 +619,12 @@ for light/dark.
   1. `Capacitor.isNativePlatform()` true, origin `https://localhost`.
   2. Sign in with a fresh email (OTP from Mailpit) ⇒ onboarding/home; `document.cookie` has no
      `ll_`; `localStorage`/`sessionStorage`/IndexedDB names contain no JWT-shaped value (`eyJ`);
-     Devices list shows "Littlelight app on Android".
+     Devices list shows "Tinyglow app on Android".
   3. Force-stop + relaunch ⇒ still signed in (Keystore).
-  4. `am start -d https://littlelight.tesarsoft.com/s/demo-grandparents-share-token` ⇒ WebView path
+  4. `am start -d https://tinyglow.app/s/demo-grandparents-share-token` ⇒ WebView path
      `/s/…`, `share-album` visible, hidden tile present, no `ll_viewer` cookie.
   5. Invite: as demo mom via API create an invite for the gate email; read the link from Mailpit;
-     rewrite its origin to `https://littlelight.tesarsoft.com`; `am start -d` ⇒ invite page ⇒
+     rewrite its origin to `https://tinyglow.app`; `am start -d` ⇒ invite page ⇒
      accept ⇒ Maya listed.
   6. Upload (best-effort automation of the system Photo Picker with Playwright Android selectors;
      manual fallback printed): push 3 JPEG fixtures with GPS to `/sdcard/Pictures/ll-gate/` + media
@@ -638,7 +638,7 @@ for light/dark.
   Writes `e2e/native-results/android.json` and screenshots.
 - **iOS gate** `e2e/native/ios-gate.sh` (semi-automated; no WebView automation for WKWebView without
   new tools): boots the one simulator, installs the built `.app`, launches, runs `simctl openurl …
-  littlelight://s/demo-grandparents-share-token` and `…/invite/<token from Mailpit>`, `simctl push`
+  tinyglow://s/demo-grandparents-share-token` and `…/invite/<token from Mailpit>`, `simctl push`
   a `photos_analyzed` payload, captures screenshots after each step, greps `simctl spawn booted log
   show --last 10m --predicate 'process == "App"'` for the same secrets as Android, checks
   `codesign -d --entitlements -` (associated domains, aps-environment) and `plutil -lint` on
@@ -690,7 +690,7 @@ for 9.1 only.
   `public-hoist-pattern[]=@capacitor/*` (and plugin scopes) to `.npmrc` and report (R3).
 - Ignores per 2.14. No new dependency outside this list; stop and report if one is needed.
 - Done-when: `pnpm install --frozen-lockfile` is a no-op afterwards; `pnpm lint && pnpm typecheck &&
-  pnpm test` green; `pnpm --filter @littlelight/mobile-web build` (web) output size within +5 % of
+  pnpm test` green; `pnpm --filter @tinyglow/mobile-web build` (web) output size within +5 % of
   before (native modules must be lazily imported, checked again after 9.6).
 
 ### 9.2 Shared contracts (backend-engineer, orchestrator approval) — group 0 (parallel with 9.1)
@@ -711,7 +711,7 @@ for 9.1 only.
   privacy manifest, backup exclusion, permission removals, network security configs, FCM guard,
   release-signing guard). `loggingBehavior: "none"` is mandatory. `capacitor.config.ts` stays out of
   the web `tsconfig` (the Capacitor CLI transpiles it); do not edit frontend-owned files.
-- Done-when: `pnpm --filter @littlelight/mobile-web native:sync` succeeds for both; `./gradlew
+- Done-when: `pnpm --filter @tinyglow/mobile-web native:sync` succeeds for both; `./gradlew
   assembleDebug lintDebug` passes; the merged manifest (`app/build/intermediates/merged_manifest/…`)
   contains none of the removed permissions; `xcodebuild … -sdk iphonesimulator
   CODE_SIGNING_ALLOWED=NO build` passes once the runtime is installed (else report "blocked on
@@ -728,7 +728,7 @@ for 9.1 only.
   live `auth.sessions` row; reversible down; nothing echoes a token in an error.
 - Done-when: `pnpm db:migrate` applies 16, rerun no-op, `db:migrate:down 1 && db:migrate`
   round-trips, applies on the bare stub; `pnpm db:types` committed with no diff; every-table-forced
-  query returns 0; seed idempotent; `pnpm db:review-family --email demo-dad@littlelight.local`
+  query returns 0; seed idempotent; `pnpm db:review-family --email demo-dad@tinyglow.local`
   creates "Sunny" with 24 rows in dev and refuses `NODE_ENV=production` without the flag.
 
 ### 9.5 Env, compose (devops-engineer) — group 1 (parallel with 9.3, 9.4)
@@ -755,7 +755,7 @@ for 9.1 only.
 - Explicit: tokens only in the secure store; never `localStorage`/`sessionStorage`/Preferences for
   tokens or viewer JWTs; never log URLs, tokens, paths or EXIF; deep-link URLs outside the allow-list
   are ignored silently.
-- Done-when: `pnpm --filter @littlelight/mobile-web typecheck && test` green; web e2e (`CI=1 pnpm
+- Done-when: `pnpm --filter @tinyglow/mobile-web typecheck && test` green; web e2e (`CI=1 pnpm
   e2e`) unchanged; on the iOS Simulator or Android emulator the app loads, `/api/healthz` shows `ok`
   in `SystemStatus` through `VITE_API_URL`.
 
@@ -770,7 +770,7 @@ for 9.1 only.
   after commit with the 2.8 send options.
 - Done-when: typecheck/tests green; `curl -si -X OPTIONS localhost:8080/api/me -H 'origin:
   capacitor://localhost' -H 'access-control-request-method: GET' -H 'access-control-request-headers:
-  authorization,x-littlelight-client'` ⇒ 204 with `access-control-allow-origin: capacitor://localhost`
+  authorization,x-tinyglow-client'` ⇒ 204 with `access-control-allow-origin: capacitor://localhost`
   and no `access-control-allow-credentials`; 4.3 walkthrough steps 1–4 pass.
 
 ### 9.8 Native uploader, push wiring, backup exclusion (mobile-engineer) — group 2 (after 9.3)
@@ -779,7 +779,7 @@ for 9.1 only.
 - Evaluate `@capgo/capacitor-uploader` against the 2.6 requirements on both platforms (raw-body PUT
   to a presigned MinIO URL from a file path returns 200 and the object's bytes match; continues with
   the app backgrounded; no multipart; no URL logging). If it fails any, implement the in-house
-  `LittlelightUploader` plugin (Swift background `URLSession` + Kotlin WorkManager) with the 2.6
+  `TinyglowUploader` plugin (Swift background `URLSession` + Kotlin WorkManager) with the 2.6
   bridge and tell the orchestrator to drop the dependency (9.1 rerun). Wire push natively
   (AppDelegate forwarding, Android channel + guard), confirm every bundled plugin ships a privacy
   manifest, implement the iOS `isExcludedFromBackup` step.
@@ -799,7 +799,7 @@ for 9.1 only.
   Notifications (enable flow, two toggles, unavailable state) + post-first-upload primer + tap
   routing (2.8); native share sheet and download-to-share (2.7); haptics on upload complete, link
   created, milestone saved; safe areas checked on notched devices; `/signin/native` page (web: "Open
-  this link on your phone with the Littlelight app installed"; native: placeholder for 9b);
+  this link on your phone with the Tinyglow app installed"; native: placeholder for 9b);
   **upgrade/purchase CTAs and prices hidden on native** (D3); i18n keys `native.*`, `push.*`.
 - Explicit: no new storage of tokens or URLs; contributors see no push settings for admin-only kinds
   (they receive none); text rendering only.
@@ -823,7 +823,7 @@ for 9.1 only.
 - Build the 2.8 worker part. Explicit: `fake` refused in production; tokens/JWTs/bodies never logged;
   pipeline role through the 2.9 functions only; push enqueue cannot fail or delay reindexing; the
   APNs/FCM adapters are fully exercised by mock servers in 9.14 (live use is 5.2).
-- Done-when: boot log `queues: 13`; `pnpm --filter @littlelight/worker run-job push.notify
+- Done-when: boot log `queues: 13`; `pnpm --filter @tinyglow/worker run-job push.notify
   '{"kind":"share_viewed","shareLinkId":"00000000-0000-4000-8000-000000000200"}'` exits 0 on the dev
   stack (0 targets ⇒ no delivery); 9.14's worker tests green.
 
@@ -836,7 +836,7 @@ for 9.1 only.
   `ingest`; no model call; logs ids/counts only.
 - Done-when: from `pnpm dev:reset`, Maya's 12 thumbnails render in the web timeline;
   `pnpm demo:media --check` prints 12/12 originals and 36/36 derivatives; `exifr` finds no tags in any
-  demo object; `pnpm db:review-family --email demo-dad@littlelight.local && pnpm demo:media
+  demo object; `pnpm db:review-family --email demo-dad@tinyglow.local && pnpm demo:media
   --review-baby <id>` ingests 24 photos (fake AI describes them on Plus).
 
 ### 9.13 Icons, splash, store metadata, privacy drafts (mobile-engineer) — group 3 (after 9.8)
@@ -848,7 +848,7 @@ for 9.1 only.
   `PrivacyInfo.xcprivacy` and the actual data flows (photos, GPS from metadata, email, name, notes,
   chat text, push tokens stay with us; AI provider is a processor; no tracking, no ads, no analytics
   SDK).
-- Done-when: `pnpm --filter @littlelight/mobile-web native:assets` regenerates byte-identical
+- Done-when: `pnpm --filter @tinyglow/mobile-web native:assets` regenerates byte-identical
   assets; icons appear on the simulator/emulator home screen and the splash shows in light/dark;
   every listing text file is within the store character limits (script or table in
   `store/README.md`); `review-notes.md`, `privacy-nutrition-label.md`, `data-safety.md`,
@@ -915,7 +915,7 @@ fake AI, fake push). Run from the repo root with Docker running, `pnpm` 12.10.1 
 ```sh
 docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d --build --wait
 pnpm install --frozen-lockfile
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                                                  # 16
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 docker compose -f docker-compose.dev.yml logs worker | grep 'queues: 13'
@@ -933,21 +933,21 @@ git diff --exit-code -- packages/db/src/generated
 ```sh
 B=http://localhost:8080
 curl -s $B/.well-known/apple-app-site-association | jq -c '.applinks.details[0] | .appIDs, .components'
-#   ["APPLE_TEAM_ID.com.tesarsoft.littlelight"]  [{"/":"/invite/*"},{"/":"/s/*"},{"/":"/signin/native*"}]
+#   ["APPLE_TEAM_ID.com.tesarsoft.tinyglow"]  [{"/":"/invite/*"},{"/":"/s/*"},{"/":"/signin/native*"}]
 curl -sI $B/.well-known/apple-app-site-association | grep -i 'content-type: application/json'
-curl -s $B/.well-known/assetlinks.json | jq -r '.[0].target.package_name'                  # com.tesarsoft.littlelight
-pnpm --filter @littlelight/mobile-web exec tsx scripts/check-association.ts                # lists the 2 placeholders
+curl -s $B/.well-known/assetlinks.json | jq -r '.[0].target.package_name'                  # com.tesarsoft.tinyglow
+pnpm --filter @tinyglow/mobile-web exec tsx scripts/check-association.ts                # lists the 2 placeholders
 curl -si -X OPTIONS $B/api/me -H 'origin: capacitor://localhost' -H 'access-control-request-method: GET' \
-  -H 'access-control-request-headers: authorization,x-littlelight-client' | grep -i '^access-control-allow-origin: capacitor://localhost'
+  -H 'access-control-request-headers: authorization,x-tinyglow-client' | grep -i '^access-control-allow-origin: capacitor://localhost'
 curl -si -X OPTIONS $B/api/me -H 'origin: https://evil.example' -H 'access-control-request-method: GET' | grep -ci '^access-control-allow-origin'   # 0
 curl -si -X OPTIONS $B/api/me -H 'origin: https://localhost' -H 'access-control-request-method: GET' | grep -ci 'allow-credentials'                 # 0
 ```
 
-### 4.3 API walkthrough (native transport; `H='x-littlelight-client: native'`)
+### 4.3 API walkthrough (native transport; `H='x-tinyglow-client: native'`)
 
-1. `curl -s -X POST $B/api/auth/otp -H "$H" -H 'content-type: application/json' -d '{"email":"demo-mom@littlelight.local"}'` → 202; code from Mailpit; `curl -si -X POST $B/api/auth/verify -H "$H" … -d '{"email":…,"code":…}'` → body has `tokens.accessToken`/`refreshToken`, **no** `Set-Cookie`. `TOK=<access>`.
-2. `curl -s $B/api/auth/sessions -H "$H" -H "authorization: Bearer $TOK" -H 'user-agent: Mozilla/5.0 (iPhone) Littlelight/1.0.0' …` after a verify sent with that UA → a device labelled "Littlelight app on iPhone".
-3. `curl -s -X POST $B/api/me/push-devices -H "$H" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"platform":"ios","provider":"apns","token":"'"$(openssl rand -hex 32)"'","appVersion":"1.0.0"}'` → 201; same call with `x-littlelight-client: web` → 400; `{"platform":"ios","provider":"fcm",…}` → 400.
+1. `curl -s -X POST $B/api/auth/otp -H "$H" -H 'content-type: application/json' -d '{"email":"demo-mom@tinyglow.local"}'` → 202; code from Mailpit; `curl -si -X POST $B/api/auth/verify -H "$H" … -d '{"email":…,"code":…}'` → body has `tokens.accessToken`/`refreshToken`, **no** `Set-Cookie`. `TOK=<access>`.
+2. `curl -s $B/api/auth/sessions -H "$H" -H "authorization: Bearer $TOK" -H 'user-agent: Mozilla/5.0 (iPhone) Tinyglow/1.0.0' …` after a verify sent with that UA → a device labelled "Tinyglow app on iPhone".
+3. `curl -s -X POST $B/api/me/push-devices -H "$H" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"platform":"ios","provider":"apns","token":"'"$(openssl rand -hex 32)"'","appVersion":"1.0.0"}'` → 201; same call with `x-tinyglow-client: web` → 400; `{"platform":"ios","provider":"fcm",…}` → 400.
 4. `PATCH /api/me/profile {"notifyShareViewed":false}` → `GET /api/me | jq .profile.notifyShareViewed` → `false`; set back to `true`.
 5. Viewer exchange from a fresh client (`-H "$H"`, body `{"token":"demo-grandparents-share-token"}`) → `viewerToken` in the body, no `Set-Cookie`; `docker compose exec worker pnpm run-job push.notify '{"kind":"share_viewed","shareLinkId":"00000000-0000-4000-8000-000000000200"}'` (or wait for the queued job) → `$PSQL "select kind,status from push_deliveries order by id desc limit 1"` → `share_viewed|fake`.
 6. `curl -s -X DELETE $B/api/me/push-devices/current -H "$H" -H "authorization: Bearer $TOK"` → 204; repeat step 5's trigger → no new delivery row.
@@ -956,7 +956,7 @@ curl -si -X OPTIONS $B/api/me -H 'origin: https://localhost' -H 'access-control-
 ### 4.4 Android (emulator `ll-api36`, debug build)
 
 ```sh
-pnpm --filter @littlelight/mobile-web native:sync:android
+pnpm --filter @tinyglow/mobile-web native:sync:android
 (cd apps/mobile-web/android && ./gradlew assembleDebug lintDebug)
 APK=apps/mobile-web/android/app/build/outputs/apk/debug/app-debug.apk
 "$ANDROID_HOME"/build-tools/36.0.0/aapt dump permissions $APK | grep -E 'READ_MEDIA|EXTERNAL_STORAGE|LOCATION'; echo "exit $?"   # exit 1
@@ -965,19 +965,19 @@ APK=apps/mobile-web/android/app/build/outputs/apk/debug/app-debug.apk
 adb wait-for-device && adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 2; done'
 pnpm e2e:native-android        # steps 1-9 of 2.15: native transport, Keystore, relaunch, /s and /invite deep links,
                                # background upload, offline photo, sign-out wipes storage, no secrets in logcat
-adb shell pm get-app-links com.tesarsoft.littlelight          # littlelight.tesarsoft.com: user-selected (verified needs 5.2)
+adb shell pm get-app-links com.tesarsoft.tinyglow          # tinyglow.app: user-selected (verified needs 5.2)
 ```
 
 ### 4.5 iOS (one simulator, debug build; needs 9.0's runtime)
 
 ```sh
-pnpm --filter @littlelight/mobile-web native:sync:ios
-pnpm --filter @littlelight/mobile-web ios:build:sim          # xcodebuild -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO
+pnpm --filter @tinyglow/mobile-web native:sync:ios
+pnpm --filter @tinyglow/mobile-web ios:build:sim          # xcodebuild -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO
 APP=$(find apps/mobile-web/ios/build -name 'App.app' -path '*iphonesimulator*' | head -1)
 plutil -lint "$APP/Info.plist" apps/mobile-web/ios/App/App/PrivacyInfo.xcprivacy
 /usr/libexec/PlistBuddy -c 'Print :NSPhotoLibraryUsageDescription' "$APP/Info.plist"        # the 2.12 string
 /usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$APP/Info.plist"         # false
-pnpm e2e:native-ios            # installs, launches, openurl littlelight://s/... and /invite/..., simctl push,
+pnpm e2e:native-ios            # installs, launches, openurl tinyglow://s/... and /invite/..., simctl push,
                                # screenshots, log scan, entitlements; then tick the printed manual checklist:
                                # OTP sign-in + autofill field, relaunch still signed in, pick 3 photos + Home
                                # + uploads finish in background, push tap opens Chat, share sheet, download ->
@@ -1036,15 +1036,15 @@ user free ≥ 20 GB to keep both. One simulator runtime and one emulator image a
 | # | Needed from the user | Unblocks | What we do with it |
 | --- | --- | --- | --- |
 | U1 | **Apple Developer Program** membership (individual or organisation; organisation needs a D-U-N-S number) and the **Team ID** (10 chars) | iOS signing, universal links, push, TestFlight | replace `APPLE_TEAM_ID` in AASA, set `DEVELOPMENT_TEAM`, commit |
-| U2 | **Signing**: sign in to Xcode with the Apple ID that has the team (Xcode → Settings → Accounts) so automatic signing can create the App ID `com.tesarsoft.littlelight` with capabilities **Associated Domains, Push Notifications** (and **Sign in with Apple** if U8); or provide a distribution certificate + App Store provisioning profile | device builds, archive | `xcodebuild archive` / `-exportArchive` (app-store-connect) |
-| U3 | **App Store Connect**: app record "Littlelight" (bundle id above, SKU, primary language English), an **App Store Connect API key** (Issuer ID, Key ID, `.p8`) for uploads, internal **TestFlight testers** (Apple IDs) | TestFlight (PRD check) | `fastlane ios beta` or `xcrun altool`/Transporter upload; testers install via TestFlight |
+| U2 | **Signing**: sign in to Xcode with the Apple ID that has the team (Xcode → Settings → Accounts) so automatic signing can create the App ID `com.tesarsoft.tinyglow` with capabilities **Associated Domains, Push Notifications** (and **Sign in with Apple** if U8); or provide a distribution certificate + App Store provisioning profile | device builds, archive | `xcodebuild archive` / `-exportArchive` (app-store-connect) |
+| U3 | **App Store Connect**: app record "Tinyglow" (bundle id above, SKU, primary language English), an **App Store Connect API key** (Issuer ID, Key ID, `.p8`) for uploads, internal **TestFlight testers** (Apple IDs) | TestFlight (PRD check) | `fastlane ios beta` or `xcrun altool`/Transporter upload; testers install via TestFlight |
 | U4 | **APNs key** (`.p8`, Key ID; same Team ID) | live iOS push | worker env `PUSH_PROVIDER=live`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY_BASE64`, `APNS_ENVIRONMENT` (`sandbox` for debug builds, `production` for TestFlight/App Store) |
-| U5 | **Google Play Console** account (one-time fee), app created with package `com.tesarsoft.littlelight`, **Play App Signing** enabled, internal-testing tester emails; agreement on where the **upload keystore** lives (we can generate it locally with `keytool`; the user keeps the file and passwords outside the repo) | Play internal build (PRD check) | `./gradlew bundleRelease` signed with the upload key; first AAB uploaded manually in the Console (Play requires it), later `fastlane android internal` with a Play **service-account JSON** |
+| U5 | **Google Play Console** account (one-time fee), app created with package `com.tesarsoft.tinyglow`, **Play App Signing** enabled, internal-testing tester emails; agreement on where the **upload keystore** lives (we can generate it locally with `keytool`; the user keeps the file and passwords outside the repo) | Play internal build (PRD check) | `./gradlew bundleRelease` signed with the upload key; first AAB uploaded manually in the Console (Play requires it), later `fastlane android internal` with a Play **service-account JSON** |
 | U6 | **SHA-256 fingerprints**: Play App Signing key (Console → App integrity) and the upload key | Android App Links verification | replace placeholders in `assetlinks.json`, commit |
 | U7 | **Firebase project** with the Android app registered → `google-services.json`; an **FCM service account** JSON (HTTP v1); optionally upload the APNs key to Firebase only if FCM is ever used for iOS (not planned) | live Android push | file to `android/app/google-services.json` (git-ignored), build with `VITE_PUSH_ANDROID=1`; worker `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_BASE64` |
-| U8 | **Apple / Google sign-in client IDs** (PRD "Sign-in methods" are P0, so needed before public launch, not for internal builds): Apple Services ID + Sign in with Apple key (also the step-3 list), Google OAuth **iOS client** (bundle id), **Android client** (package + SHA-1 of the Play signing and upload keys), web client + secret | native Apple/Google (9b) | add `@capgo/capacitor-social-login` (+ `@capacitor/browser` for Android Apple web OAuth via `/signin/native`), enable the GoTrue providers, `APPLE_CLIENT_ID=<services id>,com.tesarsoft.littlelight`, `GOOGLE_CLIENT_ID=<web>,<ios>,<android>`; iOS reversed-client-id URL scheme; client rule "Google only with Apple on iOS" |
+| U8 | **Apple / Google sign-in client IDs** (PRD "Sign-in methods" are P0, so needed before public launch, not for internal builds): Apple Services ID + Sign in with Apple key (also the step-3 list), Google OAuth **iOS client** (bundle id), **Android client** (package + SHA-1 of the Play signing and upload keys), web client + secret | native Apple/Google (9b) | add `@capgo/capacitor-social-login` (+ `@capacitor/browser` for Android Apple web OAuth via `/signin/native`), enable the GoTrue providers, `APPLE_CLIENT_ID=<services id>,com.tesarsoft.tinyglow`, `GOOGLE_CLIENT_ID=<web>,<ios>,<android>`; iOS reversed-client-id URL scheme; client rule "Google only with Apple on iOS" |
 | U9 | **Payments decision** (D3) and, if in scope: App Store Connect subscription product (Plus, $3.99/month), Play Billing product, **RevenueCat** project + API keys, Stripe for web | public store release with Plus purchasable | a separate billing step (entitlement webhooks → `babies.plan`), not part of step 9 |
-| U10 | **Production deploy approval**: build and run the new web image on the server so `https://littlelight.tesarsoft.com/.well-known/*` serves the real AASA/assetlinks (after U1/U6), new env (`NATIVE_APP_ORIGINS`, `S3_CORS_ALLOW_ORIGIN`, push vars), migration 16 | universal/app links on real devices (PRD check), release builds pointing at production | orchestrator prepares the change; the user runs/approves it (touches production) |
+| U10 | **Production deploy approval**: build and run the new web image on the server so `https://tinyglow.app/.well-known/*` serves the real AASA/assetlinks (after U1/U6), new env (`NATIVE_APP_ORIGINS`, `S3_CORS_ALLOW_ORIGIN`, push vars), migration 16 | universal/app links on real devices (PRD check), release builds pointing at production | orchestrator prepares the change; the user runs/approves it (touches production) |
 | U11 | **Store listings**: final name check (trademark), subtitle/description approval, support URL + support email, marketing URL (optional), real **Privacy Policy and Terms** text (still placeholders since step 3), age-rating questionnaire answers (we draft 4+/Everyone), App Store privacy label and Play Data Safety submission (we draft), screenshots approval | store submission | from `apps/mobile-web/fastlane/**` and `apps/mobile-web/store/**` |
 | U12 | **Review account**: decision D4, a mailbox/email for the review account (e.g. `review@tesarsoft.com`), the static review code (we generate; the user stores it and pastes it into the review notes), approval to run `db:review-family` + `demo:media --review-baby` **on production** | App Review / Play "App access" | sign up once on production with that email, run both commands, set `REVIEW_ACCOUNT_*` on the api |
 | U13 | **Machine actions**: `sudo xcodebuild -license accept`; approval to download the iOS runtime and Android image (5.1 sizes) and to prune Docker volumes/build cache | 9.0 | orchestrator runs them |
@@ -1054,14 +1054,14 @@ install from TestFlight on an iPhone, open an invite email and a share link in M
 app opens on the invite/share screen (Apple fetches the AASA from its CDN; allow up to a day after
 U10, or use `applinks:…?mode=developer` with Developer Mode for testing); (b) upload the AAB to
 internal testing, install from the Play testing link on an Android phone, `adb shell pm
-verify-app-links --re-verify com.tesarsoft.littlelight && adb shell pm get-app-links
-com.tesarsoft.littlelight` ⇒ `verified`, tap invite and share links ⇒ the app opens on those
+verify-app-links --re-verify com.tesarsoft.tinyglow && adb shell pm get-app-links
+com.tesarsoft.tinyglow` ⇒ `verified`, tap invite and share links ⇒ the app opens on those
 screens. Note for later: new personal Play developer accounts need a closed test with 12 testers
 for 14 days before production access (internal testing is not affected).
 
 ## 6. Risks and decisions (orchestrator to confirm or override)
 
-- **D1 — Bundle id / package name `com.tesarsoft.littlelight`** (matches the domain owner). Cannot
+- **D1 — Bundle id / package name `com.tesarsoft.tinyglow`** (matches the domain owner). Cannot
   be changed after publishing. **Needs the user's confirmation.**
 - **D2 — Step 9 is completed in two parts.** Part A (everything in 5.1) is gated and committed now;
   the PRD check ("TestFlight and Play internal builds install; invite and share links open the app")
@@ -1105,7 +1105,7 @@ for 14 days before production access (internal testing is not affected).
   functionality), Photos, Email, Name, User ID, Other User Content, Search History; no tracking, no
   ads, no analytics or crash SDK in the app (Sentry is server-side only; if a client crash SDK is
   ever added the labels change). Conservative and accurate; reviewers penalise under-declaration.
-- **D12 — Debug-only custom scheme `littlelight://`** registered in both apps but honoured only by
+- **D12 — Debug-only custom scheme `tinyglow://`** registered in both apps but honoured only by
   builds with `VITE_DEEPLINK_DEV_SCHEME=1`; release ignores it. Lets the Simulator test routing
   without a team id.
 - **D13 — Deferred**: native Apple/Google sign-in (U8), biometric lock (P2), auto-backup (FR-2.6,

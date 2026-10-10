@@ -3,7 +3,7 @@ import {
   AI_DESCRIPTION_V1_SCHEMA_NAME,
   AI_PROMPT_VERSION,
   AI_SCHEMA_VERSION,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { analysisImage, craftJpeg } from "../../../e2e/fixtures/ai-images";
 import { AiRequestError } from "./errors";

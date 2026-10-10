@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { babiesListResponseSchema, babySchema } from "@littlelight/shared";
+import { babiesListResponseSchema, babySchema } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness } from "../testing/integration";
 

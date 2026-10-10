@@ -28,13 +28,13 @@
             </intent-filter>
 
             <!-- App Links: invite, share and native sign-in paths only (docs/plans/step-9.md 2.4).
-                 Verified against https://littlelight.tesarsoft.com/.well-known/assetlinks.json -->
+                 Verified against https://tinyglow.app/.well-known/assetlinks.json -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
-                <data android:host="littlelight.tesarsoft.com" />
+                <data android:host="tinyglow.app" />
                 <data android:pathPrefix="/invite/" />
                 <data android:pathPrefix="/s/" />
                 <data android:pathPrefix="/signin/native" />
@@ -49,7 +49,7 @@
         <!-- White monochrome status-bar icon and brand tint for push notifications. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
-            android:resource="@drawable/ic_stat_littlelight" />
+            android:resource="@drawable/ic_stat_tinyglow" />
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_accent" />

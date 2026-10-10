@@ -9,7 +9,7 @@ import {
   shareLinkSchema,
   shareLinksResponseSchema,
   shareRuleSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loggerOptions } from "../app";
 import type { JobQueue } from "../plugins/jobs";

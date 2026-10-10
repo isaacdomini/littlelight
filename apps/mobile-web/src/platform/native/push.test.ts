@@ -140,7 +140,7 @@ describe("enablePush", () => {
       token: TOKEN,
       appVersion: "1.2.3",
     });
-    expect(f.calls[0]?.headers.get("X-Littlelight-Client")).toBe("native");
+    expect(f.calls[0]?.headers.get("X-Tinyglow-Client")).toBe("native");
     expect(f.calls[0]?.headers.get("Authorization")).toBe("Bearer AT");
   });
 

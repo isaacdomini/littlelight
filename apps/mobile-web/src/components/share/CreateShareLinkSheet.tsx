@@ -4,7 +4,7 @@ import {
   SHARE_LINK_TTL_CHOICES_HOURS,
   SHARE_PASSCODE_LENGTH,
   type ShareLinkCreatedResponse,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";

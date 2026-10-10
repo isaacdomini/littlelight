@@ -1,9 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   type InviteAcceptResponse,
   inviteAcceptResponseSchema,
   inviteLookupResponseSchema,
-} from "@littlelight/shared";
-import { useQuery } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";

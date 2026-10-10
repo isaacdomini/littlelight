@@ -1,12 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { fakeDescription } from "@littlelight/ai";
+import { fakeDescription } from "@tinyglow/ai";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { recordingLog } from "../testing/stubs";
 import { createAutoSharer } from "./autoshare";
 import { MARK_EVALUATED_SQL } from "./autoshare-sql";
 
-// The auto-sharer against the real database as `littlelight_worker` -> `pipeline`
+// The auto-sharer against the real database as `tinyglow_worker` -> `pipeline`
 // (docs/plans/step-8.md 2.12). PRD FR-9.5 / step-8 acceptance: sensitive photos never auto-share,
 // even when a sensitive flag races the insert. Fake AI descriptions only; no model, no storage.
 // Runs with only DATABASE_URL (no MinIO needed); every id is random and cleaned up afterwards.
@@ -26,7 +26,7 @@ describe.skipIf(!databaseUrl)("auto-share (real database)", () => {
     admin2 = new pg.Client({ connectionString: databaseUrl });
     await Promise.all([admin.connect(), admin2.connect()]);
     const url = new URL(databaseUrl as string);
-    url.username = "littlelight_worker";
+    url.username = "tinyglow_worker";
     url.password = dev("WORKER_DB_PASSWORD", "dev");
     pool = new pg.Pool({ connectionString: url.toString(), max: 4 });
   });

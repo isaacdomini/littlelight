@@ -25,7 +25,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION } from "@littlelight/shared";
+import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION } from "@tinyglow/shared";
 import { z } from "zod";
 import { isTerminalBatchState } from "../batch-state";
 import {

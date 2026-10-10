@@ -1,4 +1,4 @@
-import { OTP_CODE_LENGTH } from "@littlelight/shared";
+import { OTP_CODE_LENGTH } from "@tinyglow/shared";
 import {
   type ClipboardEvent,
   type FormEvent,

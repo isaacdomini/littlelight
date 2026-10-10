@@ -7,8 +7,8 @@ import {
   type VisionBatchHandle,
   type VisionBatchStatus,
   type VisionDescriber,
-} from "@littlelight/ai";
-import { aiDescriptionV1Schema, type ReindexJob } from "@littlelight/shared";
+} from "@tinyglow/ai";
+import { aiDescriptionV1Schema, type ReindexJob } from "@tinyglow/shared";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { craftJpeg } from "../../../../e2e/fixtures/ai-images";
 import { createFakeAiDb, type FakeAiDb } from "../testing/ai-db";

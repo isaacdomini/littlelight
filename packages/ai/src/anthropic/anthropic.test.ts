@@ -1,4 +1,4 @@
-import { aiDescriptionV1Schema } from "@littlelight/shared";
+import { aiDescriptionV1Schema } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { analysisImage } from "../../../../e2e/fixtures/ai-images";
 import type { VisionAdapterOptions } from "../adapter-options";

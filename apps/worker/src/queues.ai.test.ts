@@ -1,4 +1,4 @@
-import { aiBackfillJobSchema, JOBS } from "@littlelight/shared";
+import { aiBackfillJobSchema, JOBS } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AiPipeline } from "./ai";
 import {

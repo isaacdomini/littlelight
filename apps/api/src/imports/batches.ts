@@ -10,7 +10,7 @@ import {
   importBatchResponseSchema,
   type PickerSession,
   parseGoogleDuration,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit, requireAuth, requireConsent, type Throttle, withClaims } from "../auth";

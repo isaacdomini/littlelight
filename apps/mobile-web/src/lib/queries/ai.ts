@@ -1,11 +1,11 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   aiRetryResponseSchema,
   aiUsageResponseSchema,
   type Photo,
   type PhotoAiOverridePatch,
   photoSchema,
-} from "@littlelight/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { apiFetch } from "../api";
 import { patchCachedPhotos, photoKey } from "./photos";
 

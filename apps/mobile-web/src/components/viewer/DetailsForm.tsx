@@ -1,4 +1,4 @@
-import { PHOTO_DETAILS_LIMITS, type Photo, type PhotoDetailsPatch } from "@littlelight/shared";
+import { PHOTO_DETAILS_LIMITS, type Photo, type PhotoDetailsPatch } from "@tinyglow/shared";
 import { useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";

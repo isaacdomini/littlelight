@@ -1,4 +1,4 @@
-import { AUTH_COOKIE_ACCESS } from "@littlelight/shared";
+import { AUTH_COOKIE_ACCESS } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type { ApiConfig } from "../config";
 import { ApiError } from "../lib/errors";
@@ -12,7 +12,7 @@ import { verifyAccessToken } from "./jwt";
 // keep working. It records the failure as `request.authError`, and `requireAuth` (or
 // `withClaims`) turns it into the response: 401 `token_expired` (SPA refreshes once and
 // retries), 401 `unauthorized`, or 403 `csrf_rejected` for a cookie-authenticated non-GET
-// request without `X-Littlelight-Client: web` (custom-header CSRF guard on top of SameSite).
+// request without `X-Tinyglow-Client: web` (custom-header CSRF guard on top of SameSite).
 
 declare module "fastify" {
   interface FastifyRequest {

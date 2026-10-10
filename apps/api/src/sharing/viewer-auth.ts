@@ -3,7 +3,7 @@ import {
   VIEWER_COOKIE,
   VIEWER_COOKIE_PATH,
   type ViewerSessionClaims,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type pg from "pg";
 import { accessCookieOptions, csrfRejected, needsCsrfHeader } from "../auth";
@@ -18,7 +18,7 @@ import { mintViewerJwt, ViewerJwtError, verifyViewerJwt } from "./crypto";
 //
 // - Credential: the `ll_viewer` cookie (`HttpOnly; SameSite=Lax; Path=/api/share`, `Secure` in
 //   production) holding a viewer JWT, or `Authorization: Bearer <viewer JWT>` when the request
-//   says `X-Littlelight-Client: native` (step-9 seam). Never `ll_access` and never a GoTrue
+//   says `X-Tinyglow-Client: native` (step-9 seam). Never `ll_access` and never a GoTrue
 //   token: those are verified with a different key, issuer and audience and fail here, and a
 //   viewer JWT fails the parent hook (`auth/jwt.ts`) the same way. The cookie's path keeps it away
 //   from every parent route (`/api/babies/*`, chat, search) in the first place.
@@ -26,7 +26,7 @@ import { mintViewerJwt, ViewerJwtError, verifyViewerJwt } from "./crypto";
 //   viewer unit of work as the Postgres `viewer` role with the JWT's claims, and its first
 //   statement is `viewer_session_check(jti)`: a revoked/regenerated/expired link, an ended session
 //   or a deleted baby is one 410 `share_link_expired`, the cookie is cleared, nothing else runs.
-// - Cookie-transport non-GET requests need `X-Littlelight-Client: web` (403 `csrf_rejected`,
+// - Cookie-transport non-GET requests need `X-Tinyglow-Client: web` (403 `csrf_rejected`,
 //   the step-3 rule). Every `/share/*` response is `Cache-Control: no-store` and `noindex`.
 // - Nothing here logs the JWT, the cookie or a claim.
 

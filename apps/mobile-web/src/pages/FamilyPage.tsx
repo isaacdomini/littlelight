@@ -1,6 +1,6 @@
 import { IonContent, IonPage } from "@ionic/react";
-import { type BabyRole, emailSchema, inviteSchema, type Member } from "@littlelight/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type BabyRole, emailSchema, inviteSchema, type Member } from "@tinyglow/shared";
 import { peopleOutline } from "ionicons/icons";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";

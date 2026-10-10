@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { appRoleUrl, ensureAuthSchemaStub, runMigrations } from "@littlelight/db";
-import { PRIVACY_VERSION, TERMS_VERSION } from "@littlelight/shared";
+import { appRoleUrl, ensureAuthSchemaStub, runMigrations } from "@tinyglow/db";
+import { PRIVACY_VERSION, TERMS_VERSION } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyServerOptions, LightMyRequestResponse } from "fastify";
 import pg from "pg";
 import { buildApp } from "../app";
@@ -22,7 +22,7 @@ import {
 
 // Shared harness for `*.integration.test.ts` in apps/api (docs/plans/step-3.md 3.10). These run
 // against a migrated Postgres (`DATABASE_URL`, the superuser URL, as in packages/db) and skip
-// when it is unset. The app under test uses a real `littlelight_api` pool, so every query goes
+// when it is unset. The app under test uses a real `tinyglow_api` pool, so every query goes
 // through `runAs` exactly like production; the superuser client `admin` is for fixtures and for
 // asserting persisted state only. GoTrue is a recording stub, mail is `captureMailer()`.
 //
@@ -145,7 +145,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     (await admin.query("SELECT COALESCE(max(id), 0) AS m FROM public.audit_log")).rows[0].m,
   );
   const config = testConfig({
-    DATABASE_URL: appRoleUrl(databaseUrl, "littlelight_api", env.API_DB_PASSWORD),
+    DATABASE_URL: appRoleUrl(databaseUrl, "tinyglow_api", env.API_DB_PASSWORD),
     ...opts.config,
   });
   const mailer = captureMailer();

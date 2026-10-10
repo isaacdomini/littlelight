@@ -14,7 +14,7 @@ import {
   inviteTokenParamsSchema,
   maskEmail,
   normalizeEmail,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { inviteEmail } from "../email/templates";

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-// packages/db has no dependency on @littlelight/shared: relative import on purpose.
+// packages/db has no dependency on @tinyglow/shared: relative import on purpose.
 import { aiDescriptionV1Schema } from "../shared/src/ai-description";
 import { DEMO, seed } from "./src/index";
 import {
@@ -173,7 +173,7 @@ describe.skipIf(!databaseUrl)("AI pipeline database rules (step 6)", () => {
     for (const [k, id] of Object.entries(U)) {
       await q(
         "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())",
-        [id, `ai-fx-${k}@littlelight.test`],
+        [id, `ai-fx-${k}@tinyglow.test`],
       );
       await q("INSERT INTO public.profiles (user_id, display_name) VALUES ($1, $2)", [id, k]);
     }

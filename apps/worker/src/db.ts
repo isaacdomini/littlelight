@@ -1,11 +1,11 @@
 import type pg from "pg";
 
 // Pipeline transactions (docs/plans/step-4.md 2.7; packages/db/README.md "Per-transaction
-// identity"). DATABASE_URL is `littlelight_worker`, which owns the pg-boss schema and the
+// identity"). DATABASE_URL is `tinyglow_worker`, which owns the pg-boss schema and the
 // heartbeat table but has no privilege on any app table: every query against app tables runs
 // inside `runAsPipeline`, which switches to the NOLOGIN `pipeline` role for exactly one
-// transaction and hands the connection back to the pool as `littlelight_worker` again.
-// pg-boss and the heartbeat keep using `littlelight_worker` directly.
+// transaction and hands the connection back to the pool as `tinyglow_worker` again.
+// pg-boss and the heartbeat keep using `tinyglow_worker` directly.
 
 /**
  * The only role a worker unit of work may switch to. The statement reaches SQL text only from

@@ -1,4 +1,4 @@
-import type { PhotoMime } from "@littlelight/shared";
+import type { PhotoMime } from "@tinyglow/shared";
 import exifr from "exifr";
 import sharp from "sharp";
 import { isKnownTimeZone, wallTimeInZone } from "./tz";

@@ -1,4 +1,4 @@
-import { shareTokenSchema } from "@littlelight/shared";
+import { shareTokenSchema } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { downloadDisposition, downloadStem, viewerManifest } from "./viewer-routes";
 

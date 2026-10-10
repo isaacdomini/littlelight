@@ -69,21 +69,21 @@ describe("toDataExport", () => {
 describe("exportFileName", () => {
   const day = new Date("2026-10-10T23:59:00Z");
   it.each([
-    ["Maya", "littlelight-maya-2026-10-10.zip"],
-    ["Zoë & Léa", "littlelight-zoe-lea-2026-10-10.zip"],
-    ["  ", "littlelight-album-2026-10-10.zip"],
-    [null, "littlelight-album-2026-10-10.zip"],
-    ["日本語", "littlelight-album-2026-10-10.zip"],
-    ['Bad"; filename=evil.exe', "littlelight-bad-filename-evil-exe-2026-10-10.zip"],
-    ["../../etc/passwd", "littlelight-etc-passwd-2026-10-10.zip"],
-    ["Line\r\nbreak", "littlelight-line-break-2026-10-10.zip"],
+    ["Maya", "tinyglow-maya-2026-10-10.zip"],
+    ["Zoë & Léa", "tinyglow-zoe-lea-2026-10-10.zip"],
+    ["  ", "tinyglow-album-2026-10-10.zip"],
+    [null, "tinyglow-album-2026-10-10.zip"],
+    ["日本語", "tinyglow-album-2026-10-10.zip"],
+    ['Bad"; filename=evil.exe', "tinyglow-bad-filename-evil-exe-2026-10-10.zip"],
+    ["../../etc/passwd", "tinyglow-etc-passwd-2026-10-10.zip"],
+    ["Line\r\nbreak", "tinyglow-line-break-2026-10-10.zip"],
   ])("%j -> %s", (name, out) => {
     expect(exportFileName(name, day)).toBe(out);
   });
 
   it("caps the slug and stays plain ASCII", () => {
     const out = exportFileName("a".repeat(200), day);
-    expect(out).toBe(`littlelight-${"a".repeat(40)}-2026-10-10.zip`);
+    expect(out).toBe(`tinyglow-${"a".repeat(40)}-2026-10-10.zip`);
     expect(out).toMatch(/^[\x20-\x7e]+$/);
   });
 });

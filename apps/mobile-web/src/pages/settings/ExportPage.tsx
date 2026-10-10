@@ -1,5 +1,5 @@
-import type { DataExport, ExportStatus } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import type { DataExport, ExportStatus } from "@tinyglow/shared";
 import { useState } from "react";
 import { useCurrentBaby } from "../../auth/AuthProvider";
 import { useFreshSignIn } from "../../auth/FreshSignInGate";
@@ -209,7 +209,7 @@ export function ExportPage() {
     run(async () => {
       // The signed URL lives only in this closure: used at once, never stored or logged.
       const { url } = await withFresh(() => mintExportUrl(baby.id, item.id));
-      const name = `littlelight-export-${item.createdAt.slice(0, 10)}.zip`;
+      const name = `tinyglow-export-${item.createdAt.slice(0, 10)}.zip`;
       if (isNative()) {
         // A ZIP of originals can be many GB: stream it with the native downloader, then hand
         // the file to the share sheet (Save to Files / AirDrop). The in-WebView blob path would

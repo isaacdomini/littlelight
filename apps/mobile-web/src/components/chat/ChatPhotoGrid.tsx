@@ -1,4 +1,4 @@
-import type { PhotoSummary } from "@littlelight/shared";
+import type { PhotoSummary } from "@tinyglow/shared";
 import { useCallback } from "react";
 import { t } from "../../i18n";
 import { Thumb } from "../timeline/Thumb";

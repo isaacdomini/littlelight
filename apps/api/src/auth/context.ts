@@ -9,7 +9,7 @@ import {
   FRESH_SIGN_IN_MAX_AGE_MIN,
   PRIVACY_VERSION,
   TERMS_VERSION,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type pg from "pg";
 import { ApiError } from "../lib/errors";

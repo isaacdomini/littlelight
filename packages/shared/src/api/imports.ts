@@ -186,7 +186,7 @@ export type GoogleConnectReturnPath = z.infer<typeof googleConnectReturnPathSche
 
 /**
  * `POST /me/import/google/connect` body. `client` decides the connected page's copy (`native`:
- * "Return to Littlelight"). 404 `feature_unavailable` when the provider is `none`; 429
+ * "Return to Tinyglow"). 404 `feature_unavailable` when the provider is `none`; 429
  * `rate_limited`.
  */
 export const googleConnectRequestSchema = z.strictObject({

@@ -4,7 +4,7 @@ import {
   type PushDeviceRegisterRequest,
   pushDataSchema,
   pushDeviceResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { apiFetch } from "../../lib/api";
 import { nativePlatform } from "../platform";
 
@@ -113,7 +113,7 @@ async function ensureListeners() {
     if (parsed.success) for (const cb of tapListeners) cb(parsed.data);
   });
   if (nativePlatform() === "android") {
-    await PN.createChannel({ id: "default", name: "Littlelight", importance: 3 }).catch(
+    await PN.createChannel({ id: "default", name: "Tinyglow", importance: 3 }).catch(
       () => undefined,
     );
   }

@@ -3,18 +3,18 @@ import { ConfigError, loadConfig, nativeSettings } from "./config";
 
 const SECRET = "dev-only-jwt-secret-at-least-32-characters";
 const env = {
-  DATABASE_URL: "postgres://postgres:hunter2pw@db:5432/littlelight",
+  DATABASE_URL: "postgres://postgres:hunter2pw@db:5432/tinyglow",
   S3_ENDPOINT: "http://storage:9000",
   S3_PUBLIC_ENDPOINT: "http://localhost:9000",
   S3_ACCESS_KEY: "dev",
   S3_SECRET_KEY: "devdevdev",
-  S3_BUCKET: "littlelight-dev",
+  S3_BUCKET: "tinyglow-dev",
   JWT_SECRET: SECRET,
   GOTRUE_JWT_SECRET: SECRET,
   DATA_ENCRYPTION_KEY: "dev-only-data-encryption-key-32-chars-min",
   PUBLIC_URL: "http://localhost:8080",
   SMTP_HOST: "mail",
-  MAIL_FROM: "noreply@littlelight.test",
+  MAIL_FROM: "noreply@tinyglow.test",
 };
 const HASH = "scrypt$1$16384$8$1$c2FsdHNhbHQ$ZGVyaXZlZGtleQ";
 

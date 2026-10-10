@@ -3,7 +3,7 @@ import {
   MILESTONE_PRESETS,
   UPLOAD_MAX_FILES_PER_SESSION,
   type UploadDetails,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { cameraOutline, chevronDown, cloudUploadOutline, imagesOutline } from "ionicons/icons";
 import { type DragEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";

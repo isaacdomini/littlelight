@@ -1,4 +1,4 @@
-# Littlelight design system
+# Tinyglow design system
 
 Adopted 2026-10-09 (user decision). Every screen follows this. Before a step is committed, its
 screens are checked visually in light and dark mode at phone (375 px) and desktop sizes.

@@ -1,5 +1,5 @@
-import type { PhotoSummary } from "@littlelight/shared";
-import { type ChatMessageDto, parseCitations } from "@littlelight/shared";
+import type { PhotoSummary } from "@tinyglow/shared";
+import { type ChatMessageDto, parseCitations } from "@tinyglow/shared";
 import { useMemo } from "react";
 import { t } from "../../i18n";
 import { ChatPhotoGrid } from "./ChatPhotoGrid";

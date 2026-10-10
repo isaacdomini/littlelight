@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { CHAT_SSE_KEEPALIVE, CHAT_SSE_KEEPALIVE_MS } from "@littlelight/shared";
+import { CHAT_SSE_KEEPALIVE, CHAT_SSE_KEEPALIVE_MS } from "@tinyglow/shared";
 import type { FastifyReply } from "fastify";
 
 // Server-sent events for the chat stream (docs/plans/step-7.md 2.4, 2.8, 2.9, R6). Wire format:

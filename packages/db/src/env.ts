@@ -1,10 +1,10 @@
 /**
- * Minimal env parsing for the db scripts. `@littlelight/db` has no zod dependency on purpose: the
+ * Minimal env parsing for the db scripts. `@tinyglow/db` has no zod dependency on purpose: the
  * migrate image stays tiny and the scripts must fail with field names only, never values.
  */
 
 const PRODUCTION_MIN_PASSWORD_LENGTH = 16;
-/** `DATA_ENCRYPTION_KEY` minimum, same as `encryptionEnvSchema` in `@littlelight/shared`. */
+/** `DATA_ENCRYPTION_KEY` minimum, same as `encryptionEnvSchema` in `@tinyglow/shared`. */
 export const MIN_DATA_ENCRYPTION_KEY_LENGTH = 32;
 
 export function isProduction(env: NodeJS.ProcessEnv): boolean {
@@ -47,12 +47,12 @@ export function requireAuthDbPassword(env: NodeJS.ProcessEnv = process.env): str
   return requirePassword(env, "AUTH_DB_PASSWORD");
 }
 
-/** `API_DB_PASSWORD`: login password of `littlelight_api` (the API's connection role). */
+/** `API_DB_PASSWORD`: login password of `tinyglow_api` (the API's connection role). */
 export function requireApiDbPassword(env: NodeJS.ProcessEnv = process.env): string {
   return requirePassword(env, "API_DB_PASSWORD");
 }
 
-/** `WORKER_DB_PASSWORD`: login password of `littlelight_worker` (the worker's connection role). */
+/** `WORKER_DB_PASSWORD`: login password of `tinyglow_worker` (the worker's connection role). */
 export function requireWorkerDbPassword(env: NodeJS.ProcessEnv = process.env): string {
   return requirePassword(env, "WORKER_DB_PASSWORD");
 }

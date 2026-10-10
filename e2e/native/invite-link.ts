@@ -1,7 +1,7 @@
 /**
  * Prints one invite token (43-char base64url) for a fresh address, created by the seeded demo mom
  * through the real API and read back from the invite mail in Mailpit. Used by the native gates to
- * open `littlelight://invite/<token>` / `https://littlelight.tesarsoft.com/invite/<token>`.
+ * open `tinyglow://invite/<token>` / `https://tinyglow.app/invite/<token>`.
  *
  *   tsx e2e/native/invite-link.ts [--json]   =>  <token>   or   {"email":"...","token":"..."}
  *

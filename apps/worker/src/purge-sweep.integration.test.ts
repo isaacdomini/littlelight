@@ -1,4 +1,4 @@
-import { babyPrefix, derivativeKey, originalKey } from "@littlelight/shared";
+import { babyPrefix, derivativeKey, originalKey } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { purgeTrash } from "./purge";
 import { reconcileIngest } from "./reconcile";

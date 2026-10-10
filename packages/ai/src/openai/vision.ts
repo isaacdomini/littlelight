@@ -88,11 +88,11 @@ export function createOpenAiVisionDescriber(opts: VisionAdapterOptions): VisionD
       parts.push(line);
     }
     const first = requests[0] as VisionRequest;
-    const file = await uploadBatchFile(http, parts, `littlelight-batch-${randomUUID()}.jsonl`);
+    const file = await uploadBatchFile(http, parts, `tinyglow-batch-${randomUUID()}.jsonl`);
     let batch: Awaited<ReturnType<typeof createBatch>>;
     try {
       batch = await createBatch(http, file.id, {
-        app: "littlelight",
+        app: "tinyglow",
         prompt_version: first.promptVersion,
         schema_version: first.schemaVersion,
       });

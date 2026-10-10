@@ -5,7 +5,7 @@ import {
   type ClientKind,
   type SessionResponse,
   WEB_SESSION_IDLE_DAYS,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ApiConfig } from "../config";
 import { newDeviceEmail } from "../email/templates";
@@ -16,7 +16,7 @@ import type { GoTrueSession } from "./gotrue";
 import { verifyAccessToken } from "./jwt";
 
 // Session transport (docs/plans/step-3.md 2.2, 2.3 "On every session-issuing response").
-// Web: httpOnly cookies set here, tokens never in a body. Native (`X-Littlelight-Client:
+// Web: httpOnly cookies set here, tokens never in a body. Native (`X-Tinyglow-Client:
 // native`): tokens in the body, no cookies. Cookie paths are the browser-facing ones (`/api`,
 // `/api/auth`): nginx/Vite strip the prefix before the request reaches this process.
 

@@ -1,4 +1,4 @@
-import { type AuthenticatedClaims, authenticatedClaimsSchema } from "@littlelight/shared";
+import { type AuthenticatedClaims, authenticatedClaimsSchema } from "@tinyglow/shared";
 import { errors as joseErrors, jwtVerify } from "jose";
 import type { ApiConfig } from "../config";
 import { ApiError } from "../lib/errors";

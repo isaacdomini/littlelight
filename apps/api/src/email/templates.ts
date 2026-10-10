@@ -1,4 +1,4 @@
-import type { BabyRole } from "@littlelight/shared";
+import type { BabyRole } from "@tinyglow/shared";
 import type { MailMessage } from "./mailer";
 
 // API email templates (docs/plans/step-3.md 2.7). Plain, branded, no images, no trackers, no
@@ -52,9 +52,9 @@ function layout(title: string, bodyHtml: string): string {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head>
 <body style="margin:0;padding:24px;background:#faf7f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#2b2b2b;">
 <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
-<p style="margin:0 0 24px;font-size:20px;font-weight:600;">Littlelight</p>
+<p style="margin:0 0 24px;font-size:20px;font-weight:600;">Tinyglow</p>
 ${bodyHtml}
-<p style="margin:32px 0 0;font-size:12px;color:#777;">You're receiving this because someone used this address on Littlelight, a private baby photo album.</p>
+<p style="margin:32px 0 0;font-size:12px;color:#777;">You're receiving this because someone used this address on Tinyglow, a private baby photo album.</p>
 </div>
 </body>
 </html>`;
@@ -80,14 +80,14 @@ export function inviteEmail(input: InviteEmailInput): EmailContent {
   const url = safeUrl(input.acceptUrl);
   const role = ROLE_LABEL[input.role];
   const expires = formatUtc(input.expiresAt);
-  const subject = `You're invited to ${baby}'s album on Littlelight`;
+  const subject = `You're invited to ${baby}'s album on Tinyglow`;
   const html = layout(
     subject,
     `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(inviter)} invited you to join <strong>${escapeHtml(baby)}</strong>'s album as ${escapeHtml(role)}.</p>
 ${button(url, "Accept invite")}
 <p style="margin:0;font-size:14px;color:#555;">This invite expires in 7 days (${escapeHtml(expires)}); accept it by signing in with this email address.</p>`,
   );
-  const text = `${inviter} invited you to join ${baby}'s album on Littlelight as ${role}.
+  const text = `${inviter} invited you to join ${baby}'s album on Tinyglow as ${role}.
 
 Accept the invite: ${url}
 
@@ -111,7 +111,7 @@ export function newDeviceEmail(input: NewDeviceEmailInput): EmailContent {
   const when = formatUtc(input.when);
   const where = input.country ? oneLine(input.country) : null;
   const url = safeUrl(input.devicesUrl);
-  const subject = "New sign-in to your Littlelight account";
+  const subject = "New sign-in to your Tinyglow account";
   const details = `${device}, ${when}${where ? `, country ${where}` : ""}`;
   const html = layout(
     subject,
@@ -120,7 +120,7 @@ export function newDeviceEmail(input: NewDeviceEmailInput): EmailContent {
 <p style="margin:0 0 8px;font-size:14px;">If this was you, there's nothing to do. If not, sign that device out and check your email account's security.</p>
 ${button(url, "Review devices")}`,
   );
-  const text = `Your Littlelight account was just signed in on a new device:
+  const text = `Your Tinyglow account was just signed in on a new device:
 
 ${details}
 

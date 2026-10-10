@@ -162,7 +162,7 @@ const VIEWER_PHOTOS = Array.from({ length: 30 }, (_, i) => {
     hidden,
     thumbUrl: hidden
       ? null
-      : `http://localhost:9000/littlelight-dev/derivatives/${pid.replace(/^0{8}/, "0000000a")}/thumb.jpg`,
+      : `http://localhost:9000/tinyglow-dev/derivatives/${pid.replace(/^0{8}/, "0000000a")}/thumb.jpg`,
     urlExpiresAt: hidden ? null : iso(now + 5 * 60_000),
   };
 });
@@ -221,14 +221,14 @@ async function mockViewer(page: Page, mode: "album" | "passcode" | "wrong" | "lo
     return json(r, {
       urls: ids.map((i) => ({
         id: i,
-        url: `http://localhost:9000/littlelight-dev/derivatives/${i.replace(/^0{8}/, "0000000a")}/display.jpg`,
+        url: `http://localhost:9000/tinyglow-dev/derivatives/${i.replace(/^0{8}/, "0000000a")}/display.jpg`,
         expiresAt: iso(now + 5 * 60_000),
       })),
     });
   });
   await page.route("**/api/share/photos/*/download", (r) =>
     json(r, {
-      url: "http://localhost:9000/littlelight-dev/derivatives/00000000-0000-4000-8000-000000000001/display.jpg",
+      url: "http://localhost:9000/tinyglow-dev/derivatives/00000000-0000-4000-8000-000000000001/display.jpg",
       expiresAt: iso(now + 60_000),
     }),
   );

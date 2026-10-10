@@ -1,16 +1,16 @@
-import type { ChatModel, Embedder } from "@littlelight/ai";
+import type { ChatModel, Embedder } from "@tinyglow/ai";
 import {
   AI_PIPELINE_DEFAULTS,
   CHAT_DEFAULTS,
   type ChatEnv,
   SEARCH_DEFAULTS,
   type SearchEnv,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 
 // Dependencies of the search and chat route modules (docs/plans/step-7.md 2.8, 2.9). The API
 // wiring (`apps/api/src/plugins/ai.ts`, task 7.8) builds the model clients once with
-// `createChatModel` / `createEmbedder` from `@littlelight/ai` and passes them here; tests inject
+// `createChatModel` / `createEmbedder` from `@tinyglow/ai` and passes them here; tests inject
 // fakes. `null` means "not configured on this server" (no key): search degrades to keyword +
 // filters, chat answers 409. Fields are read at request time, so a mutable holder works.
 

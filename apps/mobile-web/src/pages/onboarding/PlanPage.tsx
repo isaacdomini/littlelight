@@ -1,4 +1,4 @@
-import { PLUS_PRICE_USD_MONTHLY } from "@littlelight/shared";
+import { PLUS_PRICE_USD_MONTHLY } from "@tinyglow/shared";
 import { Navigate, useNavigate } from "react-router-dom";
 import { FlowPage } from "../../components/Page";
 import { Button, Card } from "../../components/ui";

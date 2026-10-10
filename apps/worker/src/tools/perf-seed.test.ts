@@ -9,12 +9,12 @@ import {
 } from "./perf-seed";
 
 const ok: PerfSeedTarget = {
-  databaseUrl: "postgres://postgres:dev@localhost:5432/littlelight",
+  databaseUrl: "postgres://postgres:dev@localhost:5432/tinyglow",
   s3Endpoint: "http://localhost:9000",
   s3Region: "us-east-1",
   s3AccessKey: "dev",
   s3SecretKey: "devdevdev",
-  s3Bucket: "littlelight-dev",
+  s3Bucket: "tinyglow-dev",
   concurrency: 32,
 };
 
@@ -27,7 +27,7 @@ describe("resolvePerfSeedTarget", () => {
 
   it("derives the default ports from DB_PORT / STORAGE_PORT and honours overrides", () => {
     const t = resolvePerfSeedTarget({ DB_PORT: "55432", STORAGE_PORT: "59000", S3_BUCKET: "b" });
-    expect(t.databaseUrl).toBe("postgres://postgres:dev@localhost:55432/littlelight");
+    expect(t.databaseUrl).toBe("postgres://postgres:dev@localhost:55432/tinyglow");
     expect(t.s3Endpoint).toBe("http://localhost:59000");
     expect(t.s3Bucket).toBe("b");
     expect(
@@ -95,7 +95,7 @@ describe("perfSeedRefusal", () => {
       ).toMatch(/must not set/);
     }
     expect(
-      perfSeedRefusal({ ...ok, databaseUrl: "postgres://littlelight_api:dev@localhost/x" }, {}),
+      perfSeedRefusal({ ...ok, databaseUrl: "postgres://tinyglow_api:dev@localhost/x" }, {}),
     ).toMatch(/postgres/);
   });
 

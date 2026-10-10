@@ -8,7 +8,7 @@ import type {
   ShareRuleMode,
   ViewerMediaKind,
   ViewerPhoto,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyBaseLogger } from "fastify";
 import type pg from "pg";
 import type { z } from "zod";

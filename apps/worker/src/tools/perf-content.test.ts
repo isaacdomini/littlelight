@@ -9,7 +9,7 @@ import {
   PERF_PHOTO_COUNT,
   PHOTO_DETAILS_LIMITS,
   toMetric,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import {
   hasLocation,

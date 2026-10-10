@@ -11,7 +11,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { babyPrefix, originalKey } from "@littlelight/shared";
+import { babyPrefix, originalKey } from "@tinyglow/shared";
 import pg from "pg";
 import type { IngestDeps } from "../ingest";
 import type { CsamMatcher } from "../ingest/safety";
@@ -19,7 +19,7 @@ import { createStorage, type ObjectStorage } from "../storage";
 import { recordingLog } from "./stubs";
 
 // Integration harness for apps/worker (docs/plans/step-4.md 4.8). Real Postgres (superuser
-// `DATABASE_URL`; the worker uses its own `littlelight_worker` login and `runAsPipeline`) and a
+// `DATABASE_URL`; the worker uses its own `tinyglow_worker` login and `runAsPipeline`) and a
 // real S3 endpoint (MinIO; root or any key with bucket create + versioning + object rights).
 //
 //   DATABASE_URL, S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET (created if missing,
@@ -38,7 +38,7 @@ export const integrationEnv =
         endpoint: process.env.S3_ENDPOINT,
         accessKey: dev("S3_ACCESS_KEY", "dev"),
         secretKey: dev("S3_SECRET_KEY", "devdevdev"),
-        bucket: dev("S3_BUCKET", "littlelight-test"),
+        bucket: dev("S3_BUCKET", "tinyglow-test"),
         region: dev("S3_REGION", "us-east-1"),
         dataKey: dev("DATA_ENCRYPTION_KEY", "dev-only-data-encryption-key-32-chars-min"),
         workerPassword: dev("WORKER_DB_PASSWORD", "dev"),
@@ -47,7 +47,7 @@ export const integrationEnv =
 
 /** Bootstrap roles + apply migrations (packages/db), stubbing auth.users on a bare Postgres. */
 async function ensureMigrated(databaseUrl: string): Promise<void> {
-  // Loaded by file URL so the worker package needs no dependency on @littlelight/db.
+  // Loaded by file URL so the worker package needs no dependency on @tinyglow/db.
   const spec = pathToFileURL(
     path.resolve(import.meta.dirname, "../../../../packages/db/src/index.ts"),
   ).href;
@@ -155,7 +155,7 @@ export async function createHarness(): Promise<Harness> {
   const admin = new pg.Client({ connectionString: env.databaseUrl });
   await admin.connect();
   const url = new URL(env.databaseUrl);
-  url.username = "littlelight_worker";
+  url.username = "tinyglow_worker";
   url.password = env.workerPassword;
   const workerPool = new pg.Pool({ connectionString: url.toString(), max: 4 });
 

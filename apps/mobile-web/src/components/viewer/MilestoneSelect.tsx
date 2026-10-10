@@ -1,4 +1,4 @@
-import type { Milestone } from "@littlelight/shared";
+import type { Milestone } from "@tinyglow/shared";
 
 /** Native milestone `<select>` (None, built-in, custom). `extra` adds an option at the end. */
 export function MilestoneSelect({

@@ -12,7 +12,7 @@ vi.mock("../../lib/haptics", () => haptics);
 
 import { ShareUrlBody } from "./ShareUrlSheet";
 
-const URL_ = "https://littlelight.tesarsoft.com/s/AbCdEfGhIjKlMnOpQrStUv";
+const URL_ = "https://tinyglow.app/s/AbCdEfGhIjKlMnOpQrStUv";
 
 beforeEach(() => {
   nativeShare.shareLink.mockReset().mockResolvedValue(true);

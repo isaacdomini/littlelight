@@ -4,7 +4,7 @@ import { isoDateTimeSchema } from "./common";
 
 // `/api/auth/*` contracts (docs/plans/step-3.md 2.3, 2.4, 2.6). Tokens, codes and token hashes in
 // these bodies are secrets: the API redacts them from logs and never echoes them back, except
-// `tokens` for native clients (`x-littlelight-client: native`).
+// `tokens` for native clients (`x-tinyglow-client: native`).
 
 /** `POST /auth/otp`. Always answered 202 `{ ok: true }` (no account enumeration). */
 export const otpRequestSchema = z.object({

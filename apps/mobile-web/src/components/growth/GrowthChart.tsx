@@ -1,6 +1,6 @@
 import { IonIcon } from "@ionic/react";
-import type { Measurement, MeasurementKind } from "@littlelight/shared";
-import { fromMetric } from "@littlelight/shared";
+import type { Measurement, MeasurementKind } from "@tinyglow/shared";
+import { fromMetric } from "@tinyglow/shared";
 import { createOutline, trashOutline, trendingUpOutline } from "ionicons/icons";
 import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCurrentBaby } from "../../auth/AuthProvider";

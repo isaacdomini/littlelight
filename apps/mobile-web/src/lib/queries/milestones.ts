@@ -1,11 +1,11 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Milestone,
   type MilestoneCreate,
   type MilestoneUpdate,
   milestoneSchema,
   milestonesListResponseSchema,
-} from "@littlelight/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { apiFetch } from "../api";
 import { photosRoot } from "./photos";
 

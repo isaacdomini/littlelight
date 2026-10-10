@@ -1,4 +1,4 @@
-import { ageGroupSortValue, PHOTO_DETAILS_LIMITS } from "@littlelight/shared";
+import { ageGroupSortValue, PHOTO_DETAILS_LIMITS } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import {
   batchDetailsSql,

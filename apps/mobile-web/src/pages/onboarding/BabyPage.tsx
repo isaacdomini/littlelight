@@ -1,5 +1,5 @@
-import { type Baby, babyCreateSchema, babySchema } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import { type Baby, babyCreateSchema, babySchema } from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ME_KEY, useAuth } from "../../auth/AuthProvider";

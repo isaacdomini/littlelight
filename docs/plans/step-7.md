@@ -179,7 +179,7 @@ Regenerate `packages/db/src/generated` (`pnpm db:types`); README: migration row 
 (step 7)" section (policy rewrite rationale, guard, stale definition, `ai_spend`, who may write what,
 budget redefinition, 24 h turn counter). `pgmigrations` becomes 14.
 
-### 2.4 Shared contracts (`@littlelight/shared`; architect-defined, ai-engineer writes in 7.2 with orchestrator approval)
+### 2.4 Shared contracts (`@tinyglow/shared`; architect-defined, ai-engineer writes in 7.2 with orchestrator approval)
 
 `src/search-document.ts` (new; browser-safe, only `zod`/`./age`):
 
@@ -289,7 +289,7 @@ and `ai_budget_exceeded` (429 with `Retry-After` = seconds to the next UTC month
   baseUrl?, fetch?, log?, timeoutMs })` implementing `ChatModel` against `POST /v1/responses` with the
   verified shapes (2.2): body `{ model, instructions, input, tools, tool_choice: "auto",
   parallel_tool_calls: true, reasoning: { effort }, max_output_tokens, store: false, include:
-  ["reasoning.encrypted_content"], prompt_cache_key: "littlelight-chat-" + CHAT_PROMPT_VERSION, stream }`.
+  ["reasoning.encrypted_content"], prompt_cache_key: "tinyglow-chat-" + CHAT_PROMPT_VERSION, stream }`.
   `ChatMessage` mapping: `system` → `instructions`; `user`/`assistant` → `input` message items;
   assistant turns that carried tool calls are replayed as their **raw provider items** (`ChatMessage`
   assistant variant gains `providerItems?: unknown[]`, opaque, set by the adapter in `ChatCompletion.
@@ -493,7 +493,7 @@ string[], place: string|null, limit }`. Steps, all in the caller's claims transa
 `GET /babies/:id/search/facets` → `searchFacetsResponse` (people/milestones/tags/places with counts and
 the date range over the baby's live approved `photo_search` rows; one SQL with `unnest` + GROUP BY, cached
 by the client for 60 s). Both behind the gate. `apps/api/src/search/bench.ts` (`pnpm search:bench
-[--baby <id>] [--runs 200]`, host, `tsx`, connects as `littlelight_api` with the demo mom's claims via
+[--baby <id>] [--runs 200]`, host, `tsx`, connects as `tinyglow_api` with the demo mom's claims via
 `runAs`): runs a fixed query mix (10 % filters-only, 40 % text, 30 % text + date/age, 20 % text + person/
 milestone/tag) against the search seed, prints p50/p95/max `tookMs` per class, the candidate counts, and
 `EXPLAIN (ANALYZE, BUFFERS)` of one HNSW-path query (must show `Index Scan using photo_search_embedding_idx`)
@@ -547,7 +547,7 @@ query) or tool results. `req.body.text` is added to the pino redact list (2.9).
 
 - `apps/api/src/config.ts`: add `searchEnvSchema`, `chatEnvSchema`, the `aiEnvSchema` fields the API
   needs (`VISION_PROVIDER`, `OPENAI_API_KEY`, `CHAT_MODEL`, `CHAT_REASONING_EFFORT`, `EMBED_MODEL`,
-  `EMBED_DIMS`, `OPENAI_BASE_URL`, `AI_ALLOW_FAKE_IN_PRODUCTION`) — parsed through `@littlelight/ai`'s
+  `EMBED_DIMS`, `OPENAI_BASE_URL`, `AI_ALLOW_FAKE_IN_PRODUCTION`) — parsed through `@tinyglow/ai`'s
   `parseAiEnv` so one schema rules; `EMBED_DIMS !== 1024` ⇒ `ConfigError`.
 - `apps/api/src/plugins/ai.ts` (new): `registerAi(app, { chat: ChatModel | null, embedder: Embedder |
   null, status: AiStatus })` built once with `createChatModel`/`createEmbedder` in a try (no key ⇒ both
@@ -608,7 +608,7 @@ query) or tool results. `req.body.text` is added to the pino redact list (2.9).
 | Provider switch | `api` gets `VISION_PROVIDER: ${VISION_PROVIDER:-openai}` (Compose interpolation, like the worker) so `VISION_PROVIDER=fake docker compose -f docker-compose.dev.yml up -d --no-deps api worker` runs a keyless chat + search stack (D12) | `x-app-env` passes `SEARCH_*`/`CHAT_*` with `${VAR:-default}` to api and worker |
 | New settings | `.env.dev`: `SEARCH_RERANK=off`, `SEARCH_EXACT_MAX=2000`, `SEARCH_HNSW_EF_SEARCH=100`, `SEARCH_RECONCILE_CRON=17 * * * *`, `SEARCH_EMBED_BATCH=100`, `CHAT_TURNS_PER_DAY=100`, `CHAT_MAX_TOOL_ROUNDS=4`, `CHAT_MAX_OUTPUT_TOKENS=800`, `CHAT_HISTORY_MESSAGES=20`, `CHAT_MODEL_TIMEOUT_MS=30000` with one-line comments | `.env.example`: same with explanations |
 | nginx | – | `docker/nginx/*.conf`: for `location ~ ^/api/babies/[^/]+/chat/messages$` set `proxy_buffering off; proxy_cache off; proxy_read_timeout 180s; proxy_http_version 1.1; proxy_set_header Connection "";` (SSE through nginx; cloudflared's 100 s idle limit is covered by the 15 s keepalive comments). Vite's proxy streams by default (verify in 7.11) |
-| Scripts | root `package.json`: `"e2e:search-gate": "tsx e2e/search/gate.ts"`, `"search:seed": "pnpm --filter @littlelight/worker search-seed"`, `"search:bench": "pnpm --filter @littlelight/api search-bench"`; `apps/worker/package.json` `"search-seed": "tsx src/ai/search-seed.ts"`; `apps/api/package.json` `"search-bench": "tsx src/search/bench.ts"` | – |
+| Scripts | root `package.json`: `"e2e:search-gate": "tsx e2e/search/gate.ts"`, `"search:seed": "pnpm --filter @tinyglow/worker search-seed"`, `"search:bench": "pnpm --filter @tinyglow/api search-bench"`; `apps/worker/package.json` `"search-seed": "tsx src/ai/search-seed.ts"`; `apps/api/package.json` `"search-bench": "tsx src/search/bench.ts"` | – |
 | Dependencies | none new (plain `fetch`, `node:http` mocks, `TextDecoder`). If anyone needs one, stop and report | – |
 | CI `check` | `ai-hygiene.sh` unchanged in scope (keys still never in `apps/mobile-web/src`, `packages/shared/src`); add `grep -rn "search_text" apps/api/src/chat apps/api/src/search/routes.ts` ⇒ must be empty except the SQL SELECT list in `hybrid.ts`/`facets` (simplest: assert the string never appears in `packages/shared/src/api` and `apps/api/src/chat`); integration suites named in `check-integration-report.mjs` gain the step-7 files | – |
 | CI `dev-stack-smoke` | after the AI gate: `pnpm e2e:search-gate --provider fake --count 2000 --timeout-min 10` (the gate itself recreates `api` + `worker` with `VISION_PROVIDER=fake` and restores them), upload `e2e/search-gate/` on failure, 15-minute step timeout | – |
@@ -740,7 +740,7 @@ T = test. Same-lane tasks run in sequence unless noted.
   on `output_item` items (R1); nothing from a request or response body ever in an `Error` or a log; the
   fake chat model refuses production like the fake vision provider; `Embedder.embed` returns usage; README
   updated (chat adapter status, fake chat rules, what the bake-off must verify).
-- Done-when: `pnpm --filter @littlelight/ai typecheck && test` green with 7.10's adapter tests (write the
+- Done-when: `pnpm --filter @tinyglow/ai typecheck && test` green with 7.10's adapter tests (write the
   mock server so that is possible); `createChatModel({VISION_PROVIDER:"fake"})` answers "Show first steps"
   with one `search_photos` call whose `milestones` is `["First steps"]`.
 
@@ -755,7 +755,7 @@ T = test. Same-lane tasks run in sequence unless noted.
   hash skip; spend rows; budget; `embedder null` degrade path; the seed refuses non-localhost and
   production, writes schema-valid `photo_ai` rows and the 50 golden targets.
 - Done-when: 7.10's unit + integration tests green; on the fake dev stack `pnpm search:seed --count 2000`
-  then `pnpm --filter @littlelight/worker run-job search.backfill '{"babyId":"<golden>","reason":"manual"}'`
+  then `pnpm --filter @tinyglow/worker run-job search.backfill '{"babyId":"<golden>","reason":"manual"}'`
   leaves every `content_hash` unchanged; `run-job search.reconcile` embeds Maya's 9 seeded rows
   (`embedding IS NOT NULL`, `embed_model = 'fake/1024'`) and writes `ai_spend` rows with `kind = 'embed'`;
   the worker log has no document text (`grep -c 'Note from parent'` = 0).
@@ -766,7 +766,7 @@ T = test. Same-lane tasks run in sequence unless noted.
 - Build 2.7. Explicit requirements: batch handler; `search.reconcile` singleton cron from config;
   `search.backfill` singleton per baby, sent after an `ai.backfill` upgrade; `EMBED_DIMS` guard; the worker
   boots with and without a key; `run-job` supports the three jobs.
-- Done-when: `queues: 10` in the boot log; `pnpm --filter @littlelight/worker run-job search.reconcile`
+- Done-when: `queues: 10` in the boot log; `pnpm --filter @tinyglow/worker run-job search.reconcile`
   exits 0 with `{skipped: …}`-style output when no provider; typecheck/tests green.
 
 ### 7.7 API: hybrid search, search routes, facets, bench, chat agent, tools, routes (ai-engineer) — group 2 (after 7.2, 7.3; parallel with 7.5/7.6/7.8)
@@ -786,7 +786,7 @@ T = test. Same-lane tasks run in sequence unless noted.
 
 - Owned: `apps/api/src/plugins/ai.ts`, `apps/api/src/config.ts`, `apps/api/src/app.ts`, `apps/api/src/server.ts`,
   `apps/api/src/lib/errors.ts`, `apps/api/src/photos/queries.ts` (export only if needed).
-- Build 2.9. Explicit requirements: the API reads `OPENAI_API_KEY` only through `@littlelight/ai`
+- Build 2.9. Explicit requirements: the API reads `OPENAI_API_KEY` only through `@tinyglow/ai`
   factories; no key value ever in a log or `/healthz`; `req.body.text` redacted; `plan_required` and
   `ai_budget_exceeded` mapped; `EMBED_DIMS` guard.
 - Done-when: API boots with and without a key (`AI enabled: provider=fake …` / `AI disabled: …` line);
@@ -805,7 +805,7 @@ T = test. Same-lane tasks run in sequence unless noted.
 - Done-when: against the fake dev stack as mom: "Show first steps" streams an answer with a grid, tapping
   a thumb opens the viewer, clear empties the thread after reload; the nanny sees the notice; a free baby
   sees the upsell; the search bar with a person chip narrows the timeline; desktop shows the pane;
-  `pnpm --filter @littlelight/mobile-web typecheck && test` green.
+  `pnpm --filter @tinyglow/mobile-web typecheck && test` green.
 
 ### 7.10 Unit and integration tests, fixtures (test-engineer) — group 3 (after 7.2–7.8; adapter tests may start after 7.4)
 
@@ -906,12 +906,12 @@ pnpm e2e:search-gate --provider real --count 2000 --timeout-min 30
 # (50,000 docs would be ~$0.25 more). Expected: golden hit@5 >= 85 %, semantic hit@5 reported (target >= 85 %
 # before launch), citation validity 100 %, first-token p95 < 2 s and turn wall p95 < 5 s, cost per turn
 # <= $0.001, reasoning_tokens small (effort low), no provider rejection of store:false / include / strict tools.
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select kind, count(*), sum(cost_usd) from ai_spend group by kind"
 docker compose -f docker-compose.dev.yml logs api worker | grep -Ei 'Note from parent|\[photo:|sk-[A-Za-z0-9]{8}' ; echo "no docs/answers/keys in logs: exit $?"   # exit 1
 ```
 
-### 4.4 API walkthrough (cookie jar `a.jar` as `demo-mom@littlelight.local`, `n.jar` as the nanny; `B=http://localhost:8080`, `H='x-littlelight-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, fake stack from 4.1 after one `search.reconcile`)
+### 4.4 API walkthrough (cookie jar `a.jar` as `demo-mom@tinyglow.local`, `n.jar` as the nanny; `B=http://localhost:8080`, `H='x-tinyglow-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, fake stack from 4.1 after one `search.reconcile`)
 
 1. `curl -s -b a.jar "$B/api/babies/$MAYA/search?q=bath" | jq '.photos[0].id, .degraded, .tookMs'` → the bath photo `…304`, `null`, a small number; as the nanny → 403 `forbidden`; on a free baby created by mom → 403 `plan_required`.
 2. `curl -s -b a.jar "$B/api/babies/$MAYA/search/facets" | jq '.people, .milestones | length'` → the seeded people and milestone counts.
@@ -926,14 +926,14 @@ docker compose -f docker-compose.dev.yml logs api worker | grep -Ei 'Note from p
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
 WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true \
 JWT_SECRET=dev-only-jwt-secret-at-least-32-characters PUBLIC_URL=http://localhost:8080 \
-MAIL_FROM=noreply@littlelight.local SMTP_HOST=localhost \
+MAIL_FROM=noreply@tinyglow.local SMTP_HOST=localhost \
 S3_ENDPOINT=http://localhost:9000 S3_PUBLIC_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev \
-S3_BUCKET=littlelight-test VISION_PROVIDER=fake pnpm test:integration
+S3_BUCKET=tinyglow-test VISION_PROVIDER=fake pnpm test:integration
 pnpm smoke && CI=1 pnpm e2e
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                # 14
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 $PSQL "select count(*) from photo_search s join babies b on b.id=s.baby_id where not baby_ai_enabled(b.id)"   # 0 (perf baby, free babies)

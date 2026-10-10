@@ -159,7 +159,7 @@ describe("NotificationsPage: saving preferences", () => {
     expect(call?.method).toBe("PATCH");
     expect(call?.url).toBe("https://api.example.test/api/me/profile");
     expect(call?.body).toEqual({ notifyPhotosAnalyzed: false });
-    expect(call?.headers.get("X-Littlelight-Client")).toBe("native");
+    expect(call?.headers.get("X-Tinyglow-Client")).toBe("native");
     fireEvent.click(screen.getByTestId("notify-share-viewed"));
     await waitFor(() => expect(f.calls.length).toBe(2));
     expect(f.calls[1]?.body).toEqual({ notifyShareViewed: false });

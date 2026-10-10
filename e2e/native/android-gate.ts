@@ -46,7 +46,7 @@ const sh = promisify(execFile);
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const OUT_DIR = path.join(ROOT, "e2e/native-results");
 const SHOTS = path.join(OUT_DIR, "android");
-const PKG = "com.tesarsoft.littlelight";
+const PKG = "com.tesarsoft.tinyglow";
 const ACTIVITY = `${PKG}/.MainActivity`;
 const APK = path.join(ROOT, "apps/mobile-web/android/app/build/outputs/apk/debug/app-debug.apk");
 const SDK = process.env.ANDROID_HOME ?? path.join(os.homedir(), "Library/Android/sdk");
@@ -54,7 +54,7 @@ const JAVA_HOME =
   process.env.ANDROID_GATE_JAVA_HOME ??
   path.join(os.homedir(), ".asdf/installs/java/temurin-21.0.12+101.0.LTS");
 const SHARE_TOKEN = "demo-grandparents-share-token";
-const PROD_HOST = "https://littlelight.tesarsoft.com";
+const PROD_HOST = "https://tinyglow.app";
 const BASE = process.env.E2E_BASE_URL ?? `http://localhost:${process.env.WEB_PORT ?? 8080}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -134,7 +134,7 @@ async function buildApk(): Promise<void> {
     CAP_DEV_MIXED_CONTENT: "1",
   };
   console.log("cap sync android (CAP_DEV_MIXED_CONTENT=1) ...");
-  await sh("pnpm", ["--filter", "@littlelight/mobile-web", "native:sync:android"], {
+  await sh("pnpm", ["--filter", "@tinyglow/mobile-web", "native:sync:android"], {
     cwd: ROOT,
     env,
     maxBuffer: 64 * 1024 * 1024,
@@ -405,8 +405,8 @@ async function run(): Promise<void> {
       "/auth/sessions",
     );
     check(
-      'Devices list shows "Littlelight app on Android"',
-      JSON.stringify(sessions.body).includes("Littlelight app on Android"),
+      'Devices list shows "Tinyglow app on Android"',
+      JSON.stringify(sessions.body).includes("Tinyglow app on Android"),
       `status ${sessions.status}`,
     );
   });
@@ -426,7 +426,7 @@ async function run(): Promise<void> {
 
   await guarded("4. https deep link /s/<token> opens the shared album", async () => {
     await shell(
-      `pm set-app-links-user-selection --user 0 --package ${PKG} true littlelight.tesarsoft.com`,
+      `pm set-app-links-user-selection --user 0 --package ${PKG} true tinyglow.app`,
     ).catch(() => "");
     await startLink(`${PROD_HOST}/s/${SHARE_TOKEN}`);
     const p = await page();
@@ -449,10 +449,10 @@ async function run(): Promise<void> {
     );
     await shot("04-share-link");
     // the custom debug scheme as well
-    await startLink(`littlelight://s/${SHARE_TOKEN}`);
+    await startLink(`tinyglow://s/${SHARE_TOKEN}`);
     const p2 = await page();
     check(
-      "littlelight://s/<token> reaches the shared album too",
+      "tinyglow://s/<token> reaches the shared album too",
       await p2
         .locator('[data-testid="share-album"]')
         .first()
@@ -658,7 +658,7 @@ async function run(): Promise<void> {
       .split("\n")
       .filter((l) => {
         const pid = l.trim().split(/\s+/)[2];
-        return (pid !== undefined && pids.has(pid)) || /littlelight/i.test(l);
+        return (pid !== undefined && pids.has(pid)) || /tinyglow/i.test(l);
       })
       .join("\n");
     check(

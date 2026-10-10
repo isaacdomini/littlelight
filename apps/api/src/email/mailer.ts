@@ -1,4 +1,4 @@
-import type { MailEnv } from "@littlelight/shared";
+import type { MailEnv } from "@tinyglow/shared";
 import type { FastifyBaseLogger } from "fastify";
 import { createTransport } from "nodemailer";
 

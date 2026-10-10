@@ -14,7 +14,7 @@ const TSX = path.resolve(import.meta.dirname, "../../../node_modules/.bin/tsx");
 const BASE_ENV = {
   PATH: process.env.PATH ?? "",
   HOME: process.env.HOME ?? "",
-  DATABASE_URL: "postgres://littlelight_worker:x@127.0.0.1:1/none",
+  DATABASE_URL: "postgres://tinyglow_worker:x@127.0.0.1:1/none",
   S3_ENDPOINT: "http://127.0.0.1:1",
   S3_PUBLIC_ENDPOINT: "http://127.0.0.1:1",
   S3_ACCESS_KEY: "dev",

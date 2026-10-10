@@ -10,10 +10,10 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import { UPLOAD_MAX_FILE_BYTES } from "@littlelight/shared";
+import { UPLOAD_MAX_FILE_BYTES } from "@tinyglow/shared";
 
 // Worker object storage (docs/plans/step-4.md 2.7, 2.8, D6). The worker uses its bucket-scoped
-// MinIO service account (`littlelight-worker`: get/put/abort + delete incl. object versions) on
+// MinIO service account (`tinyglow-worker`: get/put/abort + delete incl. object versions) on
 // the internal S3_ENDPOINT. Errors surface as `StorageError` carrying the SDK error name only:
 // keys are ids, never secrets, but signed URLs and request ids never reach a log line.
 

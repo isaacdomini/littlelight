@@ -4,7 +4,7 @@ import {
   EXPORT_LIST_LIMIT,
   type ExportError,
   type ExportStatus,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { Tx } from "../auth";
 
 // `data_exports` reads and writes under the caller's claims (docs/plans/review-fixes.md 2.1 B,
@@ -165,7 +165,7 @@ export async function babyName(client: Tx, babyId: string): Promise<string | nul
 const FILENAME_MAX_SLUG = 40;
 
 /**
- * `littlelight-<ascii baby name>-<YYYY-MM-DD>.zip` for `Content-Disposition`: diacritics folded,
+ * `tinyglow-<ascii baby name>-<YYYY-MM-DD>.zip` for `Content-Disposition`: diacritics folded,
  * anything but letters and digits collapsed to `-`, at most 40 chars, `album` when nothing is
  * left. The date is the export's creation day (UTC). Plain ASCII, so no quoting or RFC 5987
  * encoding is needed. Exported for tests.
@@ -178,5 +178,5 @@ export function exportFileName(name: string | null, createdAt: Date): string {
     .replace(/[^a-z0-9]+/g, "-")
     .slice(0, FILENAME_MAX_SLUG)
     .replace(/^-+|-+$/g, "");
-  return `littlelight-${slug || "album"}-${createdAt.toISOString().slice(0, 10)}.zip`;
+  return `tinyglow-${slug || "album"}-${createdAt.toISOString().slice(0, 10)}.zip`;
 }

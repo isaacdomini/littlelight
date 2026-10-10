@@ -13,7 +13,7 @@ BEGIN
     RAISE EXCEPTION 'auth.users is missing: start the auth (GoTrue) service before running migrations';
   END IF;
   FOREACH required_role IN ARRAY ARRAY[
-    'littlelight_api', 'littlelight_worker', 'authenticated', 'viewer', 'pipeline', 'service_role', 'anon'
+    'tinyglow_api', 'tinyglow_worker', 'authenticated', 'viewer', 'pipeline', 'service_role', 'anon'
   ] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = required_role) THEN
       RAISE EXCEPTION 'role % is missing: run pnpm db:bootstrap before migrating', required_role;
@@ -27,7 +27,7 @@ $guard$;
 -- on are fully granted to service_role (API-internal, BYPASSRLS); every other role is granted per
 -- table and per column in the migration that creates the table.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO littlelight_api, littlelight_worker, authenticated, viewer, pipeline, service_role;
+GRANT USAGE ON SCHEMA public TO tinyglow_api, tinyglow_worker, authenticated, viewer, pipeline, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
 
@@ -200,6 +200,6 @@ REVOKE EXECUTE ON FUNCTION public.pgp_sym_decrypt_bytea(bytea, text, text) FROM 
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM service_role;
-REVOKE USAGE ON SCHEMA public FROM littlelight_api, littlelight_worker, authenticated, viewer, pipeline, service_role;
+REVOKE USAGE ON SCHEMA public FROM tinyglow_api, tinyglow_worker, authenticated, viewer, pipeline, service_role;
 -- Restore the Postgres 15+ default (USAGE for everyone, no CREATE).
 GRANT USAGE ON SCHEMA public TO PUBLIC;

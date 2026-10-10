@@ -38,7 +38,7 @@ describe("native requests", () => {
     const c = f.calls[0];
     expect(c?.url).toBe(`${API}/api/me`);
     expect(c?.headers.get("Authorization")).toBe("Bearer AT-1");
-    expect(c?.headers.get("X-Littlelight-Client")).toBe("native");
+    expect(c?.headers.get("X-Tinyglow-Client")).toBe("native");
     expect(c?.headers.get("Accept")).toBe("application/json");
     expect(c?.credentials).not.toBe("include");
   });
@@ -50,7 +50,7 @@ describe("native requests", () => {
     const f = stubFetch(() => jsonResponse({ ok: true }));
     await api.apiFetch("/me");
     expect(f.calls[0]?.headers.has("Authorization")).toBe(false);
-    expect(f.calls[0]?.headers.get("X-Littlelight-Client")).toBe("native");
+    expect(f.calls[0]?.headers.get("X-Tinyglow-Client")).toBe("native");
   });
 
   it("JSON bodies get a content type", async () => {
@@ -72,7 +72,7 @@ describe("web requests (control)", () => {
     const f = stubFetch(() => jsonResponse({}));
     await api.apiFetch("/me");
     expect(f.calls[0]?.url).toBe("/api/me");
-    expect(f.calls[0]?.headers.get("X-Littlelight-Client")).toBe("web");
+    expect(f.calls[0]?.headers.get("X-Tinyglow-Client")).toBe("web");
     expect(f.calls[0]?.headers.has("Authorization")).toBe(false);
     expect(f.calls[0]?.credentials).toBe("same-origin");
   });

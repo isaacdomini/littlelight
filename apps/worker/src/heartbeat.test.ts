@@ -17,7 +17,7 @@ function makeDeps(send: () => Promise<unknown>) {
       },
     },
     s3: { send: send as never },
-    bucket: "littlelight-dev",
+    bucket: "tinyglow-dev",
     workerId: "w1",
     hostname: "w1",
     pid: 42,

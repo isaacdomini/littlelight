@@ -11,7 +11,7 @@ import {
   type PatchImportSourceRequest,
   type SyncTrigger,
   type UpsertImportSourceRequest,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { Tx } from "../auth";
 
 // `import_sources` / `import_batches` / `google_accounts` reads and writes under the caller's

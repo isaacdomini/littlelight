@@ -48,7 +48,7 @@ describe("native viewer session", () => {
     expect(f.calls[0]?.headers.has("Authorization")).toBe(false);
     expect(f.calls[1]?.url).toContain(`${API}/api/share/photos?`);
     expect(f.calls[1]?.headers.get("Authorization")).toBe("Bearer VT-1");
-    expect(f.calls[1]?.headers.get("X-Littlelight-Client")).toBe("native");
+    expect(f.calls[1]?.headers.get("X-Tinyglow-Client")).toBe("native");
     expect(f.calls[1]?.credentials).not.toBe("include");
     expect(f.calls[1]?.referrerPolicy).toBe("no-referrer");
     expect(setItem).not.toHaveBeenCalled();
@@ -212,7 +212,7 @@ describe("web viewer (control)", () => {
     expect(exchanges).toBe(1);
     expect(f.calls[0]?.url).toBe("/api/share/session");
     expect(f.calls[1]?.headers.has("Authorization")).toBe(false);
-    expect(f.calls[1]?.headers.get("X-Littlelight-Client")).toBe("web");
+    expect(f.calls[1]?.headers.get("X-Tinyglow-Client")).toBe("web");
     expect(f.calls[1]?.credentials).toBe("same-origin");
   });
 });

@@ -1,4 +1,4 @@
-# Littlelight build progress
+# Tinyglow build progress
 
 This file is updated by the orchestrator at the end of every completed step (per `CLAUDE.md`'s
 "Record" workflow step), right before the commit for that step. It is the main way a human
@@ -22,7 +22,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
 
 ## Step 1: Scaffold (monorepo, Docker Compose, CI)
 
-- **Built**: pnpm 12 monorepo (`@littlelight/{shared,ai,db,api,worker,mobile-web}`), Biome, Vitest,
+- **Built**: pnpm 12 monorepo (`@tinyglow/{shared,ai,db,api,worker,mobile-web}`), Biome, Vitest,
   TypeScript 7. `packages/db`: GoTrue bootstrap (`supabase_auth_admin`, `auth` schema, NOLOGIN
   `anon`/`authenticated`/`service_role`) + reversible node-pg-migrate SQL migrations (pgvector,
   pgcrypto, `worker_heartbeats` with RLS) + no-op seed. Fastify API with `/healthz` (db + storage).
@@ -72,8 +72,8 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
 - **Built**: 7 reversible migrations (9 total) with every PRD Data-model + Auth-data-model table
   (22 tables), indexes (HNSW cosine on `photo_search.embedding` vector(1024), GIN on tsv/tags),
   ENABLE+FORCE RLS on every table with a per-role policy matrix and column-level grants.
-  Roles: `littlelight_api` (SET LOCAL ROLE authenticated|viewer|service_role per transaction),
-  `littlelight_worker` (→ `pipeline`), NOLOGIN `viewer`/`pipeline`, `service_role` BYPASSRLS
+  Roles: `tinyglow_api` (SET LOCAL ROLE authenticated|viewer|service_role per transaction),
+  `tinyglow_worker` (→ `pipeline`), NOLOGIN `viewer`/`pipeline`, `service_role` BYPASSRLS
   (API only). SECURITY DEFINER helpers (`is_baby_member`, `is_baby_admin`, `viewer_can_see_photo`, …)
   with pinned search_path. DB-enforced rules: max 2 admins, last admin can't leave, invite rate
   limit, free tier 1,000 photos, AI only for paid babies, sensitive photos never rule-shared (and
@@ -110,7 +110,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
 - **Open issues**:
   - Step 3: the claims wrapper must use BEGIN…COMMIT + `SET LOCAL ROLE`, release path
     `RESET ROLE`/`DISCARD ALL`, never plain `SET ROLE`, with a test asserting
-    `current_user = 'littlelight_api'` after each call. Seeded GoTrue users only proven to sign in
+    `current_user = 'tinyglow_api'` after each call. Seeded GoTrue users only proven to sign in
     once step 3 runs OTP against them (fallback: seed via GoTrue admin API).
   - Step 3: deleting the paying admin (`plan_owner_user_id ON DELETE SET NULL`) must settle
     `babies.plan`/entitlement.
@@ -127,7 +127,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   Vite both 404 the rest). Email 6-digit OTP primary + magic-link fallback (`/signin/callback#token_hash`),
   Apple/Google (PKCE + native id-token) implemented behind flags defaulting off. jose HS256 JWT
   verification; web sessions in httpOnly cookies (`ll_access` Path /api Lax 1 h, `ll_refresh` Path
-  /api/auth Strict 30-day sliding) with `X-Littlelight-Client` CSRF header; native bearer tokens.
+  /api/auth Strict 30-day sliding) with `X-Tinyglow-Client` CSRF header; native bearer tokens.
   `runAs` per-transaction identity (SET LOCAL ROLE + claims GUC, RESET ROLE/DISCARD ALL on release,
   dead clients destroyed); `withClaims` checks the GoTrue session is live on every request, so
   per-device sign-out / account deletion take effect immediately; `withServiceRole(reason)` used in 3
@@ -170,7 +170,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     uses chokidar polling.
 - **Open issues**:
   - Needs user (not for the gate): Apple (App ID, Services ID, .p8 key), Google (web/iOS/Android
-    client IDs + web secret), redirect URI `https://littlelight.tesarsoft.com/auth/callback`;
+    client IDs + web secret), redirect URI `https://tinyglow.app/auth/callback`;
     Turnstile keys; Postmark/Resend SMTP + verified sender; real Terms/Privacy text (placeholders,
     version 2026-10-08).
   - API throttles are in-memory (single instance); e2e uses ~19 OTPs/run against the 30/h/IP limit,
@@ -198,8 +198,8 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   capture (estimated flag), HEIC via heic-decode, thumb 320 / display 1600 / analysis 768 JPEG q75 with all
   metadata stripped, CSAM matcher seam (no-op default; PhotoDNA client untested), quarantine, exact-dup
   removal incl. object versions, purge.trash (30 days, all versions), uploads.sweep, ingest.reconcile,
-  80 % disk alert via read-only storage mount, run-job CLI. MinIO: bucket-scoped `littlelight-api` (no
-  delete) and `littlelight-worker` (deletes incl. versions) service accounts from `storage-init`, 7-day
+  80 % disk alert via read-only storage mount, run-job CLI. MinIO: bucket-scoped `tinyglow-api` (no
+  delete) and `tinyglow-worker` (deletes incl. versions) service accounts from `storage-init`, 7-day
   noncurrent lifecycle, CORS. Web: upload screen (picker, drag-and-drop, per-photo progress, retry,
   resume after reload, summary line, batch details), basic timeline grid, admin approval queue.
   Tests: 561 unit, 544 integration (db 275, api 222, worker 47 against real MinIO), 15 Playwright e2e,
@@ -212,9 +212,9 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   rows encrypted, purge 3 photos → 0 rows / 0 object versions.
 - **Decisions**:
   - **User decisions (2026-10-08):** cloudflared runs outside Compose (removed with its token); prod
-    publishes only `web` → `${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}` (littlelight.tesarsoft.com) and
-    `storage` → `${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}` (files.littlelight.tesarsoft.com, keep
-    Host header, path `^/littlelight/.`); every dev port is env-driven too, with PUBLIC_URL, GoTrue URLs
+    publishes only `web` → `${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}` (tinyglow.app) and
+    `storage` → `${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}` (files.tinyglow.app, keep
+    Host header, path `^/tinyglow/.`); every dev port is env-driven too, with PUBLIC_URL, GoTrue URLs
     and S3_PUBLIC_ENDPOINT derived from them. Host exiftool install was approved but Homebrew needs the
     Xcode license (sudo); exiftool runs via Docker instead.
   - Gate pacing: the gate uploads at 3 photos/s (`GATE_UPLOAD_RATE`, ~1.8× the PRD's 500-in-5-min
@@ -428,7 +428,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   (`apps/api/src/sharing/**`): admin routes (create/list/patch/renew/regenerate/revoke/delete, rule
   PUT/DELETE Plus-only, add/remove photos, show a sensitive photo to family, per-photo links);
   viewer token exchange → `ll_viewer` cookie (`Path=/api/share`, HttpOnly, SameSite=Lax, separate
-  `littlelight-viewer` JWT audience) or native bearer, album/photos/urls/download/manifest with exact
+  `tinyglow-viewer` JWT audience) or native bearer, album/photos/urls/download/manifest with exact
   payload keys, 5-minute `Cache-Control: private` media URLs, display-copy downloads (60 s, ASCII
   file name). Web: Family screen share-link cards (status, counts, views, passcode lock notice),
   create/settings sheets, URL shown once, manage photos, viewer at `/s/:token` (passcode, album by
@@ -471,12 +471,12 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
 
 ## Step 9 (part A): native apps without store accounts
 
-- **Built**: Capacitor 8 iOS (SPM) and Android projects, bundle id `com.tesarsoft.littlelight`,
+- **Built**: Capacitor 8 iOS (SPM) and Android projects, bundle id `com.tesarsoft.tinyglow`,
   iPhone only, portrait. Permission strings, `PrivacyInfo.xcprivacy` (no tracking; precise location
   from photo metadata), entitlements (`applinks:`, `aps-environment`), Android manifest without
   media/storage/location permissions, no backup, cleartext only to localhost in debug, App Links and
-  AASA/assetlinks files with placeholder team id and fingerprints, debug-only `littlelight://` scheme.
-  In-house `LittlelightUploader` plugin (iOS background `URLSession`, Android WorkManager `dataSync`
+  AASA/assetlinks files with placeholder team id and fingerprints, debug-only `tinyglow://` scheme.
+  In-house `TinyglowUploader` plugin (iOS background `URLSession`, Android WorkManager `dataSync`
   foreground worker): raw-body PUT to presigned MinIO URLs, no extra headers, no URL logging,
   survives backgrounding and app kill (capgo uploader evaluated and dropped). App layer
   (`src/platform/native/**`): API origin via `VITE_API_URL`, tokens only in Keychain/Keystore
@@ -513,7 +513,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   links open the app"): pending user credentials (part B).**
 - **Decisions**:
   - **User decisions (2026-10-09):** split step 9 into part A (now) and part B (store accounts);
-    bundle id `com.tesarsoft.littlelight`; no purchase prompts in the native apps (billing is a
+    bundle id `com.tesarsoft.tinyglow`; no purchase prompts in the native apps (billing is a
     later step); static-code review account; free disk then install tools; deleted iOS 26.0/26.1
     simulator runtimes (kept 26.4.1; iOS 27 runtime not installed); commit without the Android
     runtime check.
@@ -572,7 +572,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     - Account deletion marks the profile deleted only after GoTrue succeeds, and compensates on
       failure.
     - Downgraded admins can read and clear chat history.
-    - The iOS Release Info.plist has no `littlelight://` scheme or local networking (Debug plist via
+    - The iOS Release Info.plist has no `tinyglow://` scheme or local networking (Debug plist via
       xcconfig).
     - Store listings no longer mention Plus.
     - The viewer `takenAt` is date-only.
@@ -619,7 +619,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   apple photos album". Platform limits: no server can watch either service's albums (Google removed
   the Library API read scopes in 2025; there is no iCloud shared-album API).
 - **Built**:
-  - **Apple album sync (iPhone only).** In-house `LittlelightPhotoSync` plugin (PhotoKit):
+  - **Apple album sync (iPhone only).** In-house `TinyglowPhotoSync` plugin (PhotoKit):
     - lists user albums
     - exports the original resource (HEIC kept, EXIF + GPS intact) with a native SHA-256
     - keeps an on-device ledger (asset ids never leave the phone; excluded from backup)
@@ -631,7 +631,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     - `PhotoSyncManager` feeds the `UploadManager` on a low-priority sync lane (2 slots, user
       uploads first). It syncs newest first, 50 photos per foreground batch and 25 per background
       wake. It pauses in Low Power Mode, under thermal pressure and on cellular (Wi-Fi only by
-      default), stops at the free-tier cap, and never deletes from Littlelight.
+      default), stops at the free-tier cap, and never deletes from Tinyglow.
     - UI: Upload → "Album sync" card → "Set up", and Settings → "Photo import". Parents only.
     - Full Photos permission is requested only from setup.
     - Demotion turns sync off; sign-out wipes the ledger.
@@ -656,7 +656,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - **Store copy and privacy:**
     - Review notes and privacy/Data Safety drafts updated, and `NATIVE.md` updated.
     - Store descriptions mention importing from Apple Photos albums and Google Photos.
-    - A leftover "(LITTLELIGHT PLUS)" heading was removed.
+    - A leftover "(TINYGLOW PLUS)" heading was removed.
   - **Other:**
     - The email logs no longer include `messageId`.
     - Counts are formatted with thousands separators ("1,240").
@@ -685,7 +685,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     - Apple sync for parents only; Google import for parents and helpers (helpers' photos pending);
     - available on Free within the photo cap;
     - Wi-Fi only by default;
-    - planner defaults D2–D20: never delete from Littlelight; no Android auto-sync; one web OAuth
+    - planner defaults D2–D20: never delete from Tinyglow; no Android auto-sync; one web OAuth
       client; Google strips GPS and the UI says so; a fake Picker in dev and CI.
   - Encryption functions are `service_role` only. A demotion deletes the user's Apple sync rows.
     Abandoned pickers auto-expire.
@@ -697,7 +697,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     - an OAuth consent screen with the `photospicker.mediaitems.readonly` scope, test users (7-day
       tokens in Testing), then Google verification;
     - a Web application client with redirect
-      `https://littlelight.tesarsoft.com/api/import/google/callback`;
+      `https://tinyglow.app/api/import/google/callback`;
     - production `.env`: `GOOGLE_IMPORT_PROVIDER=live`, `GOOGLE_IMPORT_CLIENT_ID`,
       `GOOGLE_IMPORT_CLIENT_SECRET`;
     - a Google test account for the store review notes.
@@ -749,3 +749,33 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - The worker's `invalid_grant` can't evict the API's in-memory cache. This self-heals on the
     next 401 or create.
   - The `touchConnection` write inside the mint could be best-effort.
+
+## Rename: Tinyglow
+
+- **User decision (2026-10-10):** littlelight.com was taken. The product was renamed **Tinyglow**:
+  tinyglow.app was free and tinyglow.com was taken (no trademark search was done). Production
+  hosts are `tinyglow.app` and `files.tinyglow.app`. This is a full rename, and the user approved
+  resetting dev data.
+- **Renamed:**
+  - Product name and copy everywhere.
+  - Packages `@tinyglow/*`.
+  - Domains, AASA/assetlinks, App Links and the Google callback.
+  - App ID `com.tesarsoft.tinyglow` (plus `.upload`, `.upload.wifi`, `.sync` and the BGTask id).
+  - Native classes and plugins `Tinyglow*`.
+  - `tinyglow://`, the `Tinyglow/<ver>` user agent and the `X-Tinyglow-Client` header.
+  - JWT, HKDF and model strings, and Sentry release names.
+  - DB `tinyglow`, roles `tinyglow_api` / `tinyglow_worker`, buckets `tinyglow*`, MinIO users and
+    policies.
+  - Docker projects `tinyglow` / `tinyglow-dev`.
+  - Demo emails `@tinyglow.local`.
+  - The chat prompt hash was re-pinned (still v1).
+- **Kept:** internal `ll` prefixes (`ll_viewer`, `ll-uploads`, …), the `LL*` Swift helper classes,
+  the `LLUITests` project, the repo folder name, git history, and the local pnpm path
+  `~/.cache/littlelight-pnpm`.
+- **Verified (rename agent):**
+  - lint, typecheck, unit 3,591, the hygiene checks, the compose-keys canary and actionlint;
+  - fresh dev stack healthy, demo media and smoke passing (smoke needed a `search.backfill` first
+    on a fresh seed with `VISION_PROVIDER=fake`);
+  - web e2e 42/42;
+  - Android debug and iOS simulator builds under the new app ID.
+- **Commit**: rename: Littlelight → Tinyglow

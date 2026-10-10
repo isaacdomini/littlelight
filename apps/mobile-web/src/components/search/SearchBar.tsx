@@ -1,4 +1,4 @@
-import { SEARCH_QUERY_LIMITS } from "@littlelight/shared";
+import { SEARCH_QUERY_LIMITS } from "@tinyglow/shared";
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { isNative } from "../../platform/platform";

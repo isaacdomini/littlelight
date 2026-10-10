@@ -1,7 +1,7 @@
 // English strings. Every user-visible string lives here behind `t()` so the app is
 // localization-ready (PRD "Accessibility and UX"). `{name}` placeholders are interpolated.
 export const en = {
-  "app.name": "Littlelight",
+  "app.name": "Tinyglow",
   "common.continue": "Continue",
   "common.cancel": "Cancel",
   "common.back": "Back",
@@ -27,7 +27,7 @@ export const en = {
   "header.addBaby": "Add another baby",
   "header.noBaby": "No baby yet",
 
-  "welcome.title": "Welcome to Littlelight",
+  "welcome.title": "Welcome to Tinyglow",
   "welcome.subtitle": "A private album for your baby's first moments.",
   "welcome.apple": "Continue with Apple",
   "welcome.google": "Continue with Google",
@@ -57,13 +57,13 @@ export const en = {
   "callback.back": "Back to sign in",
 
   "consent.title": "Before we start",
-  "consent.body": "Littlelight is for parents and caregivers. We need your agreement to continue.",
+  "consent.body": "Tinyglow is for parents and caregivers. We need your agreement to continue.",
   "consent.checkbox.prefix": "I'm 18 or older and agree to the ",
   "consent.checkbox.terms": "Terms",
   "consent.checkbox.and": " and ",
   "consent.checkbox.privacy": "Privacy Policy",
   "consent.continue": "Continue",
-  "consent.under18": "Littlelight is only for people 18 or older.",
+  "consent.under18": "Tinyglow is only for people 18 or older.",
 
   "profile.title": "About you",
   "profile.nameLabel": "Your name",
@@ -107,7 +107,7 @@ export const en = {
 
   "primer.title": "Add your first photos",
   "primer.body":
-    "Littlelight will ask to open your photo library so you can pick photos to upload. We only upload the photos you choose.",
+    "Tinyglow will ask to open your photo library so you can pick photos to upload. We only upload the photos you choose.",
   "primer.choose": "Choose photos",
   "primer.later": "Not now",
 
@@ -315,7 +315,7 @@ export const en = {
   "chat.counter": "{n} of {max}",
   "chat.messages": "Conversation",
   "chat.you": "You",
-  "chat.assistant": "Littlelight",
+  "chat.assistant": "Tinyglow",
   "chat.thinking": "Thinking…",
   "chat.searching": "Searching photos…",
   "chat.photosLabel": "Photos from this answer",
@@ -331,7 +331,7 @@ export const en = {
   "chat.loadError": "Couldn't load your conversation.",
   "chat.retry": "Try again",
   "chat.disclaimer":
-    "Answers come from your album. Littlelight doesn't give medical advice; ask your pediatrician.",
+    "Answers come from your album. Tinyglow doesn't give medical advice; ask your pediatrician.",
   "chat.upgradeHint": "Plus",
 
   "search.label": "Search photos",
@@ -649,7 +649,7 @@ export const en = {
   "share.url.copy": "Copy link",
   "share.url.copied": "Copied",
   "share.url.share": "Share…",
-  "share.url.shareTitle": "Family album · Littlelight",
+  "share.url.shareTitle": "Family album · Tinyglow",
   "share.url.done": "Done",
   "share.url.once":
     "For your privacy we only show this link once. To send it to someone new later, regenerate it (the old link stops working) or ask a family member to forward it.",
@@ -725,21 +725,21 @@ export const en = {
 
   "native.upload.choose": "Choose photos",
   "native.upload.camera": "Take photo",
-  "native.upload.primer": "You pick the photos. Littlelight only receives the ones you choose.",
+  "native.upload.primer": "You pick the photos. Tinyglow only receives the ones you choose.",
   "native.upload.background":
     "Keep the app open until photos are queued. Uploads continue in the background after that.",
   "native.upload.denied":
-    "Littlelight can't open your photos. Allow access in Settings, then try again.",
+    "Tinyglow can't open your photos. Allow access in Settings, then try again.",
   "native.upload.cameraDenied":
-    "Littlelight can't use the camera. Allow access in Settings, then try again.",
+    "Tinyglow can't use the camera. Allow access in Settings, then try again.",
   "native.upload.pickError": "Couldn't get those photos. Please try again.",
   "native.upload.skipped": "{n} photos couldn't be read and were skipped.",
   "native.upload.androidNote":
     "Android removes location from photos you pick, so places like Home aren't labelled automatically. You can add a location under details.",
   "native.primer.body":
-    "Choose the photos to add. Littlelight only receives the photos you pick, and the originals stay untouched.",
+    "Choose the photos to add. Tinyglow only receives the photos you pick, and the originals stay untouched.",
   "native.signin.title": "Open this link in the app",
-  "native.signin.webBody": "Open this link on your phone with the Littlelight app installed.",
+  "native.signin.webBody": "Open this link on your phone with the Tinyglow app installed.",
   "native.signin.appBody":
     "Sign-in with this link isn't available yet. Use your email code instead.",
   "native.signin.back": "Back to sign-in",
@@ -754,7 +754,7 @@ export const en = {
   "push.settings.enable": "Turn on notifications",
   "push.settings.enabled": "Notifications are on for this device.",
   "push.settings.denied":
-    "Notifications are turned off for Littlelight. Turn them on in your phone's Settings.",
+    "Notifications are turned off for Tinyglow. Turn them on in your phone's Settings.",
   "push.settings.unavailable": "Notifications are not available in this build.",
   "push.settings.failed": "Couldn't turn on notifications. Please try again.",
   "push.settings.kinds": "Tell me when",
@@ -822,7 +822,7 @@ export const en = {
   "import.title": "Photo import",
   "import.apple.heading": "Apple Photos album sync",
   "import.apple.intro":
-    "Keep one album in sync. New photos from the album you pick are added to Littlelight automatically. Nothing is ever deleted from Littlelight or from your phone.",
+    "Keep one album in sync. New photos from the album you pick are added to Tinyglow automatically. Nothing is ever deleted from Tinyglow or from your phone.",
   "import.apple.onlyAdmins": "Only a baby's parents can set up album sync.",
   "import.apple.onlyIphone": "Album sync is available in the iPhone app.",
   "sync.empty":
@@ -847,12 +847,12 @@ export const en = {
   "sync.error.free_tier_limit": "Free album is full ({n} photos)",
   "sync.error.permission_denied": "Allow full photo access in Settings",
   "sync.error.album_missing": "That album no longer exists",
-  "sync.error.network": "Couldn't reach Littlelight. It will try again later.",
+  "sync.error.network": "Couldn't reach Tinyglow. It will try again later.",
   "sync.error.storage_error": "Couldn't store some photos. It will try again later.",
   "sync.error.baby_trashed": "This album is in the trash",
   "sync.error.signed_out": "Signed out on this phone",
   "sync.permissionHelp":
-    "Open the Settings app, tap Littlelight, then Photos, and choose Full Access. Come back and tap Sync now.",
+    "Open the Settings app, tap Tinyglow, then Photos, and choose Full Access. Come back and tap Sync now.",
   "sync.syncNow": "Sync now",
   "sync.pause": "Pause",
   "sync.resume": "Resume",
@@ -863,16 +863,16 @@ export const en = {
   "sync.more": "More options",
   "sync.stopConfirm.title": "Stop syncing this album?",
   "sync.stopConfirm.body":
-    "New photos from the album will no longer be added. Photos already in Littlelight stay where they are, and nothing is deleted from your phone.",
+    "New photos from the album will no longer be added. Photos already in Tinyglow stay where they are, and nothing is deleted from your phone.",
   "sync.stopConfirm.action": "Stop syncing",
   "sync.setup.title": "Set up album sync",
   "sync.setup.step1":
-    "To watch one album for new photos, Littlelight needs full access to your photo library. It only reads the album you pick.",
+    "To watch one album for new photos, Tinyglow needs full access to your photo library. It only reads the album you pick.",
   "sync.setup.allow": "Allow access to Photos",
   "sync.setup.limited":
-    "Littlelight only has limited access. Open the Settings app, tap Littlelight, then Photos, and choose Full Access.",
+    "Tinyglow only has limited access. Open the Settings app, tap Tinyglow, then Photos, and choose Full Access.",
   "sync.setup.denied":
-    "Photos access is off. Open the Settings app, tap Littlelight, then Photos, and choose Full Access.",
+    "Photos access is off. Open the Settings app, tap Tinyglow, then Photos, and choose Full Access.",
   "sync.setup.recheck": "I've changed it",
   "sync.setup.step2": "Choose an album",
   "sync.setup.albumCount": "{n} photos",
@@ -881,15 +881,15 @@ export const en = {
   "sync.setup.baby": "Baby",
   "sync.setup.start": "Start syncing",
   "sync.setup.back": "Back",
-  "sync.setup.err.permission": "Littlelight needs full access to your photos to sync an album.",
+  "sync.setup.err.permission": "Tinyglow needs full access to your photos to sync an album.",
   "sync.setup.err.exists": "Another account already syncs on this phone.",
   "sync.setup.err.limit": "This baby already has the most synced albums allowed.",
   "sync.setup.err.forbidden": "Only a baby's parents can turn on album sync.",
   "sync.setup.err.trashed": "This album is in the trash.",
-  "sync.setup.err.network": "Couldn't reach Littlelight. Please try again.",
+  "sync.setup.err.network": "Couldn't reach Tinyglow. Please try again.",
   "google.heading": "Google Photos",
   "google.intro":
-    "Pick photos in Google Photos and bring them into Littlelight. You choose every photo; Littlelight never sees the rest of your library.",
+    "Pick photos in Google Photos and bring them into Tinyglow. You choose every photo; Tinyglow never sees the rest of your library.",
   "google.locationNote":
     "Google Photos keeps the capture date but removes locations, so imported photos have no place on them.",
   "google.contributorNote":
@@ -911,7 +911,7 @@ export const en = {
   "google.disconnect": "Disconnect Google Photos",
   "google.disconnectConfirm.title": "Disconnect Google Photos?",
   "google.disconnectConfirm.body":
-    "Littlelight will stop having access to your Google Photos and tell Google to revoke it. Photos already imported stay in the album.",
+    "Tinyglow will stop having access to your Google Photos and tell Google to revoke it. Photos already imported stay in the album.",
   "google.disconnectConfirm.action": "Disconnect",
   "google.noBaby": "Create or join an album to import photos.",
   "google.checkError": "Couldn't check your Google Photos connection.",
@@ -960,7 +960,7 @@ export const en = {
   "google.result.imported": "Imported",
   "google.result.duplicate": "Already in the album",
   "google.result.skipped": "Skipped",
-  "google.result.skippedHint": "Not a photo or video Littlelight can use, or too large.",
+  "google.result.skippedHint": "Not a photo or video Tinyglow can use, or too large.",
   "google.result.failed": "Failed",
   "google.batchError.google_denied": "Google didn't allow access to the picked photos.",
   "google.batchError.google_reconnect": "Google needs you to connect again.",
@@ -977,12 +977,12 @@ export const en = {
   "google.err.trashed": "This album is in the trash.",
   "google.err.rate_limited": "Too many tries. Please wait a little and try again.",
   "google.err.forbidden": "You can't import photos into this album.",
-  "google.err.network": "Couldn't reach Littlelight. Please try again.",
+  "google.err.network": "Couldn't reach Tinyglow. Please try again.",
   "google.err.generic": "Something went wrong. Please try again.",
   "google.connected.title.ok": "Google Photos connected",
-  "google.connected.title.okNative": "Connected. Return to Littlelight.",
-  "google.connected.body.ok": "You're all set. Return to Littlelight to pick your photos.",
-  "google.connected.body.okNative": "You're all set. Close this window to return to Littlelight.",
+  "google.connected.title.okNative": "Connected. Return to Tinyglow.",
+  "google.connected.body.ok": "You're all set. Return to Tinyglow to pick your photos.",
+  "google.connected.body.okNative": "You're all set. Close this window to return to Tinyglow.",
   "google.connected.title.denied": "Google Photos wasn't connected",
   "google.connected.body.denied":
     "You chose not to allow access. Nothing was connected, and you can try again any time.",
@@ -991,12 +991,12 @@ export const en = {
     "Google Photos needs permission to see the photos you pick. Connect again and keep the Google Photos box ticked.",
   "google.connected.title.expired": "That link timed out",
   "google.connected.body.expired":
-    "The connection took too long or your sign-in ended. Return to Littlelight and connect again.",
+    "The connection took too long or your sign-in ended. Return to Tinyglow and connect again.",
   "google.connected.title.error": "Couldn't connect Google Photos",
   "google.connected.body.error":
-    "Google didn't finish the connection. Return to Littlelight and try again.",
-  "google.connected.back": "Back to Littlelight",
-  "google.connected.backNative": "Return to Littlelight",
+    "Google didn't finish the connection. Return to Tinyglow and try again.",
+  "google.connected.back": "Back to Tinyglow",
+  "google.connected.backNative": "Return to Tinyglow",
   "google.connected.closeHint": "Close this window or press Done at the top to return to the app.",
   "account.googleConnected": "Your Google Photos connection is revoked at Google and removed.",
 } as const;

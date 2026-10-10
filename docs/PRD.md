@@ -1,12 +1,12 @@
-# Littlelight — Product Requirements Document
+# Tinyglow — Product Requirements Document
 
 Oct 7, 2026 · @Isaac Domini
 
 ## Overview
 
-**Littlelight** is a private, AI-organized photo album built around one baby. Parents upload photos, tag milestones, and then simply ask: "show me her first steps" or "how much did he weigh at 4 months?" The app understands every photo, stores it searchably, and shares a curated album with family through a link.
+**Tinyglow** is a private, AI-organized photo album built around one baby. Parents upload photos, tag milestones, and then simply ask: "show me her first steps" or "how much did he weigh at 4 months?" The app understands every photo, stores it searchably, and shares a curated album with family through a link.
 
-**Name rationale:** "Littlelight" is warm, short, brandable, and centers the child. Alternates if trademark search fails: *Tinyframes*, *Babbleroll*, *Firstlings*, *Wee Archive*.
+**Name rationale:** "Tinyglow" is warm, short, brandable, and centers the child. Alternates if trademark search fails: *Tinyframes*, *Babbleroll*, *Firstlings*, *Wee Archive*.
 
 ### Problem
 
@@ -223,7 +223,7 @@ Permissions are enforced in Postgres with RLS helper functions (`is_baby_member(
 
 ### Invites
 
-- Admin enters an email and role (co-admin or contributor). Server creates an `invites` row with a 256-bit random token (stored hashed), expiry 7 days, and emails a link `https://littlelight.tesarsoft.com/invite/{token}`.
+- Admin enters an email and role (co-admin or contributor). Server creates an `invites` row with a 256-bit random token (stored hashed), expiry 7 days, and emails a link `https://tinyglow.app/invite/{token}`.
 - The link opens the app if installed (Universal Links / App Links), otherwise the web app.
 - Accepting requires signing in **with the invited email** (case-insensitive match). Mismatch shows "This invite was sent to m\*\*\*@gmail.com".
 - Invites can be resent or revoked; accepting a co-admin invite when 2 admins already exist fails with a clear message.
@@ -231,7 +231,7 @@ Permissions are enforced in Postgres with RLS helper functions (`is_baby_member(
 
 ### Share-link viewers (no account)
 
-- Link format `https://littlelight.tesarsoft.com/s/{token}`; token is 128-bit random, stored hashed, valid 24 h by default.
+- Link format `https://tinyglow.app/s/{token}`; token is 128-bit random, stored hashed, valid 24 h by default.
 - If a passcode is set, the viewer enters it (5 attempts / 15 min per IP + token).
 - Server exchanges a valid token for a **viewer session**: an httpOnly, Secure, SameSite=Lax cookie holding a short JWT with `role=viewer`, `share_link_id`, and `exp` = the link's expiry. All viewer queries use a Postgres role that can only read `shared_photos` for that link.
 - Revoking or expiring the link invalidates viewer sessions immediately (server checks `share_links.revoked_at` and `expires_at` on every request).
@@ -530,7 +530,7 @@ One React + TypeScript codebase ships as a responsive web app (PWA) and as nativ
 | Push notifications ("23 photos analyzed", "Grandma viewed the album") | `@capacitor/push-notifications` + FCM/APNs | Opt-in |
 | Share link to family | `@capacitor/share` |  |
 | Secure token storage | Keychain/Keystore secure-storage plugin | Never localStorage for refresh tokens |
-| Deep links to share albums | `@capacitor/app` + Universal Links / App Links | `littlelight.tesarsoft.com/s/{token}` opens app if installed, web otherwise |
+| Deep links to share albums | `@capacitor/app` + Universal Links / App Links | `tinyglow.app/s/{token}` opens app if installed, web otherwise |
 | Sign in with Apple / Google | Native auth plugins | Apple Sign-In mandatory on iOS when Google login exists |
 | Biometric app lock (optional) | Biometric auth plugin | P2 |
 
@@ -600,7 +600,7 @@ Build in the order below; each step ends with acceptance checks that must pass b
 ### Repo layout (pnpm monorepo, TypeScript everywhere)
 
 ```text
-littlelight/
+tinyglow/
   apps/
     mobile-web/        React + Vite + Ionic; Capacitor ios/ and android/ projects
     api/               Fastify API (REST + SSE for chat streaming)
@@ -683,8 +683,8 @@ Two Compose files share the same Dockerfiles. Production runs on an on-prem serv
 
 | Public hostname | Service | Notes |
 | --- | --- | --- |
-| `littlelight.tesarsoft.com` | `http://web:80` | nginx serves the app and proxies `/api/` → `api:3000` and `/auth/` → `auth:9999`, stripping the prefix |
-| `files.littlelight.tesarsoft.com` | `http://storage:9000` | MinIO for pre-signed upload/download URLs; keep the original Host header so signatures validate |
+| `tinyglow.app` | `http://web:80` | nginx serves the app and proxies `/api/` → `api:3000` and `/auth/` → `auth:9999`, stripping the prefix |
+| `files.tinyglow.app` | `http://storage:9000` | MinIO for pre-signed upload/download URLs; keep the original Host header so signatures validate |
 
 - Sending everything for the main hostname to nginx keeps one origin (no CORS) and handles prefix stripping, which Tunnel routes cannot do.
 - Cloudflare caps request bodies at 100 MB on Free and Pro plans, so multipart upload parts must stay at or under 50 MB.
@@ -694,7 +694,7 @@ Two Compose files share the same Dockerfiles. Production runs on an on-prem serv
 ### Production: `docker-compose.yml`
 
 ```yaml
-name: littlelight
+name: tinyglow
 x-app: &app
   restart: unless-stopped
   env_file: .env
@@ -705,7 +705,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: littlelight
+      POSTGRES_DB: tinyglow
     volumes: [db-data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -723,10 +723,10 @@ services:
     depends_on: { migrate: { condition: service_completed_successfully } }
     environment:
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${AUTH_DB_PASSWORD}@db:5432/littlelight
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${AUTH_DB_PASSWORD}@db:5432/tinyglow
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
-      GOTRUE_SITE_URL: https://littlelight.tesarsoft.com
-      API_EXTERNAL_URL: https://littlelight.tesarsoft.com/auth
+      GOTRUE_SITE_URL: https://tinyglow.app
+      API_EXTERNAL_URL: https://tinyglow.app/auth
       GOTRUE_MAILER_OTP_EXP: "600"
       GOTRUE_SMTP_HOST: ${SMTP_HOST}
       GOTRUE_SMTP_PORT: ${SMTP_PORT}
@@ -742,7 +742,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-      MINIO_SERVER_URL: https://files.littlelight.tesarsoft.com
+      MINIO_SERVER_URL: https://files.tinyglow.app
     volumes:
       - ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}:/data
 
@@ -790,7 +790,7 @@ services:
       - ${BACKUP_PATH:?Set BACKUP_PATH to a backup folder}:/backups
     entrypoint: >
       sh -c "while true; do
-               pg_dump littlelight | gzip > /backups/littlelight-$$(date +%F).sql.gz;
+               pg_dump tinyglow | gzip > /backups/tinyglow-$$(date +%F).sql.gz;
                find /backups -name '*.sql.gz' -mtime +35 -delete;
                sleep 86400; done"
 
@@ -801,14 +801,14 @@ volumes:
 ### Development: `docker-compose.dev.yml`
 
 ```yaml
-name: littlelight-dev
+name: tinyglow-dev
 x-dev: &dev
   env_file: [.env.dev, { path: .env.local, required: false }]
 
 services:
   db:
     image: pgvector/pgvector:pg17
-    environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: littlelight }
+    environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: tinyglow }
     volumes: [dev-db:/var/lib/postgresql/data]
     ports: ["5432:5432"]
     healthcheck:
@@ -827,7 +827,7 @@ services:
     depends_on: { migrate: { condition: service_completed_successfully } }
     environment:
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:dev@db:5432/littlelight
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:dev@db:5432/tinyglow
       GOTRUE_JWT_SECRET: dev-only-jwt-secret-at-least-32-characters
       GOTRUE_SITE_URL: http://localhost:8080
       API_EXTERNAL_URL: http://localhost:8080/auth
@@ -849,7 +849,7 @@ services:
     depends_on: [storage]
     entrypoint: >
       sh -c "mc alias set local http://storage:9000 dev devdevdev &&
-             mc mb -p local/littlelight-dev"
+             mc mb -p local/tinyglow-dev"
 
   mail:
     image: axllent/mailpit
@@ -858,7 +858,7 @@ services:
   api:
     <<: *dev
     build: { context: ., dockerfile: apps/api/Dockerfile, target: dev }
-    command: pnpm --filter @littlelight/api dev        # tsx watch
+    command: pnpm --filter @tinyglow/api dev        # tsx watch
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -869,7 +869,7 @@ services:
   worker:
     <<: *dev
     build: { context: ., dockerfile: apps/worker/Dockerfile, target: dev }
-    command: pnpm --filter @littlelight/worker dev
+    command: pnpm --filter @tinyglow/worker dev
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -879,7 +879,7 @@ services:
   web:
     <<: *dev
     build: { context: ., dockerfile: apps/mobile-web/Dockerfile, target: dev }
-    command: pnpm --filter @littlelight/mobile-web dev --host 0.0.0.0 --port 8080
+    command: pnpm --filter @tinyglow/mobile-web dev --host 0.0.0.0 --port 8080
     volumes:
       - ./apps/mobile-web/src:/repo/apps/mobile-web/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -895,7 +895,7 @@ volumes:
 
 - **Zero-setup dev:** a fresh clone runs `docker compose -f docker-compose.dev.yml up` with no folders to create and no `.env` to write. `.env.dev` (committed) holds dev-only defaults; personal secrets like `OPENAI_API_KEY` go in an optional, git-ignored `.env.local`.
 - **Same routes in both:** the Vite dev server proxies `/api` and `/auth` exactly like production nginx, so the app always calls relative URLs.
-- **Storage:** code reads `S3_ENDPOINT` (internal, e.g. `http://storage:9000`) for server-side access and signs URLs with `S3_PUBLIC_ENDPOINT` (`http://localhost:9000` in dev, `https://files.littlelight.tesarsoft.com` in production). In production the photos live as files under `STORAGE_PATH`; MinIO versioning is on.
+- **Storage:** code reads `S3_ENDPOINT` (internal, e.g. `http://storage:9000`) for server-side access and signs URLs with `S3_PUBLIC_ENDPOINT` (`http://localhost:9000` in dev, `https://files.tinyglow.app` in production). In production the photos live as files under `STORAGE_PATH`; MinIO versioning is on.
 - **Mounted folder checks:** the `api` and `worker` healthchecks fail if storage is unreachable, and the worker raises an alert when the storage disk passes 80% full.
 - **Off-site copy:** a nightly encrypted copy of `STORAGE_PATH` and `BACKUP_PATH` to off-site storage (for example restic to Backblaze B2), run by host cron or an added Compose service. Test a restore monthly.
 - **Dockerfiles:** multi-stage with a `dev` target (deps installed, source mounted) and a slim `node:22-alpine` production target running as a non-root user; healthchecks on `api` (`/healthz`) and `worker` (heartbeat row).
@@ -906,6 +906,6 @@ volumes:
 
 ### Decisions to confirm before step 1
 
-- **Domain (decided):** `littlelight.tesarsoft.com` serves the web app, `/api` and `/auth` from one origin; `files.littlelight.tesarsoft.com` serves photo storage for pre-signed URLs. The web container also serves `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` for invite and share deep links.
+- **Domain (decided):** `tinyglow.app` serves the web app, `/api` and `/auth` from one origin; `files.tinyglow.app` serves photo storage for pre-signed URLs. The web container also serves `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` for invite and share deep links.
 - **Hosting (decided):** the API, worker, auth, database, storage and web app all run in the one Docker Compose stack on an on-prem server, reached only through Cloudflare Tunnel, with photos on a mounted folder. No separate API host.
 - **Paid-tier price point:** decided, $3.99/month.

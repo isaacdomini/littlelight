@@ -1,5 +1,5 @@
-import { scrubTelemetryEvent } from "@littlelight/shared";
 import * as Sentry from "@sentry/node";
+import { scrubTelemetryEvent } from "@tinyglow/shared";
 import type { WorkerConfig } from "./config";
 import { WORKER_VERSION } from "./version";
 
@@ -27,7 +27,7 @@ export function sentryOptions(env: {
     dsn: env.SENTRY_DSN,
     enabled: true,
     environment: env.SENTRY_ENVIRONMENT,
-    release: `littlelight-worker@${WORKER_VERSION}`,
+    release: `tinyglow-worker@${WORKER_VERSION}`,
     // Sentry 11 replaced `sendDefaultPii` with `dataCollection`: every category off.
     dataCollection: {
       userInfo: false,

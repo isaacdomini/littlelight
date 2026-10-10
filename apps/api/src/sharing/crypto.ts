@@ -16,7 +16,7 @@ import {
   VIEWER_JWT_AUDIENCE,
   type ViewerSessionClaims,
   viewerSessionClaimsSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { errors as joseErrors, jwtVerify, SignJWT } from "jose";
 import type { ApiConfig } from "../config";
 
@@ -35,7 +35,7 @@ import type { ApiConfig } from "../config";
 //   JWT can never verify as a GoTrue token (different key, issuer and audience) or vice versa
 //   (R2), and IP/user-agent hashes are keyed (a database leak cannot brute-force the IPv4 space).
 
-const HKDF_SALT = "littlelight";
+const HKDF_SALT = "tinyglow";
 const VIEWER_KEY_INFO = "viewer-session-v1";
 const IP_KEY_INFO = "share-ip-v1";
 
@@ -167,12 +167,12 @@ function deriveKey(config: SecretConfig, info: string): Uint8Array {
   return key;
 }
 
-/** HS256 key of viewer JWTs: HKDF-SHA256(JWT_SECRET, "littlelight", "viewer-session-v1"). */
+/** HS256 key of viewer JWTs: HKDF-SHA256(JWT_SECRET, "tinyglow", "viewer-session-v1"). */
 export function viewerJwtKey(config: SecretConfig): Uint8Array {
   return deriveKey(config, VIEWER_KEY_INFO);
 }
 
-/** HMAC key of IP / user-agent hashes: HKDF-SHA256(JWT_SECRET, "littlelight", "share-ip-v1"). */
+/** HMAC key of IP / user-agent hashes: HKDF-SHA256(JWT_SECRET, "tinyglow", "share-ip-v1"). */
 export function shareIpKey(config: SecretConfig): Uint8Array {
   return deriveKey(config, IP_KEY_INFO);
 }
@@ -215,7 +215,7 @@ export interface MintViewerJwtInput {
 
 /**
  * Mint a viewer JWT: HS256 with `viewerJwtKey`, `iss` = `viewerJwtIssuer`, `aud` =
- * `littlelight-viewer`, payload exactly `{ role: "viewer", share_link_id, iat, exp, jti }`.
+ * `tinyglow-viewer`, payload exactly `{ role: "viewer", share_link_id, iat, exp, jti }`.
  */
 export async function mintViewerJwt(
   config: IssuerConfig,

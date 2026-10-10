@@ -1,4 +1,4 @@
-import { AGE_MONTH_DAYS, ageDays, type Measurement } from "@littlelight/shared";
+import { AGE_MONTH_DAYS, ageDays, type Measurement } from "@tinyglow/shared";
 import { ageText } from "../../lib/age";
 
 /** `YYYY-MM-DD` of an instant in an IANA zone (falls back to UTC for an unknown zone). */

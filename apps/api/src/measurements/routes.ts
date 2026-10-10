@@ -11,7 +11,7 @@ import {
   measurementValueIssue,
   type ReindexJob,
   toMetric,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit, requireAuth, requireConsent, withClaims } from "../auth";

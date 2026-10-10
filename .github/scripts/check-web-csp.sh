@@ -3,8 +3,8 @@
 # done-when; task R.13). Run by the CI `images` job on the freshly built web image and runnable
 # locally from the repo root on any build of it:
 #
-#   docker build -f apps/mobile-web/Dockerfile --target prod -t littlelight-web:ci .
-#   bash .github/scripts/check-web-csp.sh littlelight-web:ci
+#   docker build -f apps/mobile-web/Dockerfile --target prod -t tinyglow-web:ci .
+#   bash .github/scripts/check-web-csp.sh tinyglow-web:ci
 #
 # Starts the image three times on 127.0.0.1:${CSP_CHECK_PORT:-18080} (standalone: nginx resolves
 # its upstreams per request, so no api/auth container is needed) and reads the headers with

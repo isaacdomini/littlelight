@@ -17,7 +17,7 @@ import {
   type UploadSession,
   type UploadSessionCreate,
   type UploadSummary,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { audit, requireConsent, type Tx, type TxContext, withClaims } from "../auth";
 import { ApiError, forbidden, freeTierLimit, isPgError, notFound } from "../lib/errors";

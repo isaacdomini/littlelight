@@ -161,8 +161,8 @@ describe("UploadPage on native", () => {
   });
 
   it.each([
-    ["library", "denied", "upload-choose", "Littlelight can't open your photos"],
-    ["camera", "denied", "upload-camera", "Littlelight can't use the camera"],
+    ["library", "denied", "upload-choose", "Tinyglow can't open your photos"],
+    ["camera", "denied", "upload-camera", "Tinyglow can't use the camera"],
     ["library", "error", "upload-choose", "Couldn't get those photos"],
     ["camera", "error", "upload-camera", "Couldn't get those photos"],
   ])("a %s %s outcome explains itself and adds nothing", async (_src, status, button, text) => {

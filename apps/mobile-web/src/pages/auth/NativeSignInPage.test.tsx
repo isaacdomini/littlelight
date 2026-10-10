@@ -25,7 +25,7 @@ describe("NativeSignInPage", () => {
     await ionReady(container);
     expect(screen.getByTestId("native-signin")).toBeTruthy();
     expect(container.textContent).toContain(
-      "Open this link on your phone with the Littlelight app installed.",
+      "Open this link on your phone with the Tinyglow app installed.",
     );
     expect(screen.getByTestId("native-signin-back").className).toContain("secondary");
   });

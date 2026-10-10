@@ -1,4 +1,4 @@
-import type { VisionContext } from "@littlelight/ai";
+import type { VisionContext } from "@tinyglow/ai";
 
 // Per-photo prompt context (PRD FR-5.4; docs/plans/step-6.md 2.6 "Submit"). Built from the
 // `LOAD_PENDING_SQL` row only: age, capture date/time (local wall clock), a coarse place label

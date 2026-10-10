@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PushNotifyJob } from "@littlelight/shared";
+import type { PushNotifyJob } from "@tinyglow/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHarness, type Harness, integrationEnv } from "../testing/harness";
 import { recordingLog } from "../testing/stubs";

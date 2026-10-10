@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-// packages/db has no dependency on @littlelight/shared: relative imports on purpose.
+// packages/db has no dependency on @tinyglow/shared: relative imports on purpose.
 import { ageGroupKey } from "../shared/src/age";
 import { MAX_CUSTOM_MILESTONES_PER_BABY } from "../shared/src/constants";
 import {
@@ -993,7 +993,7 @@ describe.skipIf(!databaseUrl)("timeline and details (step 5)", () => {
     it("shape and guard functions are not executable by any app role or PUBLIC", async () => {
       const r = await q(
         `SELECT p.proname, r.role, has_function_privilege(r.role, p.oid, 'EXECUTE') AS can
-           FROM pg_proc p CROSS JOIN unnest(ARRAY['anon','authenticated','viewer','pipeline','littlelight_api','littlelight_worker']) AS r(role)
+           FROM pg_proc p CROSS JOIN unnest(ARRAY['anon','authenticated','viewer','pipeline','tinyglow_api','tinyglow_worker']) AS r(role)
           WHERE p.proname ~ '_shape$|^milestones_(cap|name_guard)$|^measurements_photo_same_baby$'
             AND p.pronamespace = 'public'::regnamespace`,
       );

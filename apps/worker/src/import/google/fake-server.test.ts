@@ -5,7 +5,7 @@ import {
   googleTokenResponseSchema,
   pickerMediaItemsPageSchema,
   pickerSessionSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import exifr from "exifr";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FAKE_OVERSIZE_CLAIMED_BYTES } from "./fake-catalogue";

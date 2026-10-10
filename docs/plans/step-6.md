@@ -87,7 +87,7 @@ API never calls a model in this step. Only the worker holds `OPENAI_API_KEY`/`AN
 | Batch status | `validating → in_progress → finalizing → completed`; `failed` (input validation), `expired` (24 h; finished requests stay in the output file, unfinished ones appear in the error file with code `batch_expired`; billed only for completed), `cancelling → cancelled` (`POST /v1/batches/{id}/cancel`) |
 | Output line | `{id, custom_id, response: {status_code, request_id, body}, error}`; order ≠ input order; match on `custom_id` |
 | Limits | 50,000 requests / 200 MB per batch; 2,000 batches per hour; separate rate-limit pool; batch = 50 % of standard prices |
-| Responses request (per line `body`) | `model`, `instructions` (system prompt, static), `input: [{role: "user", content: [{type: "input_text", text}, {type: "input_image", image_url: "data:image/jpeg;base64,…", detail: "auto"}]}]`, `reasoning: {effort: "none"}`, `text: {format: {type: "json_schema", name: "littlelight_photo_v1", schema, strict: true}}`, `max_output_tokens`, `prompt_cache_key`, `store: false` (R2) |
+| Responses request (per line `body`) | `model`, `instructions` (system prompt, static), `input: [{role: "user", content: [{type: "input_text", text}, {type: "input_image", image_url: "data:image/jpeg;base64,…", detail: "auto"}]}]`, `reasoning: {effort: "none"}`, `text: {format: {type: "json_schema", name: "tinyglow_photo_v1", schema, strict: true}}`, `max_output_tokens`, `prompt_cache_key`, `store: false` (R2) |
 | Strict schema rules | every object `additionalProperties: false` and every property in `required`; nullable = `type: ["string","null"]`; enums allowed; `$ref`/`$defs` allowed; first request with a new schema has extra latency |
 | Responses result | `status: "completed"` + `output[]` with a `message` item whose `content[]` has `{type: "output_text", text}` **or `{type: "refusal", refusal}`** (status still `completed`); `status: "incomplete"` + `incomplete_details.reason: "max_output_tokens" \| "content_filter"`; `usage.input_tokens`, `usage.input_tokens_details.cached_tokens` (+ `cache_write_tokens` on GPT-5.6+), `usage.output_tokens`, `usage.output_tokens_details.reasoning_tokens` (R3) |
 | Image input | data URL base64 or `file_id` (`purpose=vision`); `detail` ∈ `low, high, original, auto` (default `auto`); JPEG/PNG/WebP; ≤ 512 MB payload; patch-based billing: `ceil(w/32)×ceil(h/32)` × model multiplier — **gpt-6-luna's multiplier/patch budget is not listed** (page lists `gpt-6-astra` 1.2 and `gpt-5.6-luna`); a 768×576 copy is 24×18 = 432 patches ≈ 519 tokens at 1.2 (R4: measure in the real run) |
@@ -190,7 +190,7 @@ parent text; nothing here echoes notes, prompts or bytes).
    `plan_owner_user_id` (NULL unless `--owner`; a plus plan with no owner is the "manual grant" the
    step-3 trigger leaves alone), `entitlement_expires_at`, and inserts `audit_log` `baby.plan_changed`
    (`actor_user_id` NULL, metadata `{plan}`), then prints the id, the new plan and the hint
-   `pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"babyId":"…","reason":"upgrade"}'`.
+   `pnpm --filter @tinyglow/worker run-job --enqueue ai.backfill '{"babyId":"…","reason":"upgrade"}'`.
    In the dev stack it runs as `docker compose -f docker-compose.dev.yml run --rm migrate pnpm db:plan …`
    (the migrate image already has the superuser URL). Production billing (RevenueCat/Stripe webhooks,
    later step) will write the same columns under `service_role`; this script is the only path until then.
@@ -204,7 +204,7 @@ Regenerate `packages/db/src/generated` (`pnpm db:types`); README: migration row,
 (step 6)" section (eligibility definition, state machine, who may write what, the plan script, budget
 helper, why no `failed` photo status). `pgmigrations` count becomes 13.
 
-### 2.4 Shared contracts (`@littlelight/shared`, architect-defined; ai-engineer writes them in 6.2 with orchestrator approval)
+### 2.4 Shared contracts (`@tinyglow/shared`, architect-defined; ai-engineer writes them in 6.2 with orchestrator approval)
 
 `src/ai-description.ts` (new; browser-safe, only `zod`):
 
@@ -347,7 +347,7 @@ VisionRequest` (validates `aiVisionContextSchema`, blanks a context field that t
 tripwire and returns `warnings: ["context_coordinates_blanked"]`); `OPENAI_RESPONSES_BODY(request,
 opts) → object` and `ANTHROPIC_MESSAGE_PARAMS(request, opts) → object` are pure and unit-tested
 (exact field names from 2.2; `instructions`/`system` first, then the schema, then the image, then the
-user text; `prompt_cache_key: "littlelight-describe-" + promptVersion`; `store: false`;
+user text; `prompt_cache_key: "tinyglow-describe-" + promptVersion`; `store: false`;
 `max_output_tokens`/`max_tokens` from `AI_MAX_OUTPUT_TOKENS`; `reasoning: {effort}` from
 `VISION_REASONING_EFFORT` (`none` ⇒ `{effort: "none"}`; the Anthropic adapter maps `none` ⇒
 `thinking: {type: "disabled"}, output_config.effort: "low"`, `low|medium|high` ⇒ `output_config.effort`
@@ -362,7 +362,7 @@ clamped to 0..1). `issues` are zod paths + codes only, never values. `mergeOverr
 request; `custom_id = photoId`; base64 data URL of the analysis bytes), refuses when a line's
 `request.plan !== "paid"` or the image fails `AnalysisImage` validation (throws before any network
 call), refuses a file > `AI_BATCH_MAX_BYTES`, uploads with `purpose=batch`, creates the batch with
-`endpoint: "/v1/responses"`, `completion_window: "24h"`, `metadata: {app: "littlelight",
+`endpoint: "/v1/responses"`, `completion_window: "24h"`, `metadata: {app: "tinyglow",
 prompt_version, schema_version}` and returns the handle (`batchId`, `inputFileId`). `pollBatch`
 retrieves the batch; on `completed|expired|failed|cancelled` streams `output_file_id` and
 `error_file_id` line by line (`GET /v1/files/{id}/content`, a `ReadableStream` split on `\n`; never
@@ -421,7 +421,7 @@ response), and the Anthropic equivalents. They let the real adapters' request sh
 byte-for-byte (header names, JSONL line format, `custom_id`, `text.format.strict`, `reasoning.effort`,
 `store`, image data URL prefix `data:image/jpeg;base64,`) without network. Test-engineer uses them.
 
-**Bake-off skeleton (`src/bakeoff/run.ts`, `pnpm --filter @littlelight/ai bakeoff -- --photos <dir>
+**Bake-off skeleton (`src/bakeoff/run.ts`, `pnpm --filter @tinyglow/ai bakeoff -- --photos <dir>
 --providers openai,anthropic --mode batch|realtime [--labels labels.json] [--limit 200] [--out report.md]`)**:
 reads JPEG/WebP files from a directory (host only; refuses anything whose long edge > 768 — it never
 resizes, the ingest pipeline does), optional `labels.json` (`{ "<file>": { sensitive: [...],
@@ -542,7 +542,7 @@ any log object (serialized).
 ### 2.7 Worker wiring, config, heartbeat (backend-engineer)
 
 - `apps/worker/src/config.ts`: add `aiPipelineEnvSchema` to `loadConfig`; `WorkerConfig` gains those
-  fields. AI env (`aiEnvSchema` from `@littlelight/ai`) stays parsed in `main.ts` as today.
+  fields. AI env (`aiEnvSchema` from `@tinyglow/ai`) stays parsed in `main.ts` as today.
 - `apps/worker/src/queues.ts`: `QUEUES` gains `ai.flush` (exclusive, `retryLimit 0`, `expireInSeconds
   1700`), `ai.poll` (same), `ai.backfill` (exclusive, `retryLimit 2`, `retryDelay 60`, `expireInSeconds
   3600`, `singletonKey = babyId ?? "all"`); `SCHEDULES` gains `[JOBS.aiFlush, config.AI_FLUSH_INTERVAL_CRON]`,
@@ -618,7 +618,7 @@ the pino redact list).
 | Keys | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` only via git-ignored `.env.local` (unchanged); `.env.dev` comment explains `VISION_PROVIDER=fake` for a keyless full run | `OPENAI_API_KEY` required for production AI (comment: the worker refuses `VISION_PROVIDER=fake` unless `AI_ALLOW_FAKE_IN_PRODUCTION=true`, which is never set); `ANTHROPIC_API_KEY` optional |
 | Pipeline settings | `.env.dev`: `AI_BATCH_FLUSH_MINUTES=30`, `AI_BATCH_MAX_PHOTOS=1000`, `AI_BABY_MONTHLY_BUDGET_USD=3`, `AI_BUDGET_ALERT_PCT=80`, `AI_QUEUE_AGE_ALERT_MINUTES=120`, `AI_MAX_ATTEMPTS=2` (comments: override in `.env.local`; the gate exports `AI_BATCH_FLUSH_MINUTES=0`) | `.env.example`: the same with the defaults and one-line explanations; `docker-compose.yml` `x-app-env` passes them with `${VAR:-default}` to api and worker |
 | Worker | nothing new to mount; the worker reads the analysis copy through S3 with its existing service account (GetObject on `bucket/*` is already in `policy-worker.json`) | same |
-| Root scripts | `"e2e:ai-gate": "tsx e2e/ai/gate.ts"`, `"bakeoff": "pnpm --filter @littlelight/ai bakeoff"`; `packages/ai/package.json` `"bakeoff": "tsx src/bakeoff/run.ts"`; `packages/db/package.json` `"db:plan": "tsx src/tools/set-plan.ts"`, root `"db:plan": "pnpm --filter @littlelight/db db:plan --"` | – |
+| Root scripts | `"e2e:ai-gate": "tsx e2e/ai/gate.ts"`, `"bakeoff": "pnpm --filter @tinyglow/ai bakeoff"`; `packages/ai/package.json` `"bakeoff": "tsx src/bakeoff/run.ts"`; `packages/db/package.json` `"db:plan": "tsx src/tools/set-plan.ts"`, root `"db:plan": "pnpm --filter @tinyglow/db db:plan --"` | – |
 | Dependencies | none new in runtime packages (D2). `packages/ai` devDependencies: none beyond vitest (mock servers use `node:http`). Confirm `sharp` is already a worker dependency (it is) for reading analysis dimensions | – |
 | CI `check` | the worker AI integration tests run in the existing "Integration tests (pgvector + MinIO)" step (they use `VISION_PROVIDER=fake` in-process; no key); add `grep -rn "OPENAI_API_KEY\|ANTHROPIC_API_KEY" apps/mobile-web/src packages/shared/src` ⇒ must be empty (keys never reach the client bundle or shared) | – |
 | CI `dev-stack-smoke` | after the perf gate: `VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0` are written to a CI-only `.env.local` **after** the zero-setup precondition step? No — that would break "no env files". Instead the gate script itself passes nothing to the stack; the dev compose reads `VISION_PROVIDER` from `.env.dev`, which stays `openai`. Decision (D6): the CI job restarts the worker with an env override: `VISION_PROVIDER=fake AI_BATCH_FLUSH_MINUTES=0 docker compose -f docker-compose.dev.yml up -d --no-deps worker` (Compose interpolation on the worker's `environment` block: add `VISION_PROVIDER: ${VISION_PROVIDER:-}` and `AI_BATCH_FLUSH_MINUTES: ${AI_BATCH_FLUSH_MINUTES:-}` so an empty value falls through to `.env.dev`), then `pnpm e2e:ai-gate --provider fake`, 10-minute timeout, uploads `e2e/ai-gate` output on failure | – |
@@ -693,7 +693,7 @@ the pino redact list).
   2. Generates 50 synthetic JPEGs for Paid (reuse the step-4 generator: gradients/noise/text blocks,
      unique seeds, 1200–3000 px, some with GPS EXIF so the "no GPS" path is real) and 10 for Free;
      uploads through the API; waits for `status = 'ingested'` and an `analysis` derivative on all 60.
-  3. Forces a flush: `pnpm --filter @littlelight/worker run-job --enqueue ai.backfill
+  3. Forces a flush: `pnpm --filter @tinyglow/worker run-job --enqueue ai.backfill
      '{"babyId":"<paid>","reason":"manual"}'` via `docker compose exec worker` (or
      `AI_BATCH_FLUSH_MINUTES=0` and wait ≤ 6 min for the cron) — `--provider fake` requires the worker to
      be running with `VISION_PROVIDER=fake`; the script checks the worker log line
@@ -710,7 +710,7 @@ the pino redact list).
      babies b on b.id = i.baby_id where b.plan = 'free'` = 0; in fake mode the dumped JSONL under
      `FAKE_VISION_DIR` (CI sets it to a tmp dir mounted into the worker, or the gate reads
      `describer.requests` through a `run-job ai.poll` output — simplest: the fake writes
-     `/tmp/littlelight-fake-vision/<batch>.jsonl` inside the container and the gate `docker compose
+     `/tmp/tinyglow-fake-vision/<batch>.jsonl` inside the container and the gate `docker compose
      exec worker cat`s it) contains exactly the 50 paid ids and none of the 10 free ids and no
      `latitude`/`longitude`/`gps` substring; in real mode the gate greps the worker log for the batch's
      submitted ids (logged as ids) with the same assertions, prints the measured per-photo
@@ -780,7 +780,7 @@ T = test. Same-lane tasks run in sequence unless noted.
   0 for an unknown model; errors carry status/code only; nothing from a request or response body is
   ever included in an `Error` message or a log object; `fake` works with no key and logs `warn` in
   production; the prompt sha is exported.
-- Done-when: `pnpm --filter @littlelight/ai typecheck && test` green with the adapter tests of 6.9
+- Done-when: `pnpm --filter @tinyglow/ai typecheck && test` green with the adapter tests of 6.9
   (write the mock servers so that is possible); `pnpm bakeoff -- --providers fake --photos
   e2e/fixtures/bakeoff-sample` (3 committed ≤ 768 px synthetic JPEGs added by 6.9) prints a report;
   README updated (status, fake provider, env, bake-off usage, price table version).
@@ -796,7 +796,7 @@ T = test. Same-lane tasks run in sequence unless noted.
   value (the DB triggers do the rest); `cost_usd` per item and per batch; `deleteBatchArtifacts` after
   results are stored; reindex after commit; budget and queue-age alerts; the logging rules.
 - Done-when: unit tests of 6.9 green; on the dev stack with `VISION_PROVIDER=fake`:
-  `pnpm --filter @littlelight/worker run-job ai.flush '{"force":true}'` then `run-job ai.poll` twice
+  `pnpm --filter @tinyglow/worker run-job ai.flush '{"force":true}'` then `run-job ai.poll` twice
   produce `photo_ai` rows for Maya's live approved photos that lack one (the demo baby is `plus`), none
   for the perf baby, `ai_batches.cost_usd > 0`, `files_deleted_at` set, `photo.reindex` jobs in
   `pgboss.job` with `reason = 'ai'`; the worker log shows ids and counts only (`grep -c '"note"'` = 0).
@@ -808,7 +808,7 @@ T = test. Same-lane tasks run in sequence unless noted.
   `describer === null` ⇒ the pipeline skips with the one log line (no throw, worker healthy);
   `run-job` supports direct and `--enqueue` for the three jobs; heartbeat `aiQueueAgeMin`.
 - Done-when: worker boots with and without a key (`AI disabled: OPENAI_API_KEY not set` /
-  `AI enabled: provider=…`), `queues: 8`, `pnpm --filter @littlelight/worker run-job ai.poll` exits 0
+  `AI enabled: provider=…`), `queues: 8`, `pnpm --filter @tinyglow/worker run-job ai.poll` exits 0
   with `{skipped: true}` when no key; typecheck/test green.
 
 ### 6.7 API: AI block, overrides, retry, usage (backend-engineer) — group 1/2 (after 6.2 and 6.3; parallel with 6.4/6.5, disjoint paths)
@@ -834,7 +834,7 @@ T = test. Same-lane tasks run in sequence unless noted.
 - Done-when: against the dev stack (demo Maya, after 6.5's fake run): the bath photo shows the AI
   section, tags and the sensitive badge; editing the caption as mom persists after reload and shows
   "edited"; "Reset to AI" restores; the nanny sees no edit button; a free baby shows the Plus link;
-  `pnpm --filter @littlelight/mobile-web typecheck && test` green.
+  `pnpm --filter @tinyglow/mobile-web typecheck && test` green.
 
 ### 6.9 Unit, integration tests, fixtures (test-engineer) — group 3 (after 6.2–6.7; adapter tests may start after 6.4)
 
@@ -919,7 +919,7 @@ pnpm e2e:ai-gate --provider real --count 50 --timeout-min 120
 # expected: as 4.1 plus measured tokens per photo (input ≈ 1,000–1,500 incl. ≈ 450–600 image tokens,
 #   cached ≥ 0, reasoning = 0, output ≈ 300–500), cost per photo ≤ $0.001, provider input file 404 after
 #   deletion, and a printed sample caption for a human sanity read (synthetic images: odd but valid)
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select provider, model, status, photo_count, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd, files_deleted_at is not null as files_deleted from ai_batches order by created_at desc limit 3"
 $PSQL "select count(*) from ai_batch_items i join babies b on b.id=i.baby_id where b.plan='free'"   # 0
 $PSQL "select count(*) from photo_ai a join photos p on p.id=a.photo_id join babies b on b.id=p.baby_id where not baby_ai_enabled(b.id)"   # 0
@@ -929,7 +929,7 @@ docker compose -f docker-compose.dev.yml logs worker | grep -Ei '"note"|latitude
 If the user prefers not to spend, 4.1 plus the mock-server adapter tests prove every request shape;
 4.2 is the only check that proves billing fields and real image-token counts.
 
-### 4.3 API walkthrough (cookie jar `a.jar` as `demo-mom@littlelight.local`, `n.jar` as the nanny; `B=http://localhost:8080`, `H='x-littlelight-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, `BATH=00000000-0000-4000-8000-000000000304`)
+### 4.3 API walkthrough (cookie jar `a.jar` as `demo-mom@tinyglow.local`, `n.jar` as the nanny; `B=http://localhost:8080`, `H='x-tinyglow-client: web'`, `MAYA=00000000-0000-4000-8000-000000000100`, `BATH=00000000-0000-4000-8000-000000000304`)
 
 1. `curl -s -b a.jar $B/api/photos/$BATH | jq '.ai.status, .ai.description.sensitive_content, .isSensitive, .ai.raw != null'` → `"ready"`, `["bath"]`, `true`, `true`; as the nanny → `ai.raw` is `null`.
 2. `curl -s -b a.jar -H "$H" -X PATCH $B/api/photos/$BATH/ai -H 'content-type: application/json' -d '{"caption":"Bath time with the yellow duck","search_tags":["bath","duck"]}'` → `ai.description.caption` is the override, `ai.overrides` has both keys; `GET /babies/$MAYA/photos` shows the new `caption`; `psql -c "select event, metadata from audit_log where event='ai.override_updated' order by created_at desc limit 2"` → metadata only `{photo_id, field}`; `select count(*) from pgboss.job where name='photo.reindex' and data->>'reason'='ai_override'` ≥ 1.
@@ -943,14 +943,14 @@ If the user prefers not to spend, 4.1 plus the mock-server adapter tests prove e
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
 WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true \
 JWT_SECRET=dev-only-jwt-secret-at-least-32-characters PUBLIC_URL=http://localhost:8080 \
-MAIL_FROM=noreply@littlelight.local SMTP_HOST=localhost \
+MAIL_FROM=noreply@tinyglow.local SMTP_HOST=localhost \
 S3_ENDPOINT=http://localhost:9000 S3_PUBLIC_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev \
-S3_BUCKET=littlelight-test VISION_PROVIDER=fake pnpm test:integration
+S3_BUCKET=tinyglow-test VISION_PROVIDER=fake pnpm test:integration
 pnpm smoke
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                # 13
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 $PSQL "select baby_ai_enabled('00000000-0000-4000-8000-000000000900'), (select count(*) from ai_batch_items where baby_id='00000000-0000-4000-8000-000000000900')"   # f|0 (perf baby, if seeded)

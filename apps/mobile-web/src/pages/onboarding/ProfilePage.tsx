@@ -1,11 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   type MeResponse,
   meResponseSchema,
   profileUpdateSchema,
   RELATIONSHIP_LABELS,
   type Units,
-} from "@littlelight/shared";
-import { useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ME_KEY, useAuth } from "../../auth/AuthProvider";

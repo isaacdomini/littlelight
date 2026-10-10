@@ -1,4 +1,4 @@
-Littlelight is a private photo album for your baby's first years. Add your photos, and Littlelight keeps them organised by your baby's age so you can find any moment later without scrolling for hours.
+Tinyglow is a private photo album for your baby's first years. Add your photos, and Tinyglow keeps them organised by your baby's age so you can find any moment later without scrolling for hours.
 
 PRIVATE BY DEFAULT
 - Nothing is ever public. Every photo is private to you and the people you invite.
@@ -29,4 +29,4 @@ YOU STAY IN CONTROL
 ABOUT AI
 Optional AI features use our model provider to describe your photos so you can search them and ask questions about them. Photos are only analysed when AI features are turned on for an album. Your photos are never used to train models, and we delete the files from the provider once the descriptions are made.
 
-Littlelight is for parents and guardians aged 18 and over.
+Tinyglow is for parents and guardians aged 18 and over.

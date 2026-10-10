@@ -97,7 +97,7 @@ describe.skipIf(!integrationEnv)("search:calibrate (fake provider)", () => {
 
   it("refuses a non-local database", async () => {
     const r = await calibrate(["--provider", "fake"], {
-      CALIBRATE_DATABASE_URL: "postgres://postgres:x@db.example.com:5432/littlelight",
+      CALIBRATE_DATABASE_URL: "postgres://postgres:x@db.example.com:5432/tinyglow",
     });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/only reads a local database/);

@@ -108,7 +108,7 @@ export async function ensureAuthSchemaStub(client: pg.Client | pg.PoolClient): P
 
 /**
  * Rewrite the user and password of a `postgres://` URL so tests can connect as an app role
- * (`littlelight_api`, `littlelight_worker`) while fixtures still use the superuser URL.
+ * (`tinyglow_api`, `tinyglow_worker`) while fixtures still use the superuser URL.
  * The returned string contains the password: never log it.
  */
 export function appRoleUrl(databaseUrl: string, role: string, password: string): string {

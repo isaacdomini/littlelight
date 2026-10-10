@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { meResponseSchema, PRIVACY_VERSION, TERMS_VERSION } from "@littlelight/shared";
+import { meResponseSchema, PRIVACY_VERSION, TERMS_VERSION } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness } from "../testing/integration";
 import { signAccessToken } from "../testing/support";
@@ -249,7 +249,7 @@ describe.skipIf(!databaseUrl)("/me", () => {
         method: "POST",
         url: "/me/consent",
         cookies: { ll_access: u.token },
-        headers: { "x-littlelight-client": "web" },
+        headers: { "x-tinyglow-client": "web" },
         payload: good,
       });
       expect(ok.statusCode).toBe(200);

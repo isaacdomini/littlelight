@@ -549,7 +549,7 @@ ALTER TABLE public.chat_messages DROP CONSTRAINT IF EXISTS chat_messages_status_
 ALTER TABLE public.chat_messages ADD CONSTRAINT chat_messages_status_check
   CHECK (status IN ('complete', 'error'));
 COMMENT ON COLUMN public.chat_messages.tools_used IS
-  'Names of the tools the assistant called for this turn (closed set = @littlelight/shared CHAT_TOOL_NAMES); never arguments or results.';
+  'Names of the tools the assistant called for this turn (closed set = @tinyglow/shared CHAT_TOOL_NAMES); never arguments or results.';
 COMMENT ON COLUMN public.chat_messages.status IS
   'complete, or error for an assistant message written after a model/tool failure (fixed text, no provider message).';
 COMMENT ON COLUMN public.chat_messages.cited_measurement_ids IS
@@ -559,7 +559,7 @@ GRANT INSERT (cited_measurement_ids, cost_usd, tools_used, status) ON public.cha
 GRANT UPDATE (cited_measurement_ids, cost_usd, tools_used, status) ON public.chat_messages TO authenticated;
 
 -- chat_messages_shape: content 1..8000 characters, at most 50 cited photo ids, 50 cited
--- measurement ids and 16 tool names, every tool name in the closed set (= @littlelight/shared
+-- measurement ids and 16 tool names, every tool name in the closed set (= @tinyglow/shared
 -- CHAT_TOOL_NAMES: never arguments), cost_usd >= 0. A trigger, not a CHECK: the row holds the
 -- parent's question and the model's answer (which may quote notes). Fixed messages.
 CREATE OR REPLACE FUNCTION public.chat_messages_shape() RETURNS trigger

@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { databaseEnvSchema, s3EnvSchema } from "@littlelight/shared";
+import { databaseEnvSchema, s3EnvSchema } from "@tinyglow/shared";
 import { PgBoss } from "pg-boss";
 import { createPool, createS3Client, errorCategory } from "../clients";
 import { createLogger } from "../logger";
@@ -23,7 +23,7 @@ import {
 //                                       `babies/<babyId>/originals/<id>.jpg` keys and enqueue ingest
 //
 // Production image: `node apps/worker/dist/demo-media.js --review-baby <id> --confirm-production`
-// inside the worker container (its env: the `littlelight_worker` role, the worker's MinIO key).
+// inside the worker container (its env: the `tinyglow_worker` role, the worker's MinIO key).
 // The demo family (default mode and --check) is dev only and refused with NODE_ENV=production;
 // --review-baby needs --confirm-production there (and the user's approval, plan 5.2).
 //
@@ -89,12 +89,12 @@ export function devDefaults(env: Env): Record<string, string> {
   const dbPort = env.DB_PORT?.trim() || "5432";
   const storagePort = env.STORAGE_PORT?.trim() || "9000";
   return {
-    DATABASE_URL: `postgres://littlelight_worker:dev@localhost:${dbPort}/littlelight`,
+    DATABASE_URL: `postgres://tinyglow_worker:dev@localhost:${dbPort}/tinyglow`,
     S3_ENDPOINT: `http://localhost:${storagePort}`,
     S3_PUBLIC_ENDPOINT: `http://localhost:${storagePort}`,
-    S3_ACCESS_KEY: "littlelight-worker",
+    S3_ACCESS_KEY: "tinyglow-worker",
     S3_SECRET_KEY: "dev-worker-s3-secret-16",
-    S3_BUCKET: "littlelight-dev",
+    S3_BUCKET: "tinyglow-dev",
   };
 }
 
@@ -138,7 +138,7 @@ async function main(argv: string[]): Promise<number> {
     LOG_LEVEL: process.env.LOG_LEVEL === "debug" ? "debug" : "warn",
     NODE_ENV: isProduction(process.env) ? "production" : "test",
   });
-  const pool = createPool(env, "littlelight-worker-demo-media", 3);
+  const pool = createPool(env, "tinyglow-worker-demo-media", 3);
   const s3 = createS3Client(env);
   const deps: DemoMediaDeps = {
     pool,
@@ -173,7 +173,7 @@ async function main(argv: string[]): Promise<number> {
     // Send-only pg-boss on the worker role: the running worker owns migrations and cron.
     boss = new PgBoss({
       connectionString: env.DATABASE_URL,
-      application_name: "littlelight-worker-demo-media",
+      application_name: "tinyglow-worker-demo-media",
       max: 2,
       migrate: false,
       supervise: false,

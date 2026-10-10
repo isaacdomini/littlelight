@@ -6,7 +6,7 @@ import {
   type PhotoMime,
   photoPrefixes,
   type UploadFileError,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { errorCategory } from "../clients";
 import { isUniqueViolation, type PipelinePool, runAsPipeline } from "../db";
 import type { WorkerLog } from "../log-types";

@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 
 // Apple Photos album sync (docs/plans/step-10.md 2.4). Parents only; the JS side decides.
 //
-// Bridge `LittlelightPhotoSync`:
+// Bridge `TinyglowPhotoSync`:
 //   authorizationStatus()                      -> { status }
 //   requestAuthorization()                     -> { status }   the only call that shows the prompt
 //   listAlbums()                               -> { albums: [{ id, title, count }] }   user albums
@@ -32,7 +32,7 @@ import UniformTypeIdentifiers
 /// atomic writes, protected until first unlock, directory excluded from backup.
 final class LLSyncLedger {
     static let shared = LLSyncLedger()
-    private let queue = DispatchQueue(label: "com.tesarsoft.littlelight.sync.ledger")
+    private let queue = DispatchQueue(label: "com.tesarsoft.tinyglow.sync.ledger")
 
     struct Entry: Codable { var o: String; var n: Int }
     struct File: Codable { var v: Int; var entries: [String: Entry] }
@@ -123,7 +123,7 @@ final class LLSyncLedger {
 
 final class LLPhotoSync {
     static let shared = LLPhotoSync()
-    static let taskIdentifier = "com.tesarsoft.littlelight.sync"
+    static let taskIdentifier = "com.tesarsoft.tinyglow.sync"
 
     private let lock = NSLock()
     private var buffered: [(String, [String: Any])] = []
@@ -143,7 +143,7 @@ final class LLPhotoSync {
             guard let self = self else { return }
             self.lock.lock(); self.path = p; self.lock.unlock()
         }
-        monitor.start(queue: DispatchQueue(label: "com.tesarsoft.littlelight.sync.path"))
+        monitor.start(queue: DispatchQueue(label: "com.tesarsoft.tinyglow.sync.path"))
     }
 
     func latestPath() -> NWPath? {
@@ -216,10 +216,10 @@ final class LLPhotoSync {
 
 // MARK: - Plugin
 
-@objc(LittlelightPhotoSyncPlugin)
-public class LittlelightPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
-    public let identifier = "LittlelightPhotoSyncPlugin"
-    public let jsName = "LittlelightPhotoSync"
+@objc(TinyglowPhotoSyncPlugin)
+public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "TinyglowPhotoSyncPlugin"
+    public let jsName = "TinyglowPhotoSync"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "authorizationStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestAuthorization", returnType: CAPPluginReturnPromise),
@@ -235,7 +235,7 @@ public class LittlelightPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "completeBackgroundTask", returnType: CAPPluginReturnPromise),
     ]
 
-    private static let work = DispatchQueue(label: "com.tesarsoft.littlelight.sync.work", qos: .utility)
+    private static let work = DispatchQueue(label: "com.tesarsoft.tinyglow.sync.work", qos: .utility)
 
     override public func load() {
         LLPhotoSync.shared.startMonitor()

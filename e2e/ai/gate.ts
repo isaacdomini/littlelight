@@ -46,7 +46,7 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 const DC = ["compose", "-f", "docker-compose.dev.yml"];
 const OUT_DIR = path.join(ROOT, "e2e/ai-gate");
 const PERF_BABY = "00000000-0000-4000-8000-000000000900";
-const FAKE_DIR = "/tmp/littlelight-fake-vision";
+const FAKE_DIR = "/tmp/tinyglow-fake-vision";
 let NOTE = `GATE-NOTE-${Math.random().toString(36).slice(2, 10)}`;
 let PLACE = `GatePlace${Math.random().toString(36).slice(2, 7)}`;
 
@@ -128,7 +128,7 @@ async function psql(sql: string): Promise<string> {
     "-U",
     "postgres",
     "-d",
-    "littlelight",
+    "tinyglow",
     "-Atc",
     sql,
   ]);
@@ -157,7 +157,7 @@ async function runJob(name: string, payload?: unknown): Promise<Record<string, u
     "pnpm",
     "--silent",
     "--filter",
-    "@littlelight/worker",
+    "@tinyglow/worker",
     "run-job",
     name,
     ...(payload === undefined ? [] : [JSON.stringify(payload)]),

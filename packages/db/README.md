@@ -1,6 +1,6 @@
-# @littlelight/db
+# @tinyglow/db
 
-Database bootstrap, migrations, seed and generated row types for Littlelight. Owned by
+Database bootstrap, migrations, seed and generated row types for Tinyglow. Owned by
 `security-engineer` (`CLAUDE.md` file ownership). Runs as the one-shot `db-init` and `migrate`
 Compose services (docs/plans/step-2.md).
 
@@ -33,12 +33,12 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | --- | --- | --- |
 | `postgres` | superuser | `db-init`, `migrate`, seed, backups. Never the api/worker. |
 | `supabase_auth_admin` | yes | GoTrue only; owns `auth.*`. |
-| `littlelight_api` | yes, NOINHERIT | API connection role. Has **no** privileges on app tables: every unit of work must `SET LOCAL ROLE authenticated \| viewer \| service_role`; a query outside that fails with `permission denied`. |
-| `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
+| `tinyglow_api` | yes, NOINHERIT | API connection role. Has **no** privileges on app tables: every unit of work must `SET LOCAL ROLE authenticated \| viewer \| service_role`; a query outside that fails with `permission denied`. |
+| `tinyglow_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). Reads only its **own** `profiles` row; co-members' names come from the `member_profiles` view (see "Review hardening and data exports"). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link (no parent user ids), the allow-listed columns of `photos`, `photo_derivatives` (thumb/display, and never those of a hidden sensitive photo), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Its only writes go through `viewer_session_check()`. Nothing else, and nothing once the link is expired/revoked or the baby is deleted (see "Sharing (step 8)"). |
 | `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables; for the FR-10.1 export: `data_exports` progress/result/purge columns, the `babies` profile columns (no billing), `baby_members (baby_id, user_id, role, joined_at)` read-only, EXECUTE on `export_requester_is_admin` / `export_requester_email`; for step-10 Google imports: `import_batches` read + progress/result columns, `import_items` insert/read/progress columns and 30-day retention delete, EXECUTE on `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo`, and no grant on `import_sources` or `google_accounts`). Never invites, tokens, chat, removal requests or `invited_by`, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
-| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes, Google connections (`google_accounts`, `encrypt_secret`/`decrypt_secret`). Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
+| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes, Google connections (`google_accounts`, `encrypt_secret`/`decrypt_secret`). Reachable from `tinyglow_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
 Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" and "Native push" for
@@ -69,11 +69,11 @@ Rules for the step-3 claims wrapper (and the worker's job wrapper):
   the client goes back to the pool, so a thrown error or a forgotten `COMMIT` can never hand a
   role or `request.jwt.claims` to another request. Treat a client that fails `DISCARD ALL` as
   broken: destroy it, do not return it.
-- Never run a query outside the wrapper: `littlelight_api` has no privileges of its own, so such a
+- Never run a query outside the wrapper: `tinyglow_api` has no privileges of its own, so such a
   query fails with `permission denied` rather than returning data.
 
 Claims are always a bind parameter (never interpolated, never logged). Shapes
-(`@littlelight/shared` `jwt-claims.ts`): authenticated `{"sub","role":"authenticated","email",...}`,
+(`@tinyglow/shared` `jwt-claims.ts`): authenticated `{"sub","role":"authenticated","email",...}`,
 viewer `{"role":"viewer","share_link_id","exp"}`. SQL reads only `sub`, `role`, `email`,
 `share_link_id`.
 
@@ -146,7 +146,7 @@ devices screen and for new-device alerts (PRD "Sessions and tokens"; step-3 D2).
 SECURITY DEFINER functions, owned by the superuser that runs migrations, are the access path
 from an app role into `auth.*` (the step-9 push functions also read `auth.sessions`, through the
 internal, ungranted `push_session_live`; see "Native push"): no table or schema grant on `auth` exists for
-`authenticated`, `viewer`, `pipeline`, `service_role`, `littlelight_api` or `littlelight_worker`
+`authenticated`, `viewer`, `pipeline`, `service_role`, `tinyglow_api` or `tinyglow_worker`
 (GoTrue also enables RLS with no policies on every `auth` table, so even a stray grant would
 return nothing). Each function filters by `auth_uid()`, pins `search_path = pg_catalog, public`
 (and schema-qualifies `auth.sessions`), is `REVOKE`d from PUBLIC and executable by
@@ -283,11 +283,11 @@ and sets `upload_files.photo_id` / `duplicate_of_photo_id` to NULL; object versi
 by the worker before the row.
 
 **pg-boss and the API.** The API enqueues `photo.ingest` itself (send-only pg-boss on
-`littlelight_api`). The bootstrap grants `littlelight_api` `USAGE` on `pgboss` plus
+`tinyglow_api`). The bootstrap grants `tinyglow_api` `USAGE` on `pgboss` plus
 `SELECT, INSERT, UPDATE, DELETE` on tables, `USAGE, SELECT` on sequences and `EXECUTE` on
 functions, both on existing objects and through `ALTER DEFAULT PRIVILEGES FOR ROLE
-littlelight_worker IN SCHEMA pgboss` for everything pg-boss creates at runtime (per-queue
-partitions included, since the worker creates them). `littlelight_api` still has no privilege on
+tinyglow_worker IN SCHEMA pgboss` for everything pg-boss creates at runtime (per-queue
+partitions included, since the worker creates them). `tinyglow_api` still has no privilege on
 any `public` table without `SET LOCAL ROLE`; `boss.send` must therefore run outside the claims
 wrapper.
 
@@ -327,7 +327,7 @@ nothing, a quarantined row exists for nobody. INSERT/UPDATE policies, child-tabl
 (`photo_visible`) and every viewer/pipeline policy still use `is_baby_member` / `is_baby_admin`
 unchanged. The down migration restores the step-4 policy body verbatim and drops the two helpers.
 
-**`age_group(age_days integer) RETURNS text`** is the SQL twin of `@littlelight/shared`
+**`age_group(age_days integer) RETURNS text`** is the SQL twin of `@tinyglow/shared`
 `ageGroupKey` and must stay identical to it (a test compares the two over `-10..2000`):
 `NULL` ⇒ `unknown`, `< 0` ⇒ `pre`, `0..83` ⇒ `w1..w12` (`floor(d/7)+1`), `84..729` ⇒ `m3..m24`
 (`floor(d/30.4375)+1`), `≥ 730` ⇒ `y2..` (`floor(d/365)`). IMMUTABLE, SECURITY INVOKER, executable
@@ -365,7 +365,7 @@ DEFINER): `photo_id` is NULL or a live (not trashed, not quarantined) photo of t
 own `baby_id` (`check_violation` `measurement photo must belong to the same baby`). Shape trigger
 `measurements_shape`: `note` ≤ 2000, `value_metric` and `value_entered` > 0, `value_metric` ≤
 200000 (200 kg / 200 m, a sanity bound; the real input bounds are `MEASUREMENT_LIMITS` in
-`@littlelight/shared`, validated by the API through `toMetric`). Index `measurements_photo_id_idx
+`@tinyglow/shared`, validated by the API through `toMetric`). Index `measurements_photo_id_idx
 (photo_id) WHERE photo_id IS NOT NULL` for the photo detail's linked measurements.
 
 **Shape triggers instead of CHECK constraints on parent-entered text.** When a CHECK constraint
@@ -507,7 +507,7 @@ step-3 `babies_plan_follows_owner` trigger leaves alone — the script first rel
 on a free row so that trigger cannot turn the new grant back into `free`) and
 `entitlement_expires_at`; appends `audit_log` `baby.plan_changed` (`actor_user_id` NULL, metadata
 `{plan}` + `target_user_id` when an owner was named); prints ids and the plan only, plus the
-backfill hint `pnpm --filter @littlelight/worker run-job --enqueue ai.backfill
+backfill hint `pnpm --filter @tinyglow/worker run-job --enqueue ai.backfill
 '{"babyId":"…","reason":"upgrade"}'` (step 7 adds the `search.backfill` line, `searchBackfillHint`;
 the `ai.backfill` upgrade job also chains it). Exit 0 done, 1 refused/failed, 2 usage. `src/tools/set-plan.ts`
 imports only `pg` and this package's `env`/`redact` helpers (the migrate image holds nothing
@@ -783,7 +783,7 @@ active` (session insert raced a revoke) ⇒ 410 `share_link_expired`.
 
 Migration `1792200000100_native-push.sql` (docs/plans/step-9.md 2.8, 2.9). Push is opt-in on the
 device (OS permission + "Turn on notifications"); the two `profiles` booleans are per-kind
-opt-outs. Text is generic and fixed in `@littlelight/shared` `pushMessage(kind, count)`; nothing
+opt-outs. Text is generic and fixed in `@tinyglow/shared` `pushMessage(kind, count)`; nothing
 in these tables or functions carries a name, caption or note.
 
 **Tables.** `push_devices` (one row per GoTrue session that turned notifications on: `user_id`,
@@ -1069,10 +1069,10 @@ ever written for the review family.
 Refusals: `NODE_ENV=production` without `--confirm-production`; no GoTrue user for the email; no
 live profile; in production, any membership of the account in another baby (the review sign-in
 must never open a real family; outside production this is a warning so the dev check can use
-`demo-dad@littlelight.local`). Exit codes 0 / 1 refused or failed / 2 usage.
+`demo-dad@tinyglow.local`). Exit codes 0 / 1 refused or failed / 2 usage.
 
 The id rule lives in `src/review-ids.ts` (only `node:crypto`), exported as the subpath
-`@littlelight/db/review` (`reviewId`, `reviewBabyId`, `reviewPhotoId`) so the api can import it
+`@tinyglow/db/review` (`reviewId`, `reviewBabyId`, `reviewPhotoId`) so the api can import it
 without the package root (`pg`, `node-pg-migrate`). The api's review sign-in
 (`apps/api/src/auth/review.ts`, task 9.10) refuses, in **every** environment, an account that
 belongs to any baby other than `reviewBabyId(userId)` (403 before any session exists), and while
@@ -1098,8 +1098,8 @@ Runbook (production needs the user's approval, plan 5.2 U12):
 | --- | --- | --- |
 | `DATABASE_URL` | all scripts | Superuser URL (`db-init`, `migrate`, seed, `db:types`). The api/worker get their own role URLs from Compose. |
 | `AUTH_DB_PASSWORD` | bootstrap | `supabase_auth_admin`; must equal the password in `GOTRUE_DB_DATABASE_URL`. |
-| `API_DB_PASSWORD` | bootstrap | `littlelight_api`; must equal the api's `DATABASE_URL` password. |
-| `WORKER_DB_PASSWORD` | bootstrap | `littlelight_worker`; must equal the worker's `DATABASE_URL` password. |
+| `API_DB_PASSWORD` | bootstrap | `tinyglow_api`; must equal the api's `DATABASE_URL` password. |
+| `WORKER_DB_PASSWORD` | bootstrap | `tinyglow_worker`; must equal the worker's `DATABASE_URL` password. |
 | `DATA_ENCRYPTION_KEY` | seed (and api/worker) | ≥ 32 chars; `openssl rand -hex 32` in production. |
 | `SEED_DEMO_FAMILY` | seed | `true` to seed the demo family (dev only). |
 
@@ -1118,11 +1118,11 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 | `pnpm db:seed` | Demo family (needs `SEED_DEMO_FAMILY=true`, `DATA_ENCRYPTION_KEY`; refuses in production) |
 | `pnpm db:plan <babyId> plus\|free [--owner <userId>] [--expires <iso>]` | Dev/operator plan switch, audited (`baby.plan_changed`); refuses in production without `--i-know-this-is-production` (see "AI pipeline") |
 | `pnpm db:review-family --email <addr> [--confirm-production]` | Store-review family for an existing user (see "Store-review family"); refuses in production without the flag |
-| `pnpm --filter @littlelight/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
-| `pnpm --filter @littlelight/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` |
+| `pnpm --filter @tinyglow/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
+| `pnpm --filter @tinyglow/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` |
 
-Programmatic use: `import { runMigrations, bootstrap, seed, ensureAuthSchemaStub, appRoleUrl } from "@littlelight/db"`;
-row types from `@littlelight/db/types` (`PhotosRow`, `PhotosInsert`, `TABLE_NAMES`, …; `text`
+Programmatic use: `import { runMigrations, bootstrap, seed, ensureAuthSchemaStub, appRoleUrl } from "@tinyglow/db"`;
+row types from `@tinyglow/db/types` (`PhotosRow`, `PhotosInsert`, `TABLE_NAMES`, …; `text`
 columns with `CHECK (col IN (...))` are string-literal unions, including the single-value form Postgres stores as `CHECK ((col = 'x'::text))`).
 
 ### Tests and CI without GoTrue
@@ -1134,11 +1134,11 @@ CI, throwaway containers). The `users`/`identities` column list is exactly what 
 (minus the FK to `auth.oauth_clients`) so the session functions and the API integration tests
 (which insert session rows) behave the same on the stub and on the real schema.
 `appRoleUrl(databaseUrl, role, password)` rewrites the superuser URL to connect as
-`littlelight_api` / `littlelight_worker` for RLS tests.
+`tinyglow_api` / `tinyglow_worker` for RLS tests.
 
 ## Demo seed (`src/seed.ts`)
 
-Fixed ids (`DEMO` export): users `…-000000000001/2/3` = `demo-mom@littlelight.local` (admin, Maria,
+Fixed ids (`DEMO` export): users `…-000000000001/2/3` = `demo-mom@tinyglow.local` (admin, Maria,
 Mom), `demo-dad@…` (admin, Dad), `demo-nanny@…` (contributor); baby `…-000000000100` "Maya"
 ("Mimi", born 2025-06-30, `plan = plus`, encrypted home coordinates); share link `…-000000000200`
 "Grandparents" (dev token `demo-grandparents-share-token` = `DEMO_IDS.shareToken`, only its sha256
@@ -1182,41 +1182,41 @@ it. The demo seed does not know about it.
 ## Local verification against a throwaway Postgres
 
 ```sh
-docker run --rm -d --name ll-db-test -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=littlelight pgvector/pgvector:0.8.7-pg17
-export DATABASE_URL=postgres://postgres:dev@localhost:55432/littlelight AUTH_DB_PASSWORD=dev \
+docker run --rm -d --name ll-db-test -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=tinyglow pgvector/pgvector:0.8.7-pg17
+export DATABASE_URL=postgres://postgres:dev@localhost:55432/tinyglow AUTH_DB_PASSWORD=dev \
   API_DB_PASSWORD=dev WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true
 pnpm db:bootstrap
 # auth.users: either run GoTrue's migrations ...
 docker run --rm --network container:ll-db-test -e GOTRUE_DB_DRIVER=postgres \
-  -e GOTRUE_DB_DATABASE_URL=postgres://supabase_auth_admin:dev@localhost:5432/littlelight \
+  -e GOTRUE_DB_DATABASE_URL=postgres://supabase_auth_admin:dev@localhost:5432/tinyglow \
   -e GOTRUE_JWT_SECRET=dev-only-jwt-secret-dev-only-jwt-secret -e GOTRUE_SITE_URL=http://localhost:8080 \
   -e API_EXTERNAL_URL=http://localhost:8080/auth supabase/auth:v2.197.0 auth migrate
 # ... or, for a stub, `ensureAuthSchemaStub(client)` from a script/test.
 pnpm db:migrate && pnpm db:migrate     # second run: "nothing to do"
 pnpm db:seed && pnpm db:seed           # identical counts
 pnpm db:migrate:down all && pnpm db:migrate && pnpm db:seed
-pnpm --filter @littlelight/db db:types && git diff --exit-code -- packages/db/src/generated
+pnpm --filter @tinyglow/db db:types && git diff --exit-code -- packages/db/src/generated
 docker stop ll-db-test
 ```
 
 Spot checks (password `dev` for the app roles):
 
 ```sh
-PSQL="psql -h localhost -p 55432 -d littlelight -Atv ON_ERROR_STOP=0"
+PSQL="psql -h localhost -p 55432 -d tinyglow -Atv ON_ERROR_STOP=0"
 # another user's baby: 0 rows
-PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos; rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos; rollback;"
 # contributor cannot delete: permission denied for table photos
-PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000003\",\"role\":\"authenticated\"}',true); delete from photos; rollback;"
 # viewer sees only shared_photos: 4, 4, permission denied for table photo_exif
-PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
 # viewer media: 3 photos with readable derivatives, 0 rows for the unreleased bath photo
-PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(distinct photo_id) from photo_derivatives; select count(*) from photo_derivatives where photo_id = '00000000-0000-4000-8000-000000000304'; rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(distinct photo_id) from photo_derivatives; select count(*) from photo_derivatives where photo_id = '00000000-0000-4000-8000-000000000304'; rollback;"
 # viewer gets nothing on upload tables: permission denied for table upload_sessions
-PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from upload_sessions; rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from upload_sessions; rollback;"
 # FR-1.5: mom cannot demote or delete dad (UPDATE 0, DELETE 0); co-member profiles only via member_profiles (0, then 3)
-PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000001\",\"role\":\"authenticated\"}',true); update baby_members set role='contributor' where user_id='00000000-0000-4000-8000-000000000002'; delete from baby_members where user_id='00000000-0000-4000-8000-000000000002'; select count(*) from profiles where user_id <> auth_uid(); select count(*) from member_profiles; rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000001\",\"role\":\"authenticated\"}',true); update baby_members set role='contributor' where user_id='00000000-0000-4000-8000-000000000002'; delete from baby_members where user_id='00000000-0000-4000-8000-000000000002'; select count(*) from profiles where user_id <> auth_uid(); select count(*) from member_profiles; rollback;"
 # Home label in SQL, pipeline only: Home, then <null> 200 m away; never a plaintext coordinate in the result
-PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; select set_config('app.data_key','dev-only-data-encryption-key-32-chars-min',true); select home_place_label('00000000-0000-4000-8000-000000000100', 47.6062, -122.3321), home_place_label('00000000-0000-4000-8000-000000000100', 47.6080, -122.3321); rollback;"
+PGPASSWORD=dev $PSQL -U tinyglow_worker -c "begin; set local role pipeline; select set_config('app.data_key','dev-only-data-encryption-key-32-chars-min',true); select home_place_label('00000000-0000-4000-8000-000000000100', 47.6062, -122.3321), home_place_label('00000000-0000-4000-8000-000000000100', 47.6080, -122.3321); rollback;"
 ```
 
 ## Migrations
@@ -1231,7 +1231,7 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1791520000400_ai.sql` | `ai_batches`, `photo_ai` (+ paid-tier tripwire, sensitive sync), `photo_search` (+ HNSW/GIN/btree); RLS | drop |
 | `1791520000500_sharing.sql` | `share_links`, `share_rules`, `shared_photos` (+ gate), `viewer_sessions`; `is_share_link_active`, `share_link_baby`, `viewer_baby_id`, `viewer_can_see_photo`; `photos_sensitive_unshare_rules` trigger; every `viewer` policy | drop viewer policies, trigger, tables, functions |
 | `1791520000600_chat-audit.sql` | `chat_threads`, `chat_messages` (+ thread guard), append-only `audit_log`; RLS | drop |
-| `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `littlelight_worker` | revert |
+| `1791520000700_worker-heartbeats-app-role.sql` | `worker_heartbeats.updated_at`, FORCE RLS, grant + policy for `tinyglow_worker` | revert |
 | `1791600000100_auth-sessions-and-plan.sql` | guard (`auth.sessions`); session functions `auth_session_info`, `list_user_sessions`, `delete_user_session`, `count_user_sessions` (SECURITY DEFINER, `authenticated` only, no grants on `auth.*`); `baby_members.removal_requested_by/_at` (service_role-written); `babies_plan_follows_owner` + `baby_members_release_plan` triggers | drop triggers, functions, columns |
 | `1791700000100_uploads-and-ingest.sql` | `photos.status` gains `duplicate`, `photos.quarantined_at` (pipeline-only UPDATE), `quarantined_at IS NULL` on the user SELECT/UPDATE policies and in `photo_editable` / `babies_avatar_guard`, `photos_pipeline_delete` = trash > 30 d and not quarantined OR `status = 'duplicate'`; `free_tier_photo_count` helper + `photos_free_tier_cap` no longer counts failed/duplicate/quarantined rows; `baby_has_quarantined_photos` helper + `babies_pipeline_delete` refuses a baby holding a quarantined photo; `upload_sessions`, `upload_files` (+ `upload_session_visible`, `upload_files_session_owner` trigger, RLS, column grants); `home_place_label` (×2, pipeline/service_role) | drop functions, trigger, tables; restore `babies_pipeline_delete` and the step-2 cap trigger body, drop the two helpers; restore the four photos policies and two functions; drop column; `DELETE … WHERE status = 'duplicate'` then restore the old CHECK |
 | `1791900000100_ai-pipeline.sql` | `photos.ai_retry_requested_at` (+ `UPDATE` grant to `authenticated`); `ai_batches` provider file ids, `files_deleted_at`, versions, `reasoning_tokens`/`image_tokens`, `request_counts`, `last_polled_at`, `expires_at`, `submitted_bytes`, `ai_batches_open_idx`; `ai_batch_items` (ENABLE+FORCE RLS, pipeline/service_role ALL, authenticated column-limited SELECT via `photo_visible`, `ai_batch_items_guard`, 3 indexes); `ai_eligible_photos(...)` (pipeline/service_role); `ai_baby_month_cost_usd(...)` (authenticated/pipeline/service_role); `record_ai_budget_exceeded(uuid, text)` (SECURITY DEFINER, pipeline/service_role; inserts the `ai.budget_exceeded` audit row for a baby + `YYYY-MM` once, advisory-locked per (baby, month), returns whether it inserted; `pipeline` still has no SELECT on `audit_log`); `photo_ai_overrides_shape` extended to field/value shape (trigger now also `UPDATE OF value`) | restore the step-5 shape function/trigger verbatim; drop the three helpers, the table + guard, the index and columns; revoke + drop `ai_retry_requested_at` |

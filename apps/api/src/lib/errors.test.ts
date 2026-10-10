@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@littlelight/shared";
+import { apiErrorSchema } from "@tinyglow/shared";
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";

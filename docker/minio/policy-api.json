@@ -2,13 +2,13 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "LittlelightApiBucket",
+      "Sid": "TinyglowApiBucket",
       "Effect": "Allow",
       "Action": ["s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketMultipartUploads"],
       "Resource": ["arn:aws:s3:::${S3_BUCKET}"]
     },
     {
-      "Sid": "LittlelightApiObjects",
+      "Sid": "TinyglowApiObjects",
       "Effect": "Allow",
       "Action": [
         "s3:GetObject",
@@ -19,13 +19,13 @@
       "Resource": ["arn:aws:s3:::${S3_BUCKET}/*"]
     },
     {
-      "Sid": "LittlelightApiNoDelete",
+      "Sid": "TinyglowApiNoDelete",
       "Effect": "Deny",
       "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion"],
       "Resource": ["arn:aws:s3:::${S3_BUCKET}/*"]
     },
     {
-      "Sid": "LittlelightApiNoOldVersions",
+      "Sid": "TinyglowApiNoOldVersions",
       "Effect": "Deny",
       "Action": ["s3:GetObject", "s3:GetObjectVersion"],
       "Resource": ["arn:aws:s3:::${S3_BUCKET}/*"],

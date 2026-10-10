@@ -8,12 +8,12 @@ import {
 } from "../uploader";
 
 // Native background uploader adapter (docs/plans/step-9.md 2.6) over the in-house
-// `LittlelightUploader` plugin. Whole file, raw-body PUT to the presigned URL, no multipart and
+// `TinyglowUploader` plugin. Whole file, raw-body PUT to the presigned URL, no multipart and
 // no extra headers (the URL signs none). The OS continues the transfer while the app is
 // suspended; the promise settles when the app is running again.
 // URLs carry `X-Amz-Signature` and paths are private: nothing here is ever logged.
 
-interface LittlelightUploaderPlugin {
+interface TinyglowUploaderPlugin {
   upload(opts: { url: string; path: string; wifiOnly?: boolean }): Promise<{ id: string }>;
   cancel(opts: { id: string }): Promise<void>;
   addListener(
@@ -44,7 +44,7 @@ interface Pending {
 const pending = new Map<string, Pending>();
 // Events that arrive before `upload()` has returned its id.
 const early = new Map<string, PluginEvent[]>();
-let plugin: LittlelightUploaderPlugin | null = null;
+let plugin: TinyglowUploaderPlugin | null = null;
 let listening: Promise<unknown> | null = null;
 
 function settle(ev: PluginEvent) {
@@ -67,8 +67,8 @@ function settle(ev: PluginEvent) {
 
 // Resolves with a wrapper, never with the plugin: a Capacitor plugin is a Proxy whose `then` is a
 // (non-existent) native method, so resolving a promise with it never settles.
-async function load(): Promise<{ uploader: LittlelightUploaderPlugin }> {
-  plugin ??= registerPlugin<LittlelightUploaderPlugin>("LittlelightUploader");
+async function load(): Promise<{ uploader: TinyglowUploaderPlugin }> {
+  plugin ??= registerPlugin<TinyglowUploaderPlugin>("TinyglowUploader");
   const u = plugin;
   listening ??= Promise.all([
     u.addListener("progress", (e) => settle({ name: "progress", id: e.id, sent: e.sent })),

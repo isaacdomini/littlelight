@@ -1,4 +1,4 @@
-import { emailSchema } from "@littlelight/shared";
+import { emailSchema } from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FlowPage } from "../../components/Page";

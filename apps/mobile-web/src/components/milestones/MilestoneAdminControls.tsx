@@ -1,4 +1,4 @@
-import { MILESTONE_NAME_MAX, type Milestone } from "@littlelight/shared";
+import { MILESTONE_NAME_MAX, type Milestone } from "@tinyglow/shared";
 import { useState } from "react";
 import { useCurrentBaby } from "../../auth/AuthProvider";
 import { t } from "../../i18n";

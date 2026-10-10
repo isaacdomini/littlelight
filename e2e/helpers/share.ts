@@ -68,7 +68,7 @@ export async function runJob(name: string, payload?: unknown): Promise<Record<st
       "pnpm",
       "--silent",
       "--filter",
-      "@littlelight/worker",
+      "@tinyglow/worker",
       "run-job",
       name,
       ...(payload === undefined ? [] : [JSON.stringify(payload)]),
@@ -224,7 +224,7 @@ export async function freshAlbum(
 export async function viewerClient() {
   const ctx = await request.newContext({
     baseURL: BASE,
-    extraHTTPHeaders: { "X-Littlelight-Client": "web" },
+    extraHTTPHeaders: { "X-Tinyglow-Client": "web" },
   });
   return {
     ctx,

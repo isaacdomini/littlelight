@@ -1,5 +1,5 @@
 // Visual check for Apple Photos album sync (step 10, task 10.11). Runs the real web app in
-// Chromium with Capacitor forced to "ios" and a scripted `LittlelightPhotoSync` + secure-storage
+// Chromium with Capacitor forced to "ios" and a scripted `TinyglowPhotoSync` + secure-storage
 // bridge (no device needed); the import API is mocked with Playwright routes, the parent session
 // is the cached demo one from screenshots.ts. Output next to the other shots:
 // apps/mobile-web/.vite/screenshots/<scheme>-<size>/sync-*.png
@@ -90,7 +90,7 @@ function bridgeScript(m: Mock, token: string): string {
   const cap = {
     isNativePlatform: () => true, getPlatform: () => "ios", convertFileSrc: (x) => x,
     PluginHeaders: [
-      { name: "LittlelightPhotoSync", methods: names.map((n) => ({ name: n, rtype: "promise" })) },
+      { name: "TinyglowPhotoSync", methods: names.map((n) => ({ name: n, rtype: "promise" })) },
       { name: "SecureStorage", methods: sec.map((n) => ({ name: n, rtype: "promise" })) },
     ],
     nativePromise: (plugin, method, o) => {

@@ -1,4 +1,4 @@
-import { DERIVATIVE_LONG_EDGE } from "@littlelight/shared";
+import { DERIVATIVE_LONG_EDGE } from "@tinyglow/shared";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { jpegWithExif } from "../testing/exif-writer";

@@ -1,4 +1,4 @@
-import { SHARE_PASSCODE_LENGTH } from "@littlelight/shared";
+import { SHARE_PASSCODE_LENGTH } from "@tinyglow/shared";
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { ShareApiError } from "../../lib/shareApi";

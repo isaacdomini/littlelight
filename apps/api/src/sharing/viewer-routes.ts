@@ -9,7 +9,7 @@ import {
   viewerPhotosResponseSchema,
   viewerUrlsRequestSchema,
   viewerUrlsResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { shareSettings } from "../config";
@@ -71,7 +71,7 @@ function mediaTtl(app: FastifyInstance, session: ViewerSession): number {
 /** The per-link PWA manifest (D11): the installed app opens exactly this link. */
 export function viewerManifest(token: string) {
   return {
-    name: "Family album · Littlelight",
+    name: "Family album · Tinyglow",
     short_name: "Album",
     description: "A private family photo album shared with you.",
     start_url: `${SHARE_PATH}/${token}`,

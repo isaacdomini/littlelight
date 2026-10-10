@@ -178,7 +178,7 @@ async function run(startedAt: string): Promise<Record<string, unknown>> {
   const web = await fetch(`${BASE}/api/me/push-devices`, {
     method: "POST",
     headers: {
-      "x-littlelight-client": "web",
+      "x-tinyglow-client": "web",
       authorization: `Bearer ${admin.accessToken}`,
       "content-type": "application/json",
     },
@@ -296,7 +296,7 @@ async function run(startedAt: string): Promise<Record<string, unknown>> {
     const res = await fetch(`${BASE}/api/share/session`, {
       method: "POST",
       headers: {
-        "x-littlelight-client": "native",
+        "x-tinyglow-client": "native",
         "content-type": "application/json",
         ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       },

@@ -1,4 +1,4 @@
-import { apiErrorSchema } from "@littlelight/shared";
+import { apiErrorSchema } from "@tinyglow/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app";
 import { signAccessToken, testConfig } from "../testing/support";
@@ -8,7 +8,7 @@ import { signAccessToken, testConfig } from "../testing/support";
 
 const BABY = "11111111-1111-4111-8111-111111111111";
 const EXP = "22222222-2222-4222-8222-222222222222";
-const WEB = { "x-littlelight-client": "web" };
+const WEB = { "x-tinyglow-client": "web" };
 const okDb = { query: async () => ({ rows: [] }), end: async () => undefined };
 const okS3 = { send: (async () => ({})) as never, destroy: () => undefined };
 

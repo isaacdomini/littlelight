@@ -14,12 +14,12 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
   return {
     API_HOST: "127.0.0.1",
     API_PORT: 3000,
-    DATABASE_URL: "postgres://littlelight_api:dev@db:5432/littlelight",
+    DATABASE_URL: "postgres://tinyglow_api:dev@db:5432/tinyglow",
     S3_ENDPOINT: "http://storage:9000",
     S3_PUBLIC_ENDPOINT: "http://localhost:9000",
     S3_ACCESS_KEY: "dev",
     S3_SECRET_KEY: "devdevdev",
-    S3_BUCKET: "littlelight-dev",
+    S3_BUCKET: "tinyglow-dev",
     S3_REGION: "us-east-1",
     S3_FORCE_PATH_STYLE: true,
     JWT_SECRET: TEST_JWT_SECRET,
@@ -34,7 +34,7 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     SMTP_HOST: "mail",
     SMTP_PORT: 1025,
     SMTP_SECURE: false,
-    MAIL_FROM: "noreply@littlelight.test",
+    MAIL_FROM: "noreply@tinyglow.test",
     ...overrides,
   };
 }

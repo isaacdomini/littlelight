@@ -133,7 +133,7 @@ END
 $$;
 
 -------------------------------------------------------------------------------------------------
--- Free-tier cap (FREE_TIER_PHOTO_LIMIT = 1000 in @littlelight/shared): what counts.
+-- Free-tier cap (FREE_TIER_PHOTO_LIMIT = 1000 in @tinyglow/shared): what counts.
 -- A photo counts when it is not trashed, not quarantined and its status is neither 'failed' nor
 -- the transient 'duplicate' marker. Pending (unapproved) photos count: they are real uploads
 -- that hold storage. The helper is SECURITY DEFINER so a contributor's pre-check is exact rather
@@ -347,7 +347,7 @@ CREATE TRIGGER upload_files_session_owner BEFORE INSERT OR UPDATE OF duplicate_o
   FOR EACH ROW EXECUTE FUNCTION public.upload_files_session_owner();
 
 -------------------------------------------------------------------------------------------------
--- Home place label (FR-4.3 "home" within 150 m = HOME_RADIUS_M in @littlelight/shared; D7).
+-- Home place label (FR-4.3 "home" within 150 m = HOME_RADIUS_M in @tinyglow/shared; D7).
 -- Haversine on the decrypted home coordinates, entirely in SQL: the worker passes the photo's
 -- coordinates as bind parameters (the same ones it hands to encrypt_coord) and only ever gets
 -- 'Home' or NULL back. SECURITY INVOKER: the caller must itself hold the data key and the

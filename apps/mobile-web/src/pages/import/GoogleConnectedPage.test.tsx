@@ -60,9 +60,9 @@ describe("GoogleConnectedPage", () => {
     expect(assign).toHaveBeenCalledWith("/upload");
   });
 
-  it("native ok: 'Return to Littlelight', no auto navigation, no button", () => {
+  it("native ok: 'Return to Tinyglow', no auto navigation, no button", () => {
     show("?status=ok&client=native");
-    expect(screen.getByText("Connected. Return to Littlelight.")).toBeTruthy();
+    expect(screen.getByText("Connected. Return to Tinyglow.")).toBeTruthy();
     expect(screen.getByTestId("google-connected-native")).toBeTruthy();
     expect(screen.queryByTestId("google-connected-back")).toBeNull();
     vi.advanceTimersByTime(5000);

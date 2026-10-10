@@ -1,4 +1,4 @@
-import type { OAuthProvider } from "@littlelight/shared";
+import type { OAuthProvider } from "@tinyglow/shared";
 import type { ApiConfig } from "../config";
 import { mintAdminJwt } from "./admin-jwt";
 

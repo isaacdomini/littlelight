@@ -132,7 +132,7 @@ describe("request, params and list schemas", () => {
 });
 
 describe("exportDownloadUrlResponseSchema", () => {
-  const good = `http://localhost:9000/littlelight/babies/${BABY}/exports/${EXP}.zip?X-Amz-Expires=600&X-Amz-Signature=abc`;
+  const good = `http://localhost:9000/tinyglow/babies/${BABY}/exports/${EXP}.zip?X-Amz-Expires=600&X-Amz-Signature=abc`;
   it("accepts a presigned export ZIP URL", () => {
     expect(exportDownloadUrlResponseSchema.safeParse({ url: good, expiresAt: NOW }).success).toBe(
       true,
@@ -140,9 +140,9 @@ describe("exportDownloadUrlResponseSchema", () => {
   });
 
   it.each([
-    ["an original", `http://h.test/littlelight/babies/${BABY}/originals/${EXP}`],
-    ["a derivative", `http://h.test/littlelight/babies/${BABY}/derivatives/${EXP}/thumb.jpg`],
-    ["a non-zip export key", `http://h.test/littlelight/babies/${BABY}/exports/${EXP}.csv`],
+    ["an original", `http://h.test/tinyglow/babies/${BABY}/originals/${EXP}`],
+    ["a derivative", `http://h.test/tinyglow/babies/${BABY}/derivatives/${EXP}/thumb.jpg`],
+    ["a non-zip export key", `http://h.test/tinyglow/babies/${BABY}/exports/${EXP}.csv`],
     ["a javascript URL", "javascript:alert(1)"],
     ["a relative path", `/babies/${BABY}/exports/${EXP}.zip`],
   ])("rejects %s", (_n, url) => {

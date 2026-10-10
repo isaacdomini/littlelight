@@ -7,8 +7,8 @@
 #      (noncurrent versions expire after 7 days, expired delete markers removed). `mc ilm import`
 #      replaces the config, so re-runs never stack duplicate rules (`mc ilm rule add` would).
 #   3. bucket-scoped IAM users for the app, each with exactly one policy:
-#        S3_API_ACCESS_KEY    -> policy littlelight-api    (docker/minio/policy-api.json)
-#        S3_WORKER_ACCESS_KEY -> policy littlelight-worker (docker/minio/policy-worker.json)
+#        S3_API_ACCESS_KEY    -> policy tinyglow-api    (docker/minio/policy-api.json)
+#        S3_WORKER_ACCESS_KEY -> policy tinyglow-worker (docker/minio/policy-worker.json)
 #      `${S3_BUCKET}` in the policy files is replaced with the bucket name. `mc admin user add`
 #      on an existing user resets its secret, so rotating a secret is: edit it, re-run this.
 #
@@ -85,7 +85,7 @@ ensure_account() { # policy-name access-key secret-key policy-file
   [[ "$info" == *'"userStatus":"enabled"'* ]] || die "user for $name is not enabled"
   log "user for $name ready (policy $name attached)"
 }
-ensure_account littlelight-api "$S3_API_ACCESS_KEY" "$S3_API_SECRET_KEY" policy-api.json
-ensure_account littlelight-worker "$S3_WORKER_ACCESS_KEY" "$S3_WORKER_SECRET_KEY" policy-worker.json
+ensure_account tinyglow-api "$S3_API_ACCESS_KEY" "$S3_API_SECRET_KEY" policy-api.json
+ensure_account tinyglow-worker "$S3_WORKER_ACCESS_KEY" "$S3_WORKER_SECRET_KEY" policy-worker.json
 
 log "done"

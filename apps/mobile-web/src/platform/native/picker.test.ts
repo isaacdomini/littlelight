@@ -1,4 +1,4 @@
-import { NATIVE_UPLOAD_PICK_MAX } from "@littlelight/shared";
+import { NATIVE_UPLOAD_PICK_MAX } from "@tinyglow/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Photo selection (docs/plans/step-9.md 2.6, 2.15): originals (no transcoding), copied into

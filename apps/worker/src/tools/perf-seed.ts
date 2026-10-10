@@ -16,7 +16,7 @@ import {
   PERF_IDS,
   PERF_MEASUREMENT_COUNT,
   PERF_PHOTO_COUNT,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import pg from "pg";
 import { errorCategory } from "../clients";
 import { CACHE_CONTROL } from "../ingest";
@@ -51,9 +51,9 @@ import {
 // Runs on the HOST against the dev stack with the Postgres superuser and the MinIO root key,
 // never in a container or image. Refuses NODE_ENV=production, any database or S3 host that is
 // not localhost, and any database user other than `postgres`. Defaults (override with env):
-//   DATABASE_URL=postgres://postgres:dev@localhost:${DB_PORT:-5432}/littlelight
+//   DATABASE_URL=postgres://postgres:dev@localhost:${DB_PORT:-5432}/tinyglow
 //   S3_ENDPOINT=http://localhost:${STORAGE_PORT:-9000} S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev
-//   S3_BUCKET=littlelight-dev  PERF_SEED_CONCURRENCY=32
+//   S3_BUCKET=tinyglow-dev  PERF_SEED_CONCURRENCY=32
 //
 // 48 base images (24 months x thumb/display) are rendered once through the worker's real
 // `renderDerivative` and uploaded to `babies/<perf>/derivatives/_base/`; every photo's keys are
@@ -99,16 +99,12 @@ export function resolvePerfSeedTarget(env: Env = process.env): PerfSeedTarget {
   const storagePort = envOr(env, "STORAGE_PORT", "9000");
   const concurrency = Number.parseInt(envOr(env, "PERF_SEED_CONCURRENCY", "32"), 10);
   return {
-    databaseUrl: envOr(
-      env,
-      "DATABASE_URL",
-      `postgres://postgres:dev@localhost:${dbPort}/littlelight`,
-    ),
+    databaseUrl: envOr(env, "DATABASE_URL", `postgres://postgres:dev@localhost:${dbPort}/tinyglow`),
     s3Endpoint: envOr(env, "S3_ENDPOINT", `http://localhost:${storagePort}`),
     s3Region: envOr(env, "S3_REGION", "us-east-1"),
     s3AccessKey: envOr(env, "S3_ACCESS_KEY", "dev"),
     s3SecretKey: envOr(env, "S3_SECRET_KEY", "devdevdev"),
-    s3Bucket: envOr(env, "S3_BUCKET", "littlelight-dev"),
+    s3Bucket: envOr(env, "S3_BUCKET", "tinyglow-dev"),
     concurrency:
       Number.isInteger(concurrency) && concurrency >= 1 ? Math.min(concurrency, 128) : 32,
   };
@@ -261,7 +257,7 @@ function createS3(target: PerfSeedTarget): S3Client {
 async function connect(target: PerfSeedTarget): Promise<pg.Client> {
   const client = new Client({
     connectionString: target.databaseUrl,
-    application_name: "littlelight-perf-seed",
+    application_name: "tinyglow-perf-seed",
     connectionTimeoutMillis: 5_000,
   });
   try {

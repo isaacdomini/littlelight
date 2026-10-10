@@ -33,9 +33,9 @@ describe.skipIf(!databaseUrl)("plan follows the paying admin", () => {
   /** Plus baby owned by OWNER (admin) with a second admin OTHER and a contributor. */
   async function world(opts: { plan?: "plus" | "free"; owner?: string | null } = {}) {
     for (const [id, email] of [
-      [OWNER, "plan-owner@littlelight.test"],
-      [OTHER, "plan-other@littlelight.test"],
-      [CONTRIB, "plan-contrib@littlelight.test"],
+      [OWNER, "plan-owner@tinyglow.test"],
+      [OTHER, "plan-other@tinyglow.test"],
+      [CONTRIB, "plan-contrib@tinyglow.test"],
     ]) {
       await q(
         "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())",
@@ -234,8 +234,8 @@ describe.skipIf(!databaseUrl)("co-admin removal request columns", () => {
     db = await connect();
     await clean();
     for (const [id, email] of [
-      [REQUESTER, "rm-requester@littlelight.test"],
-      [TARGET, "rm-target@littlelight.test"],
+      [REQUESTER, "rm-requester@tinyglow.test"],
+      [TARGET, "rm-target@tinyglow.test"],
     ]) {
       await q(
         "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())",

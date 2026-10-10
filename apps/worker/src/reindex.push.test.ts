@@ -1,4 +1,4 @@
-import type { PushNotifyJob } from "@littlelight/shared";
+import type { PushNotifyJob } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import { enqueuePhotosAnalyzed, handleReindexJobs } from "./reindex";
 import { type Handler, recordingLog, scriptedPool } from "./testing/stubs";

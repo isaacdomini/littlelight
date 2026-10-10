@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { meResponseSchema, pushDeviceResponseSchema } from "@littlelight/shared";
+import { meResponseSchema, pushDeviceResponseSchema } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
 
 // Push device registration, notification preferences and native CORS against a real database
 // (docs/plans/step-9.md 2.8, 2.15). The GoTrue session is the user's auth.sessions row.
 
-const NATIVE = { "x-littlelight-client": "native" };
-const WEB = { "x-littlelight-client": "web" };
+const NATIVE = { "x-tinyglow-client": "native" };
+const WEB = { "x-tinyglow-client": "web" };
 const tok = () => `tok-${randomUUID().replaceAll("-", "")}`;
 const body = (token = tok(), extra: Record<string, unknown> = {}) => ({
   platform: "ios",
@@ -297,13 +297,13 @@ describe.skipIf(!databaseUrl)("push devices (api + db)", () => {
         headers: {
           origin: "capacitor://localhost",
           "access-control-request-method": "POST",
-          "access-control-request-headers": "authorization,content-type,x-littlelight-client",
+          "access-control-request-headers": "authorization,content-type,x-tinyglow-client",
         },
       });
       expect(res.statusCode).toBe(204);
       expect(res.headers["access-control-allow-origin"]).toBe("capacitor://localhost");
       expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
-      expect(String(res.headers["access-control-allow-headers"])).toContain("x-littlelight-client");
+      expect(String(res.headers["access-control-allow-headers"])).toContain("x-tinyglow-client");
     });
 
     it("an authenticated native request carries allow-origin, and 401s carry it too", async () => {

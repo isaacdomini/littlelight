@@ -20,5 +20,5 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  noExternal: [/^@littlelight\//],
+  noExternal: [/^@tinyglow\//],
 });

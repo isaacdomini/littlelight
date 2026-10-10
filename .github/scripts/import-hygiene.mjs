@@ -6,7 +6,7 @@
 //   node .github/scripts/import-hygiene.mjs [--root <dir>]
 //
 // Scope ("import code"): non-test sources under apps/api/src/imports and apps/worker/src/import,
-// plus apps/mobile-web/src/platform/native/photoSync.ts and the iOS LittlelightPhotoSync.swift.
+// plus apps/mobile-web/src/platform/native/photoSync.ts and the iOS TinyglowPhotoSync.swift.
 //
 //  1. Logging. No `console.*` call in the import code. Every logger call (`log.info(`,
 //     `request.log.warn(`, `deps.log.error(`, `logger.child(` ...) has arguments that hold none
@@ -18,17 +18,17 @@
 //     (`{ err }`, `err: e`, `log.warn(err, …)`: errors are logged as a category). String
 //     literals are ignored (message text is fixed); template interpolations are checked. Each
 //     of the api and worker import folders must contain at least one logger call (non-vacuous).
-//     LittlelightPhotoSync.swift has no print / debugPrint / dump / NSLog / os_log / Logger(.
+//     TinyglowPhotoSync.swift has no print / debugPrint / dump / NSLog / os_log / Logger(.
 //  2. The worker never reads `google_accounts`: no `google_accounts`, `refresh_token_enc`,
 //     `decrypt_secret`, `service_role` or `withServiceRole` in any non-test apps/worker/src code
 //     (SQL strings included, comments excluded); the token comes only from
 //     `import_google_refresh_token(` (must be used in apps/worker/src/import). No migration grants
-//     anything on google_accounts to `pipeline` / `littlelight_worker`, and the bootstrap grants
+//     anything on google_accounts to `pipeline` / `tinyglow_worker`, and the bootstrap grants
 //     the worker login role `pipeline` only (never service_role).
 //  3. The worker never inserts into `photos`: no `INSERT INTO [public.]photos` (across line
 //     breaks), `insertInto("photos")` or `COPY photos` in apps/worker/src/import; photos are
 //     booked only through `import_book_photo(` (must be used). No migration grants INSERT (or
-//     ALL) on photos to `pipeline` / `littlelight_worker`.
+//     ALL) on photos to `pipeline` / `tinyglow_worker`.
 //  4. The SSRF guard runs before every media fetch (D6, R5):
 //     a. every `mediaDownloadUrl(` call in the import code is the direct argument of
 //        `parseAllowedMediaUrl(` or `isAllowedMediaUrl(` (at least one such call must exist);
@@ -253,7 +253,7 @@ const API_IMPORTS = "apps/api/src/imports";
 const WORKER_IMPORT = "apps/worker/src/import";
 const WORKER_SRC = "apps/worker/src";
 const PHOTO_SYNC_TS = "apps/mobile-web/src/platform/native/photoSync.ts";
-const PHOTO_SYNC_SWIFT = "apps/mobile-web/ios/App/App/LittlelightPhotoSync.swift";
+const PHOTO_SYNC_SWIFT = "apps/mobile-web/ios/App/App/TinyglowPhotoSync.swift";
 const DOWNLOAD_TS = "apps/worker/src/import/google/download.ts";
 const HANDLER_TS = "apps/worker/src/import/google/handler.ts";
 const FAKE_SERVER_TS = "apps/worker/src/import/google/fake-server.ts";
@@ -589,7 +589,7 @@ if (migrationFiles.length === 0) {
   console.error(`::error::${MIGRATIONS} has no .sql files`);
   process.exit(1);
 }
-const WORKER_ROLES = /\bTO\b[^;]*\b(pipeline|littlelight_worker|PUBLIC)\b/i;
+const WORKER_ROLES = /\bTO\b[^;]*\b(pipeline|tinyglow_worker|PUBLIC)\b/i;
 function grantsTo(table, privilege) {
   const hits = [];
   const onTable = new RegExp(
@@ -632,7 +632,7 @@ function grantsTo(table, privilege) {
   );
 
   report(
-    "no migration grants anything on google_accounts to pipeline / littlelight_worker / PUBLIC",
+    "no migration grants anything on google_accounts to pipeline / tinyglow_worker / PUBLIC",
     grantsTo("google_accounts", null),
   );
 
@@ -678,7 +678,7 @@ function grantsTo(table, privilege) {
     hits,
   );
   report(
-    "no migration grants INSERT (or ALL) on photos to pipeline / littlelight_worker / PUBLIC",
+    "no migration grants INSERT (or ALL) on photos to pipeline / tinyglow_worker / PUBLIC",
     grantsTo("photos", /\b(INSERT|ALL)\b/i),
   );
 }

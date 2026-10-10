@@ -6,7 +6,7 @@ import {
   exportKey,
   exportResponseSchema,
   exportsListResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
 import { signAccessToken } from "../testing/support";
@@ -354,7 +354,7 @@ describe.skipIf(!databaseUrl)("data export routes", () => {
       expect(url.pathname.endsWith(`/${exportKey(baby, e.id)}`)).toBe(true);
       expect(url.searchParams.get("X-Amz-Expires")).toBe(String(EXPORT_URL_TTL_SEC));
       expect(url.searchParams.get("response-content-disposition")).toMatch(
-        /^attachment; filename="littlelight-maya-\d{4}-\d{2}-\d{2}\.zip"$/,
+        /^attachment; filename="tinyglow-maya-\d{4}-\d{2}-\d{2}\.zip"$/,
       );
       expect(url.searchParams.get("response-content-type")).toBe("application/zip");
       expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());

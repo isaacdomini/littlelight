@@ -7,7 +7,7 @@ import {
   milestonesListResponseSchema,
   milestoneUpdateSchema,
   type ReindexJob,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit, requireAuth, requireConsent, type Tx, withClaims } from "../auth";

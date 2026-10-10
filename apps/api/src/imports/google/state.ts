@@ -1,5 +1,5 @@
 import { createHash, hkdfSync, randomUUID } from "node:crypto";
-import { googleConnectReturnPathSchema } from "@littlelight/shared";
+import { googleConnectReturnPathSchema } from "@tinyglow/shared";
 import { errors as joseErrors, jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
 import type { ApiConfig } from "../../config";
@@ -13,9 +13,9 @@ import type { ApiConfig } from "../../config";
 // minutes and carries a random `jti`, which the callback consumes once
 // (`createConsumedGoogleStates`). Never logged (pino drops query strings; `redactUrl`).
 
-const HKDF_SALT = "littlelight";
+const HKDF_SALT = "tinyglow";
 const STATE_KEY_INFO = "google-oauth-state-v1";
-export const GOOGLE_STATE_AUDIENCE = "littlelight-google-state";
+export const GOOGLE_STATE_AUDIENCE = "tinyglow-google-state";
 /** Lifetime of a connect `state` (step-10 plan 2.6). */
 export const GOOGLE_STATE_TTL_SEC = 600;
 const CLOCK_TOLERANCE_SEC = 5;
@@ -24,7 +24,7 @@ type StateConfig = Pick<ApiConfig, "JWT_SECRET" | "PUBLIC_URL">;
 
 const keyCache = new Map<string, Uint8Array>();
 
-/** HS256 key of connect states: HKDF-SHA256(JWT_SECRET, "littlelight", "google-oauth-state-v1"). */
+/** HS256 key of connect states: HKDF-SHA256(JWT_SECRET, "tinyglow", "google-oauth-state-v1"). */
 export function googleStateKey(config: Pick<ApiConfig, "JWT_SECRET">): Uint8Array {
   const cacheKey = createHash("sha256").update(config.JWT_SECRET).digest("base64url");
   const hit = keyCache.get(cacheKey);

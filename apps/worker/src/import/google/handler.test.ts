@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PickerMediaItem } from "@littlelight/shared";
+import type { PickerMediaItem } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import { recordingLog, scriptedPool } from "../../testing/stubs";
 import {

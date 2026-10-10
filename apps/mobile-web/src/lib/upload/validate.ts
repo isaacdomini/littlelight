@@ -3,7 +3,7 @@ import {
   ACCEPTED_UPLOAD_MIMES,
   type PhotoMime,
   UPLOAD_MAX_FILE_BYTES,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 export type RejectReason = "unsupported" | "too_large";
 

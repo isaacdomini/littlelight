@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION, aiDescriptionV1Schema } from "@littlelight/shared";
+import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION, aiDescriptionV1Schema } from "@tinyglow/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { analysisImage } from "../../../../e2e/fixtures/ai-images";
 import { AiNotConfiguredError, AiRequestError } from "../errors";

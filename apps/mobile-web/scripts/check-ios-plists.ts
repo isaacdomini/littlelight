@@ -1,5 +1,5 @@
 // Asserts Info-Debug.plist == Info.plist + the two debug-only keys, and nothing else.
-// Run: pnpm --filter @littlelight/mobile-web check:ios-plists (needs macOS plutil)
+// Run: pnpm --filter @tinyglow/mobile-web check:ios-plists (needs macOS plutil)
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +23,8 @@ const expected = {
   NSAppTransportSecurity: { NSAllowsLocalNetworking: true },
   CFBundleURLTypes: [
     {
-      CFBundleURLName: "com.tesarsoft.littlelight.debug-scheme",
-      CFBundleURLSchemes: ["littlelight"],
+      CFBundleURLName: "com.tesarsoft.tinyglow.debug-scheme",
+      CFBundleURLSchemes: ["tinyglow"],
     },
   ],
 };
@@ -36,7 +36,7 @@ if (!isDeepStrictEqual(debug, expected)) {
   }
 }
 // Album sync (step 10): both plists must carry the background-refresh keys and the photo string.
-const SYNC_TASK_ID = "com.tesarsoft.littlelight.sync";
+const SYNC_TASK_ID = "com.tesarsoft.tinyglow.sync";
 for (const [name, plist] of [
   ["Info.plist", release],
   ["Info-Debug.plist", debug],

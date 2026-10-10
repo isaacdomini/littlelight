@@ -1,4 +1,4 @@
-import type { IngestEnv } from "@littlelight/shared";
+import type { IngestEnv } from "@tinyglow/shared";
 
 // CSAM hash-matching seam (docs/plans/step-4.md 2.9, D8; PRD "Non-functional requirements →
 // Privacy and child safety"). Default `none`: nothing is sent anywhere. `photodna` posts the

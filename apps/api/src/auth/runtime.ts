@@ -4,7 +4,7 @@ import {
   OTP_PER_EMAIL_PER_HOUR,
   OTP_PER_IP_PER_HOUR,
   OTP_TTL_MIN,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { ApiConfig } from "../config";
 import type { Mailer } from "../email/mailer";
 import type { GoTrueClient } from "./gotrue";

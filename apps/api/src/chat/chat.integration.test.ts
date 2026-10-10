@@ -5,7 +5,7 @@ import {
   createFakeEmbedder,
   type FakeChatScript,
   getAiStatus,
-} from "@littlelight/ai";
+} from "@tinyglow/ai";
 import {
   apiErrorSchema,
   CHAT_MESSAGES,
@@ -13,7 +13,7 @@ import {
   chatThreadResponseSchema,
   chatTurnResponseSchema,
   decodeChatEventFrame,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loggerOptions } from "../app";
 import type { AiServices } from "../plugins/ai";

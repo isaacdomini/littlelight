@@ -1,4 +1,4 @@
-import { healthzResponseSchema } from "@littlelight/shared";
+import { healthzResponseSchema } from "@tinyglow/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app";
 import type { ApiConfig } from "../config";
@@ -7,12 +7,12 @@ import { errorCategory, isLoopbackSocket } from "./healthz";
 const config: ApiConfig = {
   API_HOST: "127.0.0.1",
   API_PORT: 3000,
-  DATABASE_URL: "postgres://postgres:supersecretpw@db:5432/littlelight",
+  DATABASE_URL: "postgres://postgres:supersecretpw@db:5432/tinyglow",
   S3_ENDPOINT: "http://storage-internal.example:9000",
   S3_PUBLIC_ENDPOINT: "http://localhost:9000",
   S3_ACCESS_KEY: "AKIASECRETKEY",
   S3_SECRET_KEY: "s3-secret-value-xyz",
-  S3_BUCKET: "littlelight-dev",
+  S3_BUCKET: "tinyglow-dev",
   S3_REGION: "us-east-1",
   S3_FORCE_PATH_STYLE: true,
   JWT_SECRET: "dev-only-jwt-secret-at-least-32-characters",
@@ -27,7 +27,7 @@ const config: ApiConfig = {
   SMTP_HOST: "mail",
   SMTP_PORT: 1025,
   SMTP_SECURE: false,
-  MAIL_FROM: "noreply@littlelight.test",
+  MAIL_FROM: "noreply@tinyglow.test",
 };
 
 type App = Awaited<ReturnType<typeof buildApp>>;

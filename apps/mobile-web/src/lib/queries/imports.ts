@@ -1,5 +1,5 @@
-import { type ImportSource, importSourcesListResponseSchema } from "@littlelight/shared";
 import { useQuery } from "@tanstack/react-query";
+import { type ImportSource, importSourcesListResponseSchema } from "@tinyglow/shared";
 import { useCurrentBaby } from "../../auth/AuthProvider";
 import { nativePlatform } from "../../platform/platform";
 import { apiFetch } from "../api";

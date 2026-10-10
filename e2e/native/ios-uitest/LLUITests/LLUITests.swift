@@ -3,7 +3,7 @@ import XCTest
 
 // Minimal XCUITest driver for the iOS native gate (e2e/native/ios-gate.sh). It exists because
 // simctl cannot grant the notification permission, tap a banner, or see inside the WKWebView.
-// It has no host app: it drives the installed Littlelight app and SpringBoard by bundle id.
+// It has no host app: it drives the installed Tinyglow app and SpringBoard by bundle id.
 // Inputs come from `TEST_RUNNER_LL_*` environment variables of the xcodebuild invocation.
 //
 // Album-sync gate additions (e2e/native/ios-sync-gate.sh, docs/plans/step-10.md 2.12, 4.4): the
@@ -12,7 +12,7 @@ import XCTest
 // because `simctl addmedia` only fills the camera roll. Everything else is UI driving.
 final class LLUITests: XCTestCase {
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-    let app = XCUIApplication(bundleIdentifier: "com.tesarsoft.littlelight")
+    let app = XCUIApplication(bundleIdentifier: "com.tesarsoft.tinyglow")
 
     private func env(_ k: String) -> String? {
         let v = ProcessInfo.processInfo.environment[k]
@@ -40,7 +40,7 @@ final class LLUITests: XCTestCase {
     /// With the app in the background, tap the banner whose text contains LL_BANNER.
     /// The shell sends the `simctl push` once this test is running.
     func testTapBanner() throws {
-        let text = env("LL_BANNER") ?? "Littlelight"
+        let text = env("LL_BANNER") ?? "Tinyglow"
         XCUIDevice.shared.press(.home)
         sleep(3)
         let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
@@ -52,7 +52,7 @@ final class LLUITests: XCTestCase {
     /// Bring the app forward and wait for text from LL_EXPECT inside the web view.
     func testExpectText() throws {
         let text = try XCTUnwrap(env("LL_EXPECT"), "LL_EXPECT not set")
-        // `simctl openurl littlelight://...` raises SpringBoard's "Open in Littlelight?" alert.
+        // `simctl openurl tinyglow://...` raises SpringBoard's "Open in Tinyglow?" alert.
         let open = springboard.alerts.buttons["Open"]
         if open.waitForExistence(timeout: 8) { open.tap() }
         app.activate()
@@ -85,7 +85,7 @@ final class LLUITests: XCTestCase {
     /// Make sure the app is signed out: no-op on the welcome page.
     func testSignOut() throws {
         app.activate()
-        if element(containing: "Welcome to Littlelight").waitForExistence(timeout: 15) { return }
+        if element(containing: "Welcome to Tinyglow").waitForExistence(timeout: 15) { return }
         let settings = app.webViews.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 20), "neither the welcome page nor Settings is showing")
         settings.tap()
@@ -94,8 +94,8 @@ final class LLUITests: XCTestCase {
         out.tap()
         sleep(1)
         let confirm = app.webViews.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Sign out'")).element(boundBy: 0)
-        if confirm.waitForExistence(timeout: 5) && !element(containing: "Welcome to Littlelight").exists { confirm.tap() }
-        XCTAssertTrue(element(containing: "Welcome to Littlelight").waitForExistence(timeout: 30), "still signed in")
+        if confirm.waitForExistence(timeout: 5) && !element(containing: "Welcome to Tinyglow").exists { confirm.tap() }
+        XCTAssertTrue(element(containing: "Welcome to Tinyglow").waitForExistence(timeout: 30), "still signed in")
         dump("signed-out")
     }
 
@@ -106,9 +106,9 @@ final class LLUITests: XCTestCase {
         let done = app.webViews.buttons["Done"]
         XCTAssertTrue(done.waitForExistence(timeout: 30), "no Done button in the share viewer")
         done.tap()
-        XCTAssertTrue(element(containing: "Welcome to Littlelight").waitForExistence(timeout: 30), "Done did not land on the start page")
+        XCTAssertTrue(element(containing: "Welcome to Tinyglow").waitForExistence(timeout: 30), "Done did not land on the start page")
         sleep(5)
-        XCTAssertTrue(element(containing: "Welcome to Littlelight").exists, "bounced back after Done")
+        XCTAssertTrue(element(containing: "Welcome to Tinyglow").exists, "bounced back after Done")
         XCTAssertFalse(done.exists, "back in the share viewer after Done")
         dump("share-done")
     }

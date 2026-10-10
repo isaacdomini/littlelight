@@ -12,7 +12,7 @@ const DC = ["compose", "-f", "docker-compose.dev.yml"];
 
 /**
  * Refuses to run unless this is the dev stack: the dev compose db is reachable, is named
- * `littlelight`, and holds the seeded demo baby. Throws loudly otherwise.
+ * `tinyglow`, and holds the seeded demo baby. Throws loudly otherwise.
  */
 export async function assertDevStack(): Promise<void> {
   const base = process.env.E2E_BASE_URL;
@@ -29,7 +29,7 @@ export async function assertDevStack(): Promise<void> {
       `e2e reset: cannot reach the dev db through docker-compose.dev.yml (is the stack up?): ${e}`,
     );
   }
-  if (rows[0] !== "littlelight|1") {
+  if (rows[0] !== "tinyglow|1") {
     throw new Error(
       `e2e reset: not the seeded dev DB (got ${JSON.stringify(rows[0])}); refusing to delete anything`,
     );
@@ -42,7 +42,7 @@ export async function deleteLeftoverBabies(): Promise<number> {
   const rows = await psql(
     `with d as (delete from babies b where b.id::text not like '00000000-0000-4000-8000-%'
        and not exists (select 1 from baby_members m join auth.users u on u.id = m.user_id
-         where m.baby_id = b.id and u.email !~ '^(e2e-.*@example\\.com|demo-.*@littlelight\\.local)$')
+         where m.baby_id = b.id and u.email !~ '^(e2e-.*@example\\.com|demo-.*@tinyglow\\.local)$')
        returning 1) select count(*) from d`,
   );
   return Number(rows[0] ?? 0);

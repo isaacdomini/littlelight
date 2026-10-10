@@ -1,4 +1,4 @@
-import { CHAT_MESSAGES } from "@littlelight/shared";
+import { CHAT_MESSAGES } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { ApiError, forbidden, notFound } from "../lib/errors";
 

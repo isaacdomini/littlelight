@@ -1,4 +1,4 @@
-import { CHAT_SSE_KEEPALIVE, type ChatEvent, decodeChatEventFrame } from "@littlelight/shared";
+import { CHAT_SSE_KEEPALIVE, type ChatEvent, decodeChatEventFrame } from "@tinyglow/shared";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openChatEventStream } from "./sse";

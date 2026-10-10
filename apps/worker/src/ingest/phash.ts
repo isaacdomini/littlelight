@@ -1,4 +1,4 @@
-import { PHASH_NEAR_DUPLICATE_MAX_DISTANCE } from "@littlelight/shared";
+import { PHASH_NEAR_DUPLICATE_MAX_DISTANCE } from "@tinyglow/shared";
 import sharp from "sharp";
 
 // Perceptual hash (docs/plans/step-4.md 2.7 step 10, D9; PRD FR-2.5 near-duplicates). In-house

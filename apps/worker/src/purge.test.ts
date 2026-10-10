@@ -1,4 +1,4 @@
-import { babyPrefix, originalKey, photoPrefixes } from "@littlelight/shared";
+import { babyPrefix, originalKey, photoPrefixes } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import {
   AUDIT_EXPORT_SQL,

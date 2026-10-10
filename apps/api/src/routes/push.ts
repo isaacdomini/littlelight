@@ -4,7 +4,7 @@ import {
   type PushPlatform,
   pushDeviceRegisterRequestSchema,
   pushDeviceResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { createThrottle, requireAuth, requireConsent, type Throttle, withClaims } from "../auth";
@@ -22,10 +22,10 @@ import { clientKindHeader } from "../lib/request";
 // serializer logs no bodies; nothing here logs, returns or echoes it (validation errors carry
 // field paths only, DB errors map to fixed messages in `lib/errors.ts`).
 
-/** 400 for a registration that does not come from the app (`X-Littlelight-Client: native`). */
+/** 400 for a registration that does not come from the app (`X-Tinyglow-Client: native`). */
 export const pushNativeOnly = () =>
   new ApiError(400, "validation_failed", "Notifications are only available in the app", {
-    fields: ["headers.x-littlelight-client"],
+    fields: ["headers.x-tinyglow-client"],
   });
 
 interface DeviceRow {

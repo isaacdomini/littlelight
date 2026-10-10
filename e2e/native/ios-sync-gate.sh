@@ -31,13 +31,13 @@ OUT="$ROOT/e2e/native-results/ios-sync"
 UITEST="$ROOT/e2e/native/ios-uitest"
 UIDD="$ROOT/e2e/native-results/ios-uitest-dd"
 APPDD="$ROOT/apps/mobile-web/ios/DerivedData"
-BUNDLE_ID="com.tesarsoft.littlelight"
+BUNDLE_ID="com.tesarsoft.tinyglow"
 RUNNER_ID="com.tesarsoft.lluitests.xctrunner"
 SIM_NAME="${IOS_GATE_SIM_NAME:-iPhone 17}"
 RUNTIME="${IOS_GATE_RUNTIME:-com.apple.CoreSimulator.SimRuntime.iOS-26-4}"
 MAILPIT="http://localhost:${MAILPIT_PORT:-8025}"
 BASE="http://localhost:${WEB_PORT:-8080}"
-DEMO_EMAIL="demo-mom@littlelight.local"
+DEMO_EMAIL="demo-mom@tinyglow.local"
 MAYA="00000000-0000-4000-8000-000000000100"
 ALBUM="LL Sync Test"
 FX="$ROOT/e2e/fixtures"
@@ -51,7 +51,7 @@ skip() { SKIP=$((SKIP+1)); printf 'SKIP  %s\n' "$*"; }
 check() { local name=$1; shift; if "$@" >/dev/null 2>&1; then pass "$name"; else fail "$name"; fi; }
 step() { printf '\n==> %s\n' "$*"; }
 die() { printf 'IOS SYNC GATE ERROR: %s\n' "$*" >&2; exit 2; }
-PSQL() { docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc "$1"; }
+PSQL() { docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc "$1"; }
 helper() { pnpm --silent exec tsx e2e/native/ios-sync-helper.ts "$@"; }
 
 command -v xcrun >/dev/null || die "xcrun not found: this gate needs macOS with Xcode"
@@ -132,8 +132,8 @@ photo_count() { PSQL "select count(*) from photos where baby_id='$MAYA' and crea
 # ---- 1. build -------------------------------------------------------------------------------------
 if [ "${IOS_GATE_SKIP_BUILD:-0}" != "1" ]; then
   step "1. sync + ad-hoc signed simulator build (ios:build:sim)"
-  pnpm --filter @littlelight/mobile-web native:sync:ios >"$OUT/build-sync.log" 2>&1 || { tail -20 "$OUT/build-sync.log"; die "native:sync:ios failed"; }
-  pnpm --filter @littlelight/mobile-web ios:build:sim >"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log"; die "ios:build:sim failed (see $OUT/build.log)"; }
+  pnpm --filter @tinyglow/mobile-web native:sync:ios >"$OUT/build-sync.log" 2>&1 || { tail -20 "$OUT/build-sync.log"; die "native:sync:ios failed"; }
+  pnpm --filter @tinyglow/mobile-web ios:build:sim >"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log"; die "ios:build:sim failed (see $OUT/build.log)"; }
 fi
 APP="$(find "$APPDD" -name 'App.app' -path '*Debug-iphonesimulator*' -not -path '*Intermediates*' 2>/dev/null | head -1)"
 [ -n "$APP" ] || die "App.app not found under $APPDD (run without IOS_GATE_SKIP_BUILD)"
@@ -141,7 +141,7 @@ PB=/usr/libexec/PlistBuddy
 step "1a. the built app declares what album sync needs and nothing more"
 v="$("$PB" -c 'Print :NSPhotoLibraryUsageDescription' "$APP/Info.plist" 2>/dev/null)"
 grep -qi "album" <<<"$v" && pass "NSPhotoLibraryUsageDescription mentions the album sync" || fail "usage string does not mention album sync"
-"$PB" -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$APP/Info.plist" 2>/dev/null | grep -q 'com.tesarsoft.littlelight.sync' && pass "BGTaskSchedulerPermittedIdentifiers has the sync task" || fail "BGTaskSchedulerPermittedIdentifiers missing"
+"$PB" -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$APP/Info.plist" 2>/dev/null | grep -q 'com.tesarsoft.tinyglow.sync' && pass "BGTaskSchedulerPermittedIdentifiers has the sync task" || fail "BGTaskSchedulerPermittedIdentifiers missing"
 "$PB" -c 'Print :UIBackgroundModes' "$APP/Info.plist" 2>/dev/null | grep -q 'fetch' && pass "UIBackgroundModes has fetch" || fail "UIBackgroundModes missing fetch"
 "$PB" -c 'Print :NSLocationWhenInUseUsageDescription' "$APP/Info.plist" >/dev/null 2>&1 && fail "the app declares a location permission" || pass "no location permission declared (GPS comes from the file)"
 
@@ -184,7 +184,7 @@ else
   fail "could not create the Photos album (see uitest-testCreateAlbum.log)"
 fi
 
-# one album photo is already in Littlelight (another device uploaded it)
+# one album photo is already in Tinyglow (another device uploaded it)
 if helper upload "$FX/heic/plain-640x480.heic" image/heic >"$OUT/preupload.log" 2>&1; then pass "plain-640x480.heic is already in Maya's album (cross-device duplicate)"; else fail "pre-upload failed (see preupload.log)"; fi
 SYNC_START="$(PSQL "select to_char(now() at time zone 'utc','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")"
 M0="$(PSQL "select count(*) from import_sources where baby_id='$MAYA'")"
@@ -235,7 +235,7 @@ if wait_sql "select imported_count from import_sources where baby_id='$MAYA'" 5 
 shot 03-incremental
 
 # ---- 6. removal never deletes ---------------------------------------------------------------------------------------------------
-step "6. removing a photo from the album deletes nothing from Littlelight"
+step "6. removing a photo from the album deletes nothing from Tinyglow"
 BEFORE="$(src_row)"
 uitest testRemoveFromAlbum "LL_ALBUM=$ALBUM" "LL_ALBUM_REMOVE_COUNT=1" && pass "removed one photo from the Photos album" || fail "could not remove a photo from the album"
 sleep 40
@@ -297,7 +297,7 @@ else
 fi
 grep -Eq 'ASSET|PHAsset|localIdentifier|IMG_[0-9]+|\.HEIC' "$OUT/app-log.txt" && fail "the app log names a PhotoKit asset or file" || pass "the app log names no PhotoKit asset or file"
 docker compose -f docker-compose.dev.yml logs --no-color --since 40m api worker >"$OUT/server-log.txt" 2>/dev/null
-if grep -Eq 'X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|@littlelight\.local|-?[0-9]{1,3}\.[0-9]{4,}\s*,\s*-?[0-9]{1,3}\.[0-9]{4,}|47\.6062|ll-uploads' "$OUT/server-log.txt"; then
+if grep -Eq 'X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|@tinyglow\.local|-?[0-9]{1,3}\.[0-9]{4,}\s*,\s*-?[0-9]{1,3}\.[0-9]{4,}|47\.6062|ll-uploads' "$OUT/server-log.txt"; then
   fail "api/worker logs contain a signature, JWT, address, coordinate or upload path"
 else
   pass "api/worker logs: no signature, JWT, address, coordinate or upload path"
@@ -309,7 +309,7 @@ cat <<'CHECKLIST'
 
 MANUAL CHECKLIST (docs/plans/step-10.md 4.4; a shell cannot do these)
   [ ] Background refresh: run the app under Xcode, pause, then in the debugger:
-        e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.littlelight.sync"]
+        e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.tinyglow.sync"]
       and resume: one batch imports and import_sources.last_trigger becomes 'background'.
   [ ] Wi-Fi only on a real phone: with Wi-Fi off and cellular on, the card says "Waiting for Wi-Fi"
       and nothing uploads; back on Wi-Fi it syncs (the simulator cannot fake cellular).

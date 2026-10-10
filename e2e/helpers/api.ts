@@ -32,7 +32,7 @@ export class ApiClient {
   ): Promise<ApiClient> {
     const ctx = await request.newContext({
       baseURL: BASE,
-      extraHTTPHeaders: { "X-Littlelight-Client": "web" },
+      extraHTTPHeaders: { "X-Tinyglow-Client": "web" },
       ...(storageState ? { storageState } : {}),
     });
     return new ApiClient(ctx, email);

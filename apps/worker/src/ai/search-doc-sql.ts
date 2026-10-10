@@ -4,7 +4,7 @@ import {
   applyAiOverrides,
   measurementKindSchema,
   type SearchDocumentInput,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 // SQL and row mapping of the search indexer (docs/plans/step-7.md 2.6). Every statement runs as
 // `pipeline` inside `runAsPipeline(pool, {}, …)` — never with the data key — and no statement here

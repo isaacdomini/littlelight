@@ -2,12 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { IngestJob } from "@littlelight/shared";
-import {
-  googleImportMediaAllowList,
-  IMPORT_MAX_FILE_BYTES,
-  originalKey,
-} from "@littlelight/shared";
+import type { IngestJob } from "@tinyglow/shared";
+import { googleImportMediaAllowList, IMPORT_MAX_FILE_BYTES, originalKey } from "@tinyglow/shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WorkerStorage } from "../../storage";
 import { createHarness, type Harness, integrationEnv } from "../../testing/harness";

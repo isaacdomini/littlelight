@@ -3,7 +3,7 @@
 Status: proposed (architect, 2026-10-09). Not a PRD build-order step: this batch closes the
 should-fix items of the combined review of steps 1–9 (no must-fix items were found) before step
 10 (photo import). Latest commit: `23ff8d6 step 9 (part A)`. User decisions already taken: build
-FR-10.1 export now (admins only); wire Sentry, scrubbed, off in dev; drop "Littlelight Plus" from
+FR-10.1 export now (admins only); wire Sentry, scrubbed, off in dev; drop "Tinyglow Plus" from
 the store listings for the first submission; fix items 3–8 as the reviewer described.
 
 PRD sections implemented or touched: FR-10.1 ("Export all originals + a JSON/CSV of metadata as a
@@ -58,7 +58,7 @@ headers, breadcrumbs, signed-URL query strings, tokens, GPS-like numbers and ema
 FR-1.5 co-admin rule, the co-member profile column exposure, the contributor `is_sensitive` /
 `approved_by` leftovers into the database (policies, a trigger, a view) with tests; (4) make a
 failed account deletion leave the account whole; (5) let a downgraded admin read and clear chat
-history; (6) move the iOS debug-only surface (`NSAllowsLocalNetworking`, `littlelight://`) to Debug
+history; (6) move the iOS debug-only surface (`NSAllowsLocalNetworking`, `tinyglow://`) to Debug
 builds via xcconfig; (7) rewrite the store listings without the plan name; plus the cheap
 nice-to-haves (`trustProxy: 1` + nginx `CF-Connecting-IP`, a report-only CSP, date-only viewer
 `takenAt`). Deferred items are recorded in section 5 for `docs/PROGRESS.md`.
@@ -164,7 +164,7 @@ CREATE INDEX ON public.data_exports (status) WHERE status IN ('queued','running'
   `photo_ai`, `photo_ai_overrides`, `data_exports`. `audit_log` INSERT exists (purge uses it).
 - Regenerate `packages/db/src/generated`; README rows (table, who writes what, retention).
 
-### 2.2 Shared contracts (`@littlelight/shared`; architect-defined here, **backend-engineer writes in R.2** with orchestrator approval)
+### 2.2 Shared contracts (`@tinyglow/shared`; architect-defined here, **backend-engineer writes in R.2** with orchestrator approval)
 
 - `src/jobs.ts`: `JOBS.dataExport = "data.export"`; `dataExportJobSchema = z.strictObject({
   exportId: z.uuid(), babyId: z.uuid() })` (ids only; the worker re-reads everything). Queue
@@ -278,7 +278,7 @@ CREATE INDEX ON public.data_exports (status) WHERE status IN ('queued','running'
 `apps/worker/src/email/mailer.ts`: the same nodemailer transport factory as the API's
 (`SMTP_HOST/PORT/SECURE/USER/PASS`, `MAIL_FROM`, `mailEnvSchema`), `sendExportReady(to,
 { babyName, expiresAt })` and `sendExportFailed(to, { babyName })` with plain-text + simple HTML
-bodies: "Your Littlelight export of <baby name> is ready. Open Littlelight → Settings → Export
+bodies: "Your Tinyglow export of <baby name> is ready. Open Tinyglow → Settings → Export
 album data to download it. The download is available until <date>." **No link, no token, no
 signed URL in the email** (the URL is minted in-app, to the requester, after a fresh sign-in).
 Recipient from `export_requester_email()`; NULL ⇒ no email, one info line `{exportId,
@@ -291,7 +291,7 @@ as the api). Push for exports is deferred (5.2).
 | --- | --- | --- | --- |
 | `POST /babies/:id/exports` | Auth, Consent, admin (`is_baby_admin` via the INSERT policy; a non-admin gets 403 `parents_only`), **fresh sign-in** (`requireFreshSignIn`, D2) | `createExportRequestSchema` → 202 `exportResponseSchema` | under the caller's claims: `INSERT … (baby_id, requested_by, include_location) RETURNING *` (RLS + rate-limit triggers; `check_violation` 'already in progress' → 409 `export_in_progress`, 'rate limit' → 429 `rate_limited`, 'trashed' → 409 `baby_trashed`); audit `export.requested {export_id, include_location}`; after commit `app.jobs.enqueueDataExport({exportId, babyId})` (a failed enqueue marks the row `failed/internal` under service_role and returns 503) |
 | `GET /babies/:id/exports` | Auth, Consent, admin | → 200 `exportsListResponseSchema` | last 10 rows (`LEFT JOIN member_profiles` for `requestedByName`), `isMine = requested_by = uid`, `canDownload = isMine AND status='ready' AND expires_at > now() AND purged_at IS NULL` |
-| `POST /babies/:id/exports/:exportId/download-url` | Auth, Consent, admin, **requester only** (403 `not_requester`), **fresh sign-in** | → 200 `exportDownloadUrlResponseSchema` | 410 `export_expired` unless ready/unexpired/unpurged; `app.signer` GET for `storage_key` with TTL `EXPORT_URL_TTL_SEC`, `ResponseContentDisposition: attachment; filename="littlelight-<ascii baby name>-<YYYY-MM-DD>.zip"`, `ResponseContentType: application/zip`; `UPDATE downloads = downloads + 1, last_downloaded_at`; audit `export.downloaded {export_id}`. The URL is never logged (`redactUrl` covers the query string) |
+| `POST /babies/:id/exports/:exportId/download-url` | Auth, Consent, admin, **requester only** (403 `not_requester`), **fresh sign-in** | → 200 `exportDownloadUrlResponseSchema` | 410 `export_expired` unless ready/unexpired/unpurged; `app.signer` GET for `storage_key` with TTL `EXPORT_URL_TTL_SEC`, `ResponseContentDisposition: attachment; filename="tinyglow-<ascii baby name>-<YYYY-MM-DD>.zip"`, `ResponseContentType: application/zip`; `UPDATE downloads = downloads + 1, last_downloaded_at`; audit `export.downloaded {export_id}`. The URL is never logged (`redactUrl` covers the query string) |
 | `DELETE /babies/:id/exports/:exportId` | Auth, Consent, admin | → 204 | `UPDATE … SET expires_at = now()` (either admin); audit `export.expired {export_id}`; the hourly sweep purges the object (the API key cannot delete) |
 
 `plugins/jobs.ts`: `enqueueDataExport(job: DataExportJob): Promise<boolean>` with
@@ -360,14 +360,14 @@ exactly those two keys. `INFOPLIST_FILE` is removed from the target-level build 
 new `release.xcconfig` (added as `baseConfigurationReference` of the Release configuration) →
 `INFOPLIST_FILE = App/Info.plist`. `apps/mobile-web/scripts/check-ios-plists.ts` asserts, via
 `plutil -convert json`, that `Info-Debug.plist` equals `Info.plist` + `{NSAppTransportSecurity.
-NSAllowsLocalNetworking: true, CFBundleURLTypes: [littlelight]}` and nothing else (hygiene, CI).
+NSAllowsLocalNetworking: true, CFBundleURLTypes: [tinyglow]}` and nothing else (hygiene, CI).
 `NATIVE.md` documents it. The JS router already honours the scheme only with
 `VITE_DEEPLINK_DEV_SCHEME=1`.
 
 ### 2.10 Store listings (item 9, D18; mobile-engineer)
 
 `fastlane/metadata/en-US/description.txt` and `metadata/android/en-US/full_description.txt`:
-the paragraph starting "Littlelight Plus uses AI…" becomes a plan-neutral AI disclosure, e.g.
+the paragraph starting "Tinyglow Plus uses AI…" becomes a plan-neutral AI disclosure, e.g.
 "Optional AI features use our model provider to describe your photos so you can search them and
 ask questions about them. Photos are only analysed when AI features are turned on for an album;
 they are never used to train models, and the files are deleted from the provider once the
@@ -524,7 +524,7 @@ only; mobile-engineer owns `apps/mobile-web/scripts/check-ios-plists.ts`, `fastl
 - Scripts: root `e2e:export-gate` (`tsx e2e/export/gate.ts`); `apps/mobile-web`
   `check:ios-plists`.
 - Done-when: `pnpm install --frozen-lockfile` is a no-op afterwards; `pnpm lint && pnpm typecheck
-  && pnpm test` green; the web bundle (`pnpm --filter @littlelight/mobile-web build` with no
+  && pnpm test` green; the web bundle (`pnpm --filter @tinyglow/mobile-web build` with no
   `VITE_SENTRY_DSN`) grows by < 1 % (Sentry is a lazy chunk).
 
 ### R.2 Shared contracts (backend-engineer, orchestrator approval) — group 0 (parallel with R.1)
@@ -576,7 +576,7 @@ only; mobile-engineer owns `apps/mobile-web/scripts/check-ios-plists.ts`, `fastl
   and the same with `-configuration Release` both succeed; `PlistBuddy -c 'Print :CFBundleURLTypes'`
   on the Release product fails (key absent) and succeeds on the Debug product;
   `NSAppTransportSecurity` likewise; `plutil -lint` passes on both source plists; `pnpm --filter
-  @littlelight/mobile-web check:ios-plists` passes; `grep -rn "Plus" apps/mobile-web/fastlane
+  @tinyglow/mobile-web check:ios-plists` passes; `grep -rn "Plus" apps/mobile-web/fastlane
   apps/mobile-web/store` matches only the "iPhone 14 Plus" device name; `pnpm e2e:native-ios`
   still passes its static step on a Debug build.
 
@@ -598,7 +598,7 @@ only; mobile-engineer owns `apps/mobile-web/scripts/check-ios-plists.ts`, `fastl
   `beforeSend: scrubTelemetryEvent`; no replay, no tracing, no console integration; nothing from
   `/s/<token>` URLs can reach an event (the scrubber drops `request`; add a unit test that an
   event built on a `/s/<token>` page has no token anywhere).
-- Done-when: `pnpm --filter @littlelight/mobile-web typecheck && test` green; `CI=1 pnpm e2e`
+- Done-when: `pnpm --filter @tinyglow/mobile-web typecheck && test` green; `CI=1 pnpm e2e`
   green; a dev build with `VITE_SENTRY_DSN` set to a local mock URL shows exactly one scrubbed
   POST on a thrown test error and none without the var.
 
@@ -711,7 +711,7 @@ running and `pnpm` 12.10.1 on PATH; the dev stack has no `SENTRY_DSN`, the fake 
 pnpm install --frozen-lockfile
 pnpm lint && pnpm typecheck
 bash .github/scripts/sentry-hygiene.sh && bash .github/scripts/ai-hygiene.sh && bash .github/scripts/share-hygiene.sh && bash .github/scripts/native-hygiene.sh
-pnpm --filter @littlelight/mobile-web check:ios-plists
+pnpm --filter @tinyglow/mobile-web check:ios-plists
 grep -rn "Plus" apps/mobile-web/fastlane apps/mobile-web/store | grep -v "iPhone 14 Plus"; echo "exit $?"   # exit 1
 pnpm test
 # integration: same env block as docs/plans/step-8.md 4.5, on fresh pgvector + MinIO
@@ -723,7 +723,7 @@ git diff --exit-code -- packages/db/src/generated
 
 ```sh
 docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up -d --build --wait
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "select count(*) from pgmigrations"                                                  # 19
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 $PSQL "select relkind, relname from pg_class where relname='member_profiles'"              # v|member_profiles
@@ -735,13 +735,13 @@ pnpm e2e:export-gate && pnpm e2e:export-gate
 pnpm e2e:share-gate && pnpm e2e:push-gate && pnpm e2e:upload-gate && pnpm e2e:ai-gate
 ```
 
-### 4.3 API walkthrough (`B=http://localhost:8080`, cookie jar per user; `H='x-littlelight-client: web'`)
+### 4.3 API walkthrough (`B=http://localhost:8080`, cookie jar per user; `H='x-tinyglow-client: web'`)
 
 1. Sign in as demo mom (OTP via Mailpit; fresh). `POST $B/api/babies/<maya>/exports -d
    '{"includeLocation":true}'` ⇒ 202 `{export:{status:"queued",isMine:true,...}}`; a second POST
    at once ⇒ 409 `export_in_progress`.
 2. Poll `GET $B/api/babies/<maya>/exports` until `status:"ready"` (≤ 120 s on the dev stack);
-   `photoCount` 12, `bytes > 0`, `canDownload: true`. Mailpit has "Your Littlelight export … is
+   `photoCount` 12, `bytes > 0`, `canDownload: true`. Mailpit has "Your Tinyglow export … is
    ready" to `demo-mom@…` and `grep -c http` on its body ⇒ 0 links other than none.
 3. `POST …/exports/<id>/download-url` ⇒ 200 `{url}` with `X-Amz-Expires=600` and
    `response-content-disposition=attachment`; `curl -o maya.zip "$url"` ⇒ `unzip -l maya.zip`
@@ -755,7 +755,7 @@ pnpm e2e:share-gate && pnpm e2e:push-gate && pnpm e2e:upload-gate && pnpm e2e:ai
    `fresh_sign_in_required`.
 6. `DELETE …/exports/<id>` ⇒ 204; `docker compose exec worker pnpm run-job purge.trash` ⇒
    `$PSQL "select status, purged_at is not null from data_exports where id='<id>'"` ⇒
-   `expired|t`; `docker compose exec storage mc ls --versions local/littlelight/babies/<maya>/exports/` ⇒ empty.
+   `expired|t`; `docker compose exec storage mc ls --versions local/tinyglow/babies/<maya>/exports/` ⇒ empty.
 7. Members: as mom, `PATCH /api/babies/<maya>/members/<dad> {"role":"contributor"}` ⇒ 403 (same
    message as before); `DELETE /api/babies/<maya>/members/<dad>` ⇒ creates a removal request
    (unchanged flow); `$PSQL` as `authenticated` with mom's claims `DELETE FROM baby_members WHERE
@@ -776,7 +776,7 @@ pnpm e2e:share-gate && pnpm e2e:push-gate && pnpm e2e:upload-gate && pnpm e2e:ai
     SET is_sensitive = true WHERE id='<p>'` ⇒ ERROR `contributors may only trash…`; `UPDATE photos
     SET deleted_at = now() WHERE id='<p>'` ⇒ `UPDATE 1`. With mom's claims: `UPDATE photos SET
     approval='approved', approved_by='<dad>' WHERE id='<p2>'` ⇒ `approved_by` reads mom's id.
-13. Logs: `docker compose logs api worker | grep -E "X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|@littlelight\.local|-?[0-9]{1,3}\.[0-9]{3,},\s*-?[0-9]{1,3}\.[0-9]{3,}"; echo "exit $?"` ⇒ exit 1.
+13. Logs: `docker compose logs api worker | grep -E "X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|@tinyglow\.local|-?[0-9]{1,3}\.[0-9]{3,},\s*-?[0-9]{1,3}\.[0-9]{3,}"; echo "exit $?"` ⇒ exit 1.
 
 ### 4.4 Sentry (manual, with a throwaway DSN or a local mock)
 
@@ -788,14 +788,14 @@ curl -s -X POST $B/api/__test/boom   # only if a test route exists; otherwise tr
 docker compose -f docker-compose.dev.yml up -d api worker   # back to no DSN
 ```
 
-Web: `VITE_SENTRY_DSN=http://k@localhost:9009/2 pnpm --filter @littlelight/mobile-web dev`, open
+Web: `VITE_SENTRY_DSN=http://k@localhost:9009/2 pnpm --filter @tinyglow/mobile-web dev`, open
 `/s/demo-grandparents-share-token`, run `throw new Error("x")` in the console ⇒ one envelope with
 no `request`, no token, no breadcrumbs. Without the var ⇒ no Sentry chunk in the network panel.
 
 ### 4.5 iOS (Debug and Release products; needs the installed simulator runtime)
 
 ```sh
-pnpm --filter @littlelight/mobile-web native:sync:ios
+pnpm --filter @tinyglow/mobile-web native:sync:ios
 for CFG in Debug Release; do
   xcodebuild -project apps/mobile-web/ios/App/App.xcodeproj -scheme App -configuration $CFG -sdk iphonesimulator -derivedDataPath apps/mobile-web/ios/DerivedData CODE_SIGNING_ALLOWED=NO build
   APP=apps/mobile-web/ios/DerivedData/Build/Products/$CFG-iphonesimulator/App.app
@@ -908,7 +908,7 @@ of section 5 recorded as taken; the deferred list copied to open issues. Commit 
   the ZIP temporarily doubles the album's footprint until expiry; `EXPORT_MAX_BYTES` and the
   existing 80 % disk alert cover it. If MinIO's multipart `Upload` from `lib-storage` misbehaves
   with the bucket-scoped worker key (needs `s3:PutObject`, `AbortMultipartUpload`,
-  `ListMultipartUploadParts`), devops adjusts the `littlelight-worker` policy (storage-init).
+  `ListMultipartUploadParts`), devops adjusts the `tinyglow-worker` policy (storage-init).
 - **R2 — Sentry SDK integration surface.** `@sentry/node` ≥ 8 auto-instruments when default
   integrations are on; the plan turns them off. If a version needs an `--import` preload for
   anything we use (we use none), stay without it. If `defaultIntegrations: false` drops the

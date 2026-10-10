@@ -10,12 +10,12 @@
  *
  * Role model (least privilege; see README "Roles"):
  * - `supabase_auth_admin`  LOGIN, GoTrue only. Owns `auth.*`.
- * - `littlelight_api`      LOGIN NOINHERIT. No privileges of its own on app tables; every unit of
+ * - `tinyglow_api`      LOGIN NOINHERIT. No privileges of its own on app tables; every unit of
  *                          work does `SET LOCAL ROLE authenticated|viewer|service_role`.
- * - `littlelight_worker`   LOGIN NOINHERIT. Owns `pgboss`; `SET LOCAL ROLE pipeline` for app tables.
+ * - `tinyglow_worker`   LOGIN NOINHERIT. Owns `pgboss`; `SET LOCAL ROLE pipeline` for app tables.
  * - `authenticated`, `viewer`, `pipeline`, `service_role`, `anon`: NOLOGIN. Policies are written
  *                          `TO <role>`. Only `service_role` has BYPASSRLS and it is reachable only
- *                          from `littlelight_api` (never the worker, which handles untrusted
+ *                          from `tinyglow_api` (never the worker, which handles untrusted
  *                          image bytes and model output).
  *
  * Security notes
@@ -51,9 +51,9 @@ export const JWT_ROLES = ["anon", "authenticated", "service_role"] as const;
 /** Every role the application layer knows by name (docs/plans/step-2.md 2.2). */
 export const APP_ROLES = {
   /** API connection role (LOGIN NOINHERIT). */
-  api: "littlelight_api",
+  api: "tinyglow_api",
   /** Worker connection role (LOGIN NOINHERIT); owns the pg-boss schema. */
-  worker: "littlelight_worker",
+  worker: "tinyglow_worker",
   /** Signed-in user; policies read `request.jwt.claims`. */
   authenticated: "authenticated",
   /** Share-link viewer; may read only the viewer allow-list for one `share_link_id` claim. */
@@ -83,20 +83,20 @@ export interface BootstrapOptions {
 const BOOTSTRAP_SQL = `
 DO $bootstrap$
 DECLARE
-  auth_password   text := current_setting('littlelight.auth_db_password', true);
-  api_password    text := current_setting('littlelight.api_db_password', true);
-  worker_password text := current_setting('littlelight.worker_db_password', true);
+  auth_password   text := current_setting('tinyglow.auth_db_password', true);
+  api_password    text := current_setting('tinyglow.api_db_password', true);
+  worker_password text := current_setting('tinyglow.worker_db_password', true);
   policy_role text;
   r record;
 BEGIN
   IF coalesce(auth_password, '') = '' THEN
-    RAISE EXCEPTION 'littlelight.auth_db_password is not set for this transaction';
+    RAISE EXCEPTION 'tinyglow.auth_db_password is not set for this transaction';
   END IF;
   IF coalesce(api_password, '') = '' THEN
-    RAISE EXCEPTION 'littlelight.api_db_password is not set for this transaction';
+    RAISE EXCEPTION 'tinyglow.api_db_password is not set for this transaction';
   END IF;
   IF coalesce(worker_password, '') = '' THEN
-    RAISE EXCEPTION 'littlelight.worker_db_password is not set for this transaction';
+    RAISE EXCEPTION 'tinyglow.worker_db_password is not set for this transaction';
   END IF;
 
   ---------------------------------------------------------------------------------------------
@@ -139,7 +139,7 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- service_role: Supabase semantics (bypasses RLS). NOLOGIN; only littlelight_api may SET ROLE
+  -- service_role: Supabase semantics (bypasses RLS). NOLOGIN; only tinyglow_api may SET ROLE
   -- to it, and only in the few named API code paths that have no user context.
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION';
@@ -263,20 +263,20 @@ export async function bootstrap(options: BootstrapOptions): Promise<void> {
   const secrets = [options.authDbPassword, options.apiDbPassword, options.workerDbPassword];
   const client = new Client({
     connectionString: options.databaseUrl,
-    application_name: "littlelight-bootstrap",
+    application_name: "tinyglow-bootstrap",
   });
 
   try {
     await client.connect();
     await client.query("BEGIN");
     // Bind parameters, transaction-local (is_local = true): visible only inside this transaction.
-    await client.query("SELECT set_config('littlelight.auth_db_password', $1, true)", [
+    await client.query("SELECT set_config('tinyglow.auth_db_password', $1, true)", [
       options.authDbPassword,
     ]);
-    await client.query("SELECT set_config('littlelight.api_db_password', $1, true)", [
+    await client.query("SELECT set_config('tinyglow.api_db_password', $1, true)", [
       options.apiDbPassword,
     ]);
-    await client.query("SELECT set_config('littlelight.worker_db_password', $1, true)", [
+    await client.query("SELECT set_config('tinyglow.worker_db_password', $1, true)", [
       options.workerDbPassword,
     ]);
     await client.query(BOOTSTRAP_SQL);

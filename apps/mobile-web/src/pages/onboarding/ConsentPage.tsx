@@ -1,5 +1,5 @@
-import { type MeResponse, meResponseSchema } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import { type MeResponse, meResponseSchema } from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ME_KEY, useAuth } from "../../auth/AuthProvider";

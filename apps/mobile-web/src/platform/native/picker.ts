@@ -1,4 +1,4 @@
-import { NATIVE_UPLOAD_PICK_MAX } from "@littlelight/shared";
+import { NATIVE_UPLOAD_PICK_MAX } from "@tinyglow/shared";
 import type { NativeFileRef } from "../uploader";
 import { copyIntoUploadCache } from "./files";
 

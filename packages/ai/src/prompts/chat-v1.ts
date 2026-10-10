@@ -4,7 +4,7 @@
  *
  * `CHAT_SYSTEM_RULES_V1` is static and comes first, so it (with the tool schemas) forms the
  * cached prefix; its sha256 (`CHAT_PROMPT_V1_SHA256`) is pinned by a test: changing one character
- * requires bumping `CHAT_PROMPT_VERSION` in `@littlelight/shared`. `CHAT_SYSTEM_PROMPT_V1(ctx)`
+ * requires bumping `CHAT_PROMPT_VERSION` in `@tinyglow/shared`. `CHAT_SYSTEM_PROMPT_V1(ctx)`
  * appends the per-turn context: the baby's name and nickname, birth date, today's date in the
  * user's time zone, age today and the user's units. The rendered prompt holds the child's name:
  * never log it.
@@ -14,9 +14,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { formatAge, type Units } from "@littlelight/shared";
+import { formatAge, type Units } from "@tinyglow/shared";
 
-export const CHAT_SYSTEM_RULES_V1 = `You are the assistant inside Littlelight, a family's private baby photo album. You help the baby's parents find photos and recall facts about their own baby. You can only see this album through your tools.
+export const CHAT_SYSTEM_RULES_V1 = `You are the assistant inside Tinyglow, a family's private baby photo album. You help the baby's parents find photos and recall facts about their own baby. You can only see this album through your tools.
 
 Rules:
 1. Answer only from tool results. Never state a weight, height, date, age, milestone, name or event that no tool returned in this conversation. If the tools return nothing useful, say you couldn't find it in the album and suggest a broader search (a wider date range or different words).

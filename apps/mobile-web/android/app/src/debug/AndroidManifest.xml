@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <activity android:name="com.tesarsoft.littlelight.MainActivity" android:exported="true">
+        <activity android:name="com.tesarsoft.tinyglow.MainActivity" android:exported="true">
             <!-- Debug-only custom scheme so the emulator can test routing without App Link
-                 verification: adb shell am start -a android.intent.action.VIEW -d littlelight://s/<token> -->
+                 verification: adb shell am start -a android.intent.action.VIEW -d tinyglow://s/<token> -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="littlelight" />
+                <data android:scheme="tinyglow" />
             </intent-filter>
         </activity>
     </application>

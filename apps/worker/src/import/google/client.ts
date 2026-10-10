@@ -5,7 +5,7 @@ import {
   googleTokenResponseSchema,
   type PickerMediaItemsPage,
   pickerMediaItemsPageSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 // Server-to-server Google calls of the `import.google` worker (docs/plans/step-10.md 2.7, D6):
 // refresh the requester's access token, list the picked media items, delete the Picker session.
@@ -85,7 +85,7 @@ export interface WorkerGoogleClient {
 }
 
 /** OAuth client id sent to the fake when none is configured (the fake does not check it). */
-const FAKE_CLIENT_ID = "littlelight-dev";
+const FAKE_CLIENT_ID = "tinyglow-dev";
 
 function categoryForStatus(status: number): GoogleErrorCategory {
   if (status === 404) return "not_found";

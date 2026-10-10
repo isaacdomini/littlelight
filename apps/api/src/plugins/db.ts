@@ -3,9 +3,9 @@ import pg from "pg";
 import type { ApiConfig } from "../config";
 
 // Pooled Postgres access (docs/plans/step-3.md 2.7; packages/db/README.md "Per-transaction
-// identity"). DATABASE_URL is `littlelight_api`, which has no table privileges of its own: every
+// identity"). DATABASE_URL is `tinyglow_api`, which has no table privileges of its own: every
 // request-scoped unit of work goes through `runAs`, which switches role and claims for exactly
-// one transaction and returns the connection to the pool as `littlelight_api` again.
+// one transaction and returns the connection to the pool as `tinyglow_api` again.
 
 /** The slice of `pg.Pool` the API uses. Tests may pass a stub without `connect` (see `asDbPool`). */
 export interface DbClient {
@@ -38,7 +38,7 @@ export function createPool(config: Pick<ApiConfig, "DATABASE_URL">, log: Fastify
     max: 10,
     connectionTimeoutMillis: 2_000,
     idleTimeoutMillis: 30_000,
-    application_name: "littlelight-api",
+    application_name: "tinyglow-api",
   });
   // An idle client error (e.g. the db restarting) must not crash the process.
   pool.on("error", (err) => {
@@ -62,7 +62,7 @@ const SET_LOCAL_ROLE: Readonly<Record<DbRole, string>> = Object.freeze({
 export interface TxOptions {
   /**
    * JSON string bound to `set_config('request.jwt.claims', $1, true)`; build it with
-   * `claimsToSql()` from `@littlelight/shared`. Never logged, never interpolated.
+   * `claimsToSql()` from `@tinyglow/shared`. Never logged, never interpolated.
    */
   claimsJson?: string | null;
   /**

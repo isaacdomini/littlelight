@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { DEMO_IDS } from "@littlelight/shared";
+import { DEMO_IDS } from "@tinyglow/shared";
 import sharp from "sharp";
 import { beforeAll, describe, expect, it } from "vitest";
 import {

@@ -1,4 +1,4 @@
-import { PRIVACY_VERSION, TERMS_VERSION } from "@littlelight/shared";
+import { PRIVACY_VERSION, TERMS_VERSION } from "@tinyglow/shared";
 import { SubPage } from "../components/Page";
 import { t } from "../i18n";
 

@@ -1,4 +1,4 @@
-import type { ChatPhoto, PhotoSummary } from "@littlelight/shared";
+import type { ChatPhoto, PhotoSummary } from "@tinyglow/shared";
 
 /** Fills the summary fields a chat photo lacks so the shared `Thumb` and viewer can use it. */
 export function chatPhotoToSummary(p: ChatPhoto): PhotoSummary {

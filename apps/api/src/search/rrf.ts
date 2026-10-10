@@ -1,4 +1,4 @@
-import { SEARCH_RRF_K } from "@littlelight/shared";
+import { SEARCH_RRF_K } from "@tinyglow/shared";
 
 // Reciprocal Rank Fusion (docs/plans/step-7.md 2.8 step 6; PRD "Chat and RAG pipeline"):
 // `score(d) = Σ_legs 1 / (k + rank_leg(d))`, rank from 1, k = 60. Ties by capture time

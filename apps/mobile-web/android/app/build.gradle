@@ -10,10 +10,10 @@ if (keystorePropsFile.exists()) {
 }
 
 android {
-    namespace = "com.tesarsoft.littlelight"
+    namespace = "com.tesarsoft.tinyglow"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.tesarsoft.littlelight"
+        applicationId "com.tesarsoft.tinyglow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

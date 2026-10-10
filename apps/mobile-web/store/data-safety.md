@@ -7,7 +7,7 @@ Global answers:
   that as sharing.
 - Is all user data encrypted in transit? **Yes** (HTTPS only; release builds block cleartext).
 - Can users request deletion? **Yes**: in-app Delete account (Settings > Account), plus a web
-  deletion URL (`https://littlelight.tesarsoft.com/support`, placeholder) for the Console field.
+  deletion URL (`https://tinyglow.app/support`, placeholder) for the Console field.
 - Independent security review: No. Committed to Play Families policy: No (audience is adults).
 
 | Data type (Play category) | Collected | Shared | Optional | Purpose |

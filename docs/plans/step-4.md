@@ -53,9 +53,9 @@ Deviations go through the orchestrator.
 ```
 browser ──/api/uploads/*──► api ──CreateMultipartUpload/ListParts/Complete──► MinIO (S3_ENDPOINT, api service account)
    │                          └─presign UploadPart/GetObject with a signer client on S3_PUBLIC_ENDPOINT
-   ├──PUT part ───────────────────────────────────────────────────────────────► MinIO (S3_PUBLIC_ENDPOINT = localhost:9000 | files.littlelight.tesarsoft.com)
+   ├──PUT part ───────────────────────────────────────────────────────────────► MinIO (S3_PUBLIC_ENDPOINT = localhost:9000 | files.tinyglow.app)
    └──GET thumb/display (signed, ≤ 1 h, one object) ──────────────────────────► MinIO
-api ──pg-boss send (littlelight_api, pgboss schema grants) ──► Postgres ──► worker (--scale 3)
+api ──pg-boss send (tinyglow_api, pgboss schema grants) ──► Postgres ──► worker (--scale 3)
 worker ──SET LOCAL ROLE pipeline──► photos / photo_exif / photo_derivatives / upload_files
 worker ──worker service account──► MinIO: GetObject original, PutObject derivatives, delete versions
 ```
@@ -72,7 +72,7 @@ worker ──worker service account──► MinIO: GetObject original, PutObjec
   ETags are never needed by the client (2.4 "complete" is server-driven), so no exposed headers
   are required.
 
-### 2.2 Object key layout (`@littlelight/shared` `src/upload.ts`)
+### 2.2 Object key layout (`@tinyglow/shared` `src/upload.ts`)
 
 | Object | Key | Written by | Read by |
 | --- | --- | --- | --- |
@@ -167,9 +167,9 @@ API moves `registered → completed/aborted/failed`); no DELETE. `P` SELECT USIN
 (`actor_user_id IS NULL`) covers the worker's `safety.hash_match` and `photo.purged` rows.
 
 **pg-boss grants** (bootstrap, `packages/db/src/bootstrap.ts`): the API now enqueues. Verify
-that `littlelight_api` has `USAGE ON SCHEMA pgboss` and that the step-2 `ALTER DEFAULT
-PRIVILEGES FOR ROLE littlelight_worker IN SCHEMA pgboss` covers every table/sequence/function
-pg-boss 12 creates (per-queue partitions are created by `littlelight_worker` at runtime, so
+that `tinyglow_api` has `USAGE ON SCHEMA pgboss` and that the step-2 `ALTER DEFAULT
+PRIVILEGES FOR ROLE tinyglow_worker IN SCHEMA pgboss` covers every table/sequence/function
+pg-boss 12 creates (per-queue partitions are created by `tinyglow_worker` at runtime, so
 default privileges apply). If pg-boss's `send` needs a function the API lacks, grant it
 minimally and document it. The API never creates queues or runs pg-boss maintenance (2.5).
 
@@ -208,7 +208,7 @@ secrets, but bodies of 100 entries are noise); signed URLs are never logged (the
 capability tokens) — add `res.body` is not logged anyway; the `redactUrl` TOKEN_SEGMENT rule
 already hides `X-Amz-Signature`-style query strings.
 
-### 2.5 Jobs (`@littlelight/shared` `src/jobs.ts`, re-exported by `apps/worker/src/jobs.ts`)
+### 2.5 Jobs (`@tinyglow/shared` `src/jobs.ts`, re-exported by `apps/worker/src/jobs.ts`)
 
 | Job | Payload (zod) | Producer | Schedule / options | Handler (worker, role `pipeline`) |
 | --- | --- | --- | --- | --- |
@@ -219,8 +219,8 @@ already hides `X-Amz-Signature`-style query strings.
 
 pg-boss usage rules: the worker owns queue creation (`createQueue` for each name at startup,
 idempotent) and scheduling (`schedule`); it keeps `connectionString: DATABASE_URL`
-(`littlelight_worker`). The API runs a **send-only** pg-boss instance on its own pool role
-(`littlelight_api`, which has grants on the `pgboss` schema): no migrations, no maintenance, no
+(`tinyglow_worker`). The API runs a **send-only** pg-boss instance on its own pool role
+(`tinyglow_api`, which has grants on the `pgboss` schema): no migrations, no maintenance, no
 scheduling (whatever pg-boss 12's option names are: the intent is `migrate: false`,
 `supervise: false`, `schedule: false`). `boss.send` is the only database call the API ever
 makes outside `runAs` (documented in `plugins/jobs.ts`); it must never run inside a `runAs`
@@ -229,7 +229,7 @@ On a fresh stack the worker may not have created the queue yet when the first se
 the API retries once after 1 s, then relies on `ingest.reconcile`. Payloads carry ids and a tz
 name only: never keys with signatures, bytes, GPS, notes or emails.
 
-### 2.6 Shared contracts (`@littlelight/shared`, architect-defined, backend-engineer writes in 4.2)
+### 2.6 Shared contracts (`@tinyglow/shared`, architect-defined, backend-engineer writes in 4.2)
 
 `src/upload.ts`: `UPLOAD_PART_BYTES = 16 MiB`, `UPLOAD_MAX_FILE_BYTES = 100 MiB`,
 `UPLOAD_MAX_FILES_PER_SESSION = 500`, `UPLOAD_MAX_FILES_PER_REQUEST = 100`,
@@ -298,7 +298,7 @@ the API's `runAs` mechanics (BEGIN; `SET LOCAL ROLE pipeline` from a frozen one-
 COMMIT/ROLLBACK; then `RESET ROLE; DISCARD ALL` outside any transaction, destroying the client
 if that fails). `dataKey` is bound only in the transaction that writes `photo_exif` (GPS) and
 reads `babies.home_*_enc`; never in others. Nothing in the worker queries app tables outside
-this wrapper (pg-boss and the heartbeat use `littlelight_worker` directly, as today).
+this wrapper (pg-boss and the heartbeat use `tinyglow_worker` directly, as today).
 
 `apps/worker/src/storage.ts` — `getObject(key) → Buffer` (fails above
 `UPLOAD_MAX_FILE_BYTES`), `putObject(key, buffer, 'image/jpeg', {CacheControl: 'private,
@@ -450,9 +450,9 @@ before expiry (TanStack `staleTime` 45 min).
 | Item | Dev (`docker-compose.dev.yml`, `.env.dev`) | Prod (`docker-compose.yml`, `.env.example`) |
 | --- | --- | --- |
 | Root credentials | `x-dev-shared` `s3-root-*` (rename of the existing `s3-access-key`/`s3-secret-key`): only `storage` and `storage-init` | `S3_ROOT_USER`/`S3_ROOT_PASSWORD` in `.env` (rename; `S3_ACCESS_KEY`/`S3_SECRET_KEY` are no longer root): only `storage` and `storage-init` |
-| Service accounts | `storage-init` runs `mc admin user add local littlelight-api <secret>` and `… littlelight-worker <secret>` (secrets `dev-api-s3-secret-16`, `dev-worker-s3-secret-16`, literals in `x-dev-shared`), `mc admin policy create local littlelight-api docker/minio/policy-api.json` (bucket name substituted with `sed` into a tmp file), same for worker, `mc admin policy attach … --user …` (tolerate "already attached"). Idempotent on every start | same with `S3_API_ACCESS_KEY`/`S3_API_SECRET_KEY`, `S3_WORKER_ACCESS_KEY`/`S3_WORKER_SECRET_KEY` from `.env` (`openssl rand -hex 8` / `-hex 20`: MinIO access keys 3–20 chars, secrets 8–40) |
-| api env | `S3_ACCESS_KEY: littlelight-api`, `S3_SECRET_KEY: <api secret>` (app code unchanged) | `S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}` … |
-| worker env | `S3_ACCESS_KEY: littlelight-worker`, … ; `INGEST_CONCURRENCY: ${INGEST_CONCURRENCY:-2}`; `STORAGE_DISK_PATH: /storage`; volume `dev-s3:/storage:ro` | same; volume `${STORAGE_PATH}:/storage:ro`; `STORAGE_DISK_ALERT_PCT: ${STORAGE_DISK_ALERT_PCT:-80}`; `CSAM_MATCHER: ${CSAM_MATCHER:-none}`, `PHOTODNA_*: ${…:-}` |
+| Service accounts | `storage-init` runs `mc admin user add local tinyglow-api <secret>` and `… tinyglow-worker <secret>` (secrets `dev-api-s3-secret-16`, `dev-worker-s3-secret-16`, literals in `x-dev-shared`), `mc admin policy create local tinyglow-api docker/minio/policy-api.json` (bucket name substituted with `sed` into a tmp file), same for worker, `mc admin policy attach … --user …` (tolerate "already attached"). Idempotent on every start | same with `S3_API_ACCESS_KEY`/`S3_API_SECRET_KEY`, `S3_WORKER_ACCESS_KEY`/`S3_WORKER_SECRET_KEY` from `.env` (`openssl rand -hex 8` / `-hex 20`: MinIO access keys 3–20 chars, secrets 8–40) |
+| api env | `S3_ACCESS_KEY: tinyglow-api`, `S3_SECRET_KEY: <api secret>` (app code unchanged) | `S3_ACCESS_KEY: ${S3_API_ACCESS_KEY:?}` … |
+| worker env | `S3_ACCESS_KEY: tinyglow-worker`, … ; `INGEST_CONCURRENCY: ${INGEST_CONCURRENCY:-2}`; `STORAGE_DISK_PATH: /storage`; volume `dev-s3:/storage:ro` | same; volume `${STORAGE_PATH}:/storage:ro`; `STORAGE_DISK_ALERT_PCT: ${STORAGE_DISK_ALERT_PCT:-80}`; `CSAM_MATCHER: ${CSAM_MATCHER:-none}`, `PHOTODNA_*: ${…:-}` |
 | Policies (`docker/minio/policy-api.json`, `policy-worker.json`) | api: `s3:GetBucketLocation`, `s3:ListBucket`, `s3:ListBucketMultipartUploads` on the bucket; `s3:GetObject`, `s3:PutObject`, `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts` on `bucket/*`. **No** delete, no version actions. worker: everything api has plus `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:ListBucketVersions`, `s3:GetObjectVersion`. Neither has `admin:*` or other buckets | same files |
 | Lifecycle | `mc ilm rule add local/$BUCKET --noncurrent-expire-days 7 --expired-object-delete-marker` (tolerate "already exists") | same |
 | CORS | default (`*`) | `MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_URL}` on `storage` |
@@ -560,10 +560,10 @@ before expiry (TanStack `staleTime` 45 min).
   (`ListObjectVersions` with the root key).
 - Playwright `e2e/upload/upload.spec.ts`: picks 6 files (incl. 1 HEIC, 1 duplicate) through the
   UI, sees per-row progress, the summary "4 uploaded, 0 failed, 1 duplicates skipped" (5 files +
-  1 dup ⇒ adjust), thumbs in the grid within 10 s; the nanny (`demo-nanny@littlelight.local`)
+  1 dup ⇒ adjust), thumbs in the grid within 10 s; the nanny (`demo-nanny@tinyglow.local`)
   uploads 1 photo ⇒ pending badge; mom sees "Needs approval (1)", approves, badge gone.
 - Smoke additions: `storage-init` exited 0 and `docker compose exec api printenv S3_ACCESS_KEY`
-  is `littlelight-api` (not the root user); worker log contains `queues ready` and
+  is `tinyglow-api` (not the root user); worker log contains `queues ready` and
   `CSAM matching disabled`; `pgmigrations` count 11.
 
 ### 2.14 HEIC fixtures (`e2e/fixtures/heic/`, test-engineer with the orchestrator)
@@ -613,7 +613,7 @@ Same-lane tasks run in sequence unless noted; lanes run in parallel where paths 
 ### 4.3 Migration, bootstrap grants, generated types, README (security-engineer) — lane S, after 4.1
 
 - Owned: `packages/db/migrations/1791700000100_uploads-and-ingest.sql`,
-  `packages/db/src/bootstrap.ts` (pgboss grants for `littlelight_api` only if missing),
+  `packages/db/src/bootstrap.ts` (pgboss grants for `tinyglow_api` only if missing),
   `packages/db/src/generated/**`, `packages/db/README.md`.
 - Build 2.3. Write into the SQL comments and enforce: ENABLE + FORCE RLS on both new tables;
   `viewer` gets nothing on them; `pipeline` never INSERTs or DELETEs them; the session-owner
@@ -625,7 +625,7 @@ Same-lane tasks run in sequence unless noted; lanes run in parallel where paths 
 - Done-when: `pnpm db:migrate` on the dev stack applies 11 migrations; second run no-op;
   `pnpm db:migrate:down 1 && pnpm db:migrate` round-trips; against the bare stub it applies;
   `pnpm db:types` committed with no diff on re-run; the step-2 hardening query (every table
-  ENABLE+FORCE) returns 0; as `littlelight_api` (no SET ROLE) `SELECT count(*) FROM pgboss.queue`
+  ENABLE+FORCE) returns 0; as `tinyglow_api` (no SET ROLE) `SELECT count(*) FROM pgboss.queue`
   works; README documents states, duplicate marker, quarantine and purge rules.
 
 ### 4.4 Compose, env, MinIO policies, cloudflared example (devops-engineer) — lane D, after 4.1 (parallel with 4.2, 4.3)
@@ -640,10 +640,10 @@ Same-lane tasks run in sequence unless noted; lanes run in parallel where paths 
   account (edit `.env`, `up -d --force-recreate storage-init api worker`).
 - Done-when: both `docker compose … config -q` pass; from a clean clone `up -d --build --wait`
   is healthy with `storage-init` exited 0 twice in a row (idempotent); `mc admin user info local
-  littlelight-api` (via `docker compose run --rm --entrypoint sh storage-init -c …`) shows the
+  tinyglow-api` (via `docker compose run --rm --entrypoint sh storage-init -c …`) shows the
   policy attached; with the api key, `mc rm --versions` on an object is denied while `mc cp`
   into the bucket works; with the worker key both work; `mc admin info` is denied for both;
-  `mc ilm rule ls local/littlelight-dev` shows the noncurrent rule; `docker compose exec worker
+  `mc ilm rule ls local/tinyglow-dev` shows the noncurrent rule; `docker compose exec worker
   sh -c 'ls /storage'` works and is read-only.
 
 ### 4.5 API: storage signer, uploads, photos, jobs (backend-engineer) — lane B, after 4.2 and 4.3
@@ -689,7 +689,7 @@ Same-lane tasks run in sequence unless noted; lanes run in parallel where paths 
   GPS files and `raw_json` free of GPS keys, `age_days` correct for the seeded birth date; a
   second upload of the same JPEG ends as `duplicate` with the row gone and
   `mc ls --versions` showing no object; a `.txt` renamed `.jpg` ends `failed/unsupported_media_type`;
-  `pnpm --filter @littlelight/worker run-job purge.trash` on a photo with `deleted_at` 31 days
+  `pnpm --filter @tinyglow/worker run-job purge.trash` on a photo with `deleted_at` 31 days
   ago removes rows and versions; `docker compose up --scale worker=3` ingests 30 photos with
   no duplicate derivative writes and no errors; heartbeat `details.diskUsedPct` present.
 
@@ -702,7 +702,7 @@ Same-lane tasks run in sequence unless noted; lanes run in parallel where paths 
   client reads only capture time from EXIF (never GPS) and only as a hint; resume state in
   `localStorage` holds hashes/ids only; accepted types are enforced client-side for UX and
   server-side for real; no third-party scripts.
-- Done-when: `pnpm --filter @littlelight/mobile-web typecheck && test` green; against the dev
+- Done-when: `pnpm --filter @tinyglow/mobile-web typecheck && test` green; against the dev
   stack a human can pick 20 files (incl. a HEIC and a duplicate), see per-row progress, the
   summary line, thumbs appearing in the grid without a reload, retry a failed file, reload
   mid-upload and resume by re-picking; the nanny's upload shows the pending badge and mom's
@@ -719,7 +719,7 @@ Same-lane tasks run in sequence unless noted; lanes run in parallel where paths 
   fails if `withMetadata|keepExif|keepMetadata|keepIccProfile|withIccProfile|withExif` appears.
 - Done-when: `pnpm test` and `pnpm test:integration` green against the dev stack (with
   `S3_ENDPOINT=http://localhost:9000 S3_PUBLIC_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=dev
-  S3_SECRET_KEY=devdevdev S3_BUCKET=littlelight-test …`) and against bare pgvector + a
+  S3_SECRET_KEY=devdevdev S3_BUCKET=tinyglow-test …`) and against bare pgvector + a
   standalone MinIO (CI path).
 
 ### 4.9 Fixtures, gate script, Playwright spec, smoke (test-engineer) — lane T, after 4.7 and 4.8
@@ -776,32 +776,32 @@ pnpm e2e:upload-gate
 #   purge: 3 photos → 0 rows, 0 object versions
 ```
 
-### 4.2 API walkthrough (cookie jar `a.jar` from step 3's 4.2 steps 1–5; `B=http://localhost:8080`, `H='x-littlelight-client: web'`, `BABY=<id>`)
+### 4.2 API walkthrough (cookie jar `a.jar` from step 3's 4.2 steps 1–5; `B=http://localhost:8080`, `H='x-tinyglow-client: web'`, `BABY=<id>`)
 
 1. `curl -s -b a.jar -H "$H" -X POST $B/api/babies/$BABY/uploads -H 'content-type: application/json' -d '{"details":{"people":["Grandma Rose"]}}'` → 201 `{id: SESSION, summary: {registered:0,…}}`.
-2. `SHA=$(shasum -a 256 photo.jpg | cut -d' ' -f1); SIZE=$(stat -f%z photo.jpg)`; `curl … -X POST $B/api/uploads/$SESSION/files -d "{\"files\":[{\"clientId\":\"p1\",\"bytes\":$SIZE,\"clientSha256\":\"$SHA\",\"mime\":\"image/jpeg\"}]}"` → `files[0].state = registered`, `parts[0].url` starts with `http://localhost:9000/littlelight-dev/babies/$BABY/originals/`.
+2. `SHA=$(shasum -a 256 photo.jpg | cut -d' ' -f1); SIZE=$(stat -f%z photo.jpg)`; `curl … -X POST $B/api/uploads/$SESSION/files -d "{\"files\":[{\"clientId\":\"p1\",\"bytes\":$SIZE,\"clientSha256\":\"$SHA\",\"mime\":\"image/jpeg\"}]}"` → `files[0].state = registered`, `parts[0].url` starts with `http://localhost:9000/tinyglow-dev/babies/$BABY/originals/`.
 3. `curl -s -o /dev/null -w '%{http_code}' -X PUT --data-binary @photo.jpg "<parts[0].url>"` → `200`.
 4. `curl … -X POST $B/api/uploads/$SESSION/files/<fileId>/complete` → `state = completed`, `photo.status = uploaded`; within 5 s `curl -s -b a.jar $B/api/uploads/$SESSION` shows `state = ingested` and `photo.thumbUrl`.
 5. `curl -s -o thumb.jpg "<thumbUrl>"` → 200; `exiftool thumb.jpg | grep -Ei 'gps|exif version|icc|xmp'` prints nothing; `file thumb.jpg` says JPEG.
 6. Repeat steps 2–4 with the same file ⇒ step 2 already answers `state = duplicate, duplicateOfPhotoId = <first photo>`; repeat with the `clientSha256` omitted ⇒ registered, after complete the session shows `duplicate` and `psql -c "select count(*) from photos where status='duplicate'"` → `0`.
 7. HEIC: steps 2–4 with `e2e/fixtures/heic/gps-640x480.heic` ⇒ `photo.mime = image/heic`, derivatives JPEG, `exiftool` on display shows no GPS; `psql -c "select gps_lat_enc is not null, place_label from photo_exif where photo_id='<id>'"` → `t | <null or Home>`.
 8. Invalid: a text file renamed `.jpg` ⇒ `state = failed, error = unsupported_media_type`.
-9. Approval queue: sign in `demo-nanny@littlelight.local` (`n.jar`), upload one photo to Maya ⇒ `GET /api/babies/<maya>/photos` as mom shows it with `approval = pending` and `pendingCount = 1`… as the nanny `view=album` shows it; `POST /api/photos/<id>/approve` with `n.jar` → 403; with `a.jar` (mom) → 200 `approval = approved`; `GET /api/photos/<id>/original` with `n.jar` → 403, with mom → `url`.
+9. Approval queue: sign in `demo-nanny@tinyglow.local` (`n.jar`), upload one photo to Maya ⇒ `GET /api/babies/<maya>/photos` as mom shows it with `approval = pending` and `pendingCount = 1`… as the nanny `view=album` shows it; `POST /api/photos/<id>/approve` with `n.jar` → 403; with `a.jar` (mom) → 200 `approval = approved`; `GET /api/photos/<id>/original` with `n.jar` → 403, with mom → `url`.
 10. Trash: `DELETE /api/photos/<id>` → 204; `GET …/photos?view=trash` lists it; `POST …/restore` → 200.
 11. Signed URL hygiene: every `thumbUrl`/`displayUrl` has `X-Amz-Expires=3600` or less and names exactly one key; no response ever contains `/analysis.jpg`.
 
 ### 4.3 Purge, versions, scaling, privileges
 
 ```sh
-PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc"
+PSQL="docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc"
 $PSQL "update photos set deleted_at = now() - interval '31 days' where id = '<trashed id>'"
-docker compose -f docker-compose.dev.yml exec -T worker pnpm --silent --filter @littlelight/worker run-job purge.trash
+docker compose -f docker-compose.dev.yml exec -T worker pnpm --silent --filter @tinyglow/worker run-job purge.trash
 $PSQL "select count(*) from photos where id = '<trashed id>'"                       # 0
 docker compose -f docker-compose.dev.yml run --rm --entrypoint sh storage-init -c \
-  'mc alias set l http://storage:9000 dev devdevdev >/dev/null && mc ls --versions --recursive l/littlelight-dev/babies/<baby>/ | grep <trashed id>'   # nothing
+  'mc alias set l http://storage:9000 dev devdevdev >/dev/null && mc ls --versions --recursive l/tinyglow-dev/babies/<baby>/ | grep <trashed id>'   # nothing
 docker compose -f docker-compose.dev.yml up -d --scale worker=3 --wait && pnpm e2e:upload-gate   # still passes; `docker compose logs worker | grep -c 'ingested'` = 178
-docker compose -f docker-compose.dev.yml exec -T api printenv S3_ACCESS_KEY                      # littlelight-api
-docker compose -f docker-compose.dev.yml exec -T worker printenv S3_ACCESS_KEY                   # littlelight-worker
+docker compose -f docker-compose.dev.yml exec -T api printenv S3_ACCESS_KEY                      # tinyglow-api
+docker compose -f docker-compose.dev.yml exec -T worker printenv S3_ACCESS_KEY                   # tinyglow-worker
 docker compose -f docker-compose.dev.yml logs worker | grep -E 'CSAM matching disabled|diskUsedPct'
 docker compose -f docker-compose.dev.yml logs api worker | grep -Ei 'X-Amz-Signature|latitude|GPSLatitude' ; echo "no secrets/GPS in logs: exit $?"   # exit 1
 ```
@@ -810,17 +810,17 @@ docker compose -f docker-compose.dev.yml logs api worker | grep -Ei 'X-Amz-Signa
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow AUTH_DB_PASSWORD=dev API_DB_PASSWORD=dev \
 WORKER_DB_PASSWORD=dev DATA_ENCRYPTION_KEY=dev-only-data-encryption-key-32-chars-min SEED_DEMO_FAMILY=true \
 JWT_SECRET=dev-only-jwt-secret-at-least-32-characters PUBLIC_URL=http://localhost:8080 \
-MAIL_FROM=noreply@littlelight.local SMTP_HOST=localhost \
+MAIL_FROM=noreply@tinyglow.local SMTP_HOST=localhost \
 S3_ENDPOINT=http://localhost:9000 S3_PUBLIC_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=dev S3_SECRET_KEY=devdevdev \
-S3_BUCKET=littlelight-test pnpm test:integration        # db + api + worker projects, incl. RLS cases for upload tables and quarantine
+S3_BUCKET=tinyglow-test pnpm test:integration        # db + api + worker projects, incl. RLS cases for upload tables and quarantine
 pnpm smoke && pnpm e2e
 $PSQL "select count(*) from pgmigrations"                # 11
 $PSQL "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname<>'pgmigrations' and not (c.relrowsecurity and c.relforcerowsecurity)"   # 0
 grep -rnE 'withMetadata|keepExif|keepMetadata|keepIccProfile|withIccProfile|withExif' apps/worker/src ; echo "exit $?"   # exit 1
-DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight pnpm --filter @littlelight/db db:types && git diff --exit-code -- packages/db/src/generated
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow pnpm --filter @tinyglow/db db:types && git diff --exit-code -- packages/db/src/generated
 grep -rn 'change-me' .env.dev; git status --porcelain | grep -E '^\?\? \.env(\.local)?$'   # nothing
 cp .env.example .env && STORAGE_PATH=/tmp/s BACKUP_PATH=/tmp/b docker compose -f docker-compose.yml config -q; rm .env
 ```
@@ -853,8 +853,8 @@ cp .env.example .env && STORAGE_PATH=/tmp/s BACKUP_PATH=/tmp/b docker compose -f
   later: build the worker image with Alpine's `vips-dev` (libheif + libde265) and sharp from
   source (adds python3/make/g++ to the build stage and an `allowBuilds` entry) — a devops task,
   not a design change. `INGEST_CONCURRENCY` default 2 and `mem_limit 2g` bound memory.
-- **D5 — Bucket-scoped MinIO service accounts** (`littlelight-api`: put/get/abort/list parts,
-  no delete; `littlelight-worker`: + delete incl. versions) created by `storage-init` with
+- **D5 — Bucket-scoped MinIO service accounts** (`tinyglow-api`: put/get/abort/list parts,
+  no delete; `tinyglow-worker`: + delete incl. versions) created by `storage-init` with
   `mc admin`, root key confined to `storage`/`storage-init`. Closes the step-1/2/3 open issue.
   Cost: a rename of the dev literals and two new `.env` pairs.
 - **D6 — Versioning: explicit version deletion in `purge.trash` + a 7-day noncurrent lifecycle

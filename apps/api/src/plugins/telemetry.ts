@@ -1,5 +1,5 @@
-import { scrubTelemetryEvent } from "@littlelight/shared";
 import * as Sentry from "@sentry/node";
+import { scrubTelemetryEvent } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import pkg from "../../package.json" with { type: "json" };
 import type { ApiConfig } from "../config";
@@ -32,7 +32,7 @@ export function sentryOptions(env: {
     dsn: env.SENTRY_DSN,
     enabled: true,
     environment: env.SENTRY_ENVIRONMENT,
-    release: `littlelight-api@${pkg.version}`,
+    release: `tinyglow-api@${pkg.version}`,
     // Sentry 11 replaced `sendDefaultPii` with `dataCollection`: every category off (user info,
     // cookies, headers, bodies, query params, DB/queue payloads, GraphQL, gen-AI I/O, local
     // variables, source context lines). No integration that would collect them is installed

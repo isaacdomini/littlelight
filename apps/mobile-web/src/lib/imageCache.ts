@@ -11,7 +11,7 @@ export const MAX_CACHED_DISPLAYS = 50;
 /** Thumbs kept: 50 opened photos plus their two neighbours. */
 export const MAX_CACHED_THUMBS = MAX_CACHED_DISPLAYS * 3;
 // A fixed http(s) origin: the Cache API rejects other schemes (capacitor://, file://).
-const SYNTHETIC_ORIGIN = "https://cache.littlelight.invalid";
+const SYNTHETIC_ORIGIN = "https://cache.tinyglow.invalid";
 const LIMITS: Record<PhotoImageKind, number> = {
   display: MAX_CACHED_DISPLAYS,
   thumb: MAX_CACHED_THUMBS,

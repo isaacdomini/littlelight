@@ -9,7 +9,7 @@ import {
 import { isoDateTimeSchema } from "./common";
 
 // Push device contracts (docs/plans/step-9.md 2.8, 2.10). `POST /me/push-devices` needs
-// `X-Littlelight-Client: native` (else 400 `validation_failed`), auth and consent; it runs
+// `X-Tinyglow-Client: native` (else 400 `validation_failed`), auth and consent; it runs
 // `register_push_device(...)` under the caller's claims, bound to the caller's GoTrue session.
 // `DELETE /me/push-devices/current` → 204 removes this session's device. The token is
 // pino-redacted (`req.body.token`) and never logged, returned or echoed in an error.

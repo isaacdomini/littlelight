@@ -47,7 +47,7 @@ describe("s3EnvSchema", () => {
     S3_PUBLIC_ENDPOINT: "http://localhost:9000",
     S3_ACCESS_KEY: "dev",
     S3_SECRET_KEY: "devdevdev",
-    S3_BUCKET: "littlelight-dev",
+    S3_BUCKET: "tinyglow-dev",
   };
 
   it("applies defaults (region, path-style)", () => {

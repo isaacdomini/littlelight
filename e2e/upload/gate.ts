@@ -14,7 +14,7 @@
  *
  * Env (defaults in brackets): E2E_BASE_URL [http://localhost:$WEB_PORT|8080],
  * E2E_MAILPIT_URL [http://localhost:$MAILPIT_PORT|8025], S3_ENDPOINT [http://localhost:$STORAGE_PORT|9000],
- * S3_ACCESS_KEY/S3_SECRET_KEY [dev/devdevdev, the MinIO root user], S3_BUCKET [littlelight-dev].
+ * S3_ACCESS_KEY/S3_SECRET_KEY [dev/devdevdev, the MinIO root user], S3_BUCKET [tinyglow-dev].
  * Database and worker checks go through `docker compose -f docker-compose.dev.yml exec`
  * (superuser psql in the db container; `run-job purge.trash` in the worker container).
  * GATE_UPLOAD_RATE [3] files handed to the API per second (PRD target is about 1.7/s);
@@ -40,7 +40,7 @@ const DC = ["compose", "-f", "docker-compose.dev.yml"];
 
 const S3_ENDPOINT =
   process.env.S3_ENDPOINT ?? `http://localhost:${process.env.STORAGE_PORT ?? 9000}`;
-const S3_BUCKET = process.env.S3_BUCKET ?? "littlelight-dev";
+const S3_BUCKET = process.env.S3_BUCKET ?? "tinyglow-dev";
 
 const WALL_LIMIT_MS = 300_000;
 const P95_LIMIT_MS = 5_000;
@@ -129,7 +129,7 @@ function percentile(sorted: number[], p: number): number {
 async function psql(sql: string): Promise<string> {
   const { stdout } = await sh(
     "docker",
-    [...DC, "exec", "-T", "db", "psql", "-U", "postgres", "-d", "littlelight", "-Atc", sql],
+    [...DC, "exec", "-T", "db", "psql", "-U", "postgres", "-d", "tinyglow", "-Atc", sql],
     { cwd: ROOT },
   );
   return stdout.trim();
@@ -633,7 +633,7 @@ async function run(tmp: string, derivDir: string, startedAt: number) {
       "pnpm",
       "--silent",
       "--filter",
-      "@littlelight/worker",
+      "@tinyglow/worker",
       "run-job",
       "purge.trash",
     ],

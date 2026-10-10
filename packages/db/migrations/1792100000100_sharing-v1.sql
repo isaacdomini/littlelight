@@ -580,7 +580,7 @@ DROP POLICY IF EXISTS share_rules_pipeline_update ON public.share_rules;
 CREATE POLICY share_rules_pipeline_update ON public.share_rules FOR UPDATE TO pipeline
   USING (true) WITH CHECK (true);
 
--- Tags arrive normalised by @littlelight/shared normalizeShareTag (NFC, trimmed, single inner
+-- Tags arrive normalised by @tinyglow/shared normalizeShareTag (NFC, trimmed, single inner
 -- spaces, lower-case); this is the backstop. Every role, including the seed.
 CREATE OR REPLACE FUNCTION public.share_rules_shape() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER

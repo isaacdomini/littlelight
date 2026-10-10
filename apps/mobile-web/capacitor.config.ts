@@ -10,11 +10,11 @@ const liveReloadUrl = process.env.CAP_LIVE_RELOAD_URL;
 const mixedContent = process.env.CAP_DEV_MIXED_CONTENT === "1";
 
 const config: CapacitorConfig = {
-  appId: "com.tesarsoft.littlelight",
-  appName: "Littlelight",
+  appId: "com.tesarsoft.tinyglow",
+  appName: "Tinyglow",
   webDir: "dist",
   loggingBehavior: "none",
-  appendUserAgent: "Littlelight/1.0.0",
+  appendUserAgent: "Tinyglow/1.0.0",
   server: {
     androidScheme: "https",
     // Dev live reload only. The release scripts refuse to build with this set.

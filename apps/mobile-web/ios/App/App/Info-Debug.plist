@@ -4,14 +4,14 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.tesarsoft.littlelight.sync</string>
+		<string>com.tesarsoft.tinyglow.sync</string>
 	</array>
 	<key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Littlelight</string>
+	<string>Tinyglow</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -28,10 +28,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.tesarsoft.littlelight.debug-scheme</string>
+			<string>com.tesarsoft.tinyglow.debug-scheme</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>littlelight</string>
+				<string>tinyglow</string>
 			</array>
 		</dict>
 	</array>
@@ -47,11 +47,11 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Littlelight uses the camera so you can take a photo of your baby and add it straight to your private album.</string>
+	<string>Tinyglow uses the camera so you can take a photo of your baby and add it straight to your private album.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Littlelight saves photos you download from your album to your photo library.</string>
+	<string>Tinyglow saves photos you download from your album to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Littlelight uses your photo library to upload the photos you choose. If you turn on album sync, it also imports new photos from the one album you pick, so you don't have to add them by hand.</string>
+	<string>Tinyglow uses your photo library to upload the photos you choose. If you turn on album sync, it also imports new photos from the one album you pick, so you don't have to add them by hand.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

@@ -116,7 +116,7 @@ async function mcBuffer(args: string): Promise<Buffer> {
   );
   return stdout;
 }
-let BUCKET = "littlelight-dev";
+let BUCKET = "tinyglow-dev";
 async function versionLines(prefix: string): Promise<number> {
   const out = await mc(`ls --versions --recursive ll/${BUCKET}/${prefix}`);
   return out.split("\n").filter((l) => l.trim().length > 0).length;
@@ -523,7 +523,7 @@ async function partB(): Promise<void> {
     `select count(*) from photos where baby_id = '${MAYA}' and deleted_at is null and quarantined_at is null
        and status not in ('failed','duplicate') and approval in ('approved','pending')`,
   );
-  const seen = await mailIds("demo-mom@littlelight.local");
+  const seen = await mailIds("demo-mom@tinyglow.local");
   const post = await mom.call<{ export: ExportDto }>("POST", `/babies/${MAYA}/exports`, {
     includeLocation: true,
   });
@@ -556,7 +556,7 @@ async function partB(): Promise<void> {
     ready.status === "ready" && ready.photoCount === Number(exportable) && ready.canDownload,
     JSON.stringify(ready),
   );
-  const mail = await waitMail("demo-mom@littlelight.local", /export of Maya is ready/i, seen);
+  const mail = await waitMail("demo-mom@tinyglow.local", /export of Maya is ready/i, seen);
   check(
     "Mailpit: 'ready' email to demo-mom, no link",
     mail !== null && !/https?:\/\/|href=|X-Amz|\.zip/i.test(`${mail.text}\n${mail.html}`),
@@ -658,9 +658,9 @@ async function logScan(startedAt: string): Promise<void> {
     if (stdout.includes(c)) hits.push(`coordinate ${c.length} chars`);
   for (const e of [
     ...emailsUsed,
-    "demo-mom@littlelight.local",
-    "demo-dad@littlelight.local",
-    "demo-nanny@littlelight.local",
+    "demo-mom@tinyglow.local",
+    "demo-dad@tinyglow.local",
+    "demo-nanny@tinyglow.local",
   ])
     if (stdout.includes(e)) hits.push("an address of the gate's users");
   for (const url of signedUrls) {

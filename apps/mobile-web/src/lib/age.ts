@@ -1,4 +1,4 @@
-import { type AgeGroupKind, formatAge, parseAgeGroupKey } from "@littlelight/shared";
+import { type AgeGroupKind, formatAge, parseAgeGroupKey } from "@tinyglow/shared";
 import { t } from "../i18n";
 
 /** Localized label of an age group key (`w3`, `m4`, `y2`, `pre`, `unknown`); falls back to the key. */

@@ -15,18 +15,18 @@ import {
   searchEnvSchema,
   sentryEnvSchema,
   shareEnvSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { z } from "zod";
 
 // Worker configuration (docs/plans/step-1.md 2.5, 2.9; docs/plans/step-2.md 2.12). Fails fast on
 // missing or invalid env and reports field names only: values are secrets or contain credentials
 // (DATABASE_URL, S3 keys, DATA_ENCRYPTION_KEY). From step 2, DATABASE_URL is the
-// `littlelight_worker` role: pg-boss and the heartbeat use it directly; job queries will run
+// `tinyglow_worker` role: pg-boss and the heartbeat use it directly; job queries will run
 // inside `runAsPipeline` (`db.ts`: BEGIN; SET LOCAL ROLE pipeline; ...). Step 4 adds the ingest
 // settings (`INGEST_CONCURRENCY`, disk alert, CSAM matcher; docs/plans/step-4.md 2.6). Step 6
 // adds the AI batch pipeline settings (`aiPipelineEnvSchema`: batch size/age, crons, attempts,
 // budget, queue-age alert; docs/plans/step-6.md 2.7). Provider/model/keys (`aiEnvSchema` from
-// `@littlelight/ai`) are NOT part of this config: `main.ts` reads them through `getAiStatus` /
+// `@tinyglow/ai`) are NOT part of this config: `main.ts` reads them through `getAiStatus` /
 // `createVisionDescriber` so a missing key never fails worker boot. Step 7 adds the search
 // indexer settings (`searchEnvSchema`: reconcile cron, embedding batch; docs/plans/step-7.md 2.7)
 // and one AI-env guard that DOES fail boot: `EMBED_DIMS` must equal the `photo_search.embedding`
@@ -114,7 +114,7 @@ function parseAll(env: RawEnv, schemas: AnySchema[]): Record<string, unknown> {
 }
 
 /**
- * `EMBED_DIMS` (read by `@littlelight/ai`, default 1024) must equal the `vector(1024)` column.
+ * `EMBED_DIMS` (read by `@tinyglow/ai`, default 1024) must equal the `vector(1024)` column.
  * Unset/empty is fine (the default); anything else is a `ConfigError` naming the field only.
  */
 export const embedDimsGuardSchema = z.object({

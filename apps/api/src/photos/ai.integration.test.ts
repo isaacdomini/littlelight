@@ -4,7 +4,7 @@ import {
   apiErrorSchema,
   photoSchema,
   type ReindexJob,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JobQueue } from "../plugins/jobs";
 import { sampleDescription, seedItem, seedPhotoAi } from "../testing/ai";

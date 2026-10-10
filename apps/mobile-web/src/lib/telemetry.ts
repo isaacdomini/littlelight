@@ -23,7 +23,7 @@ export async function initTelemetry(): Promise<void> {
   try {
     const [Sentry, { scrubTelemetryEvent }] = await Promise.all([
       import("@sentry/react"),
-      import("@littlelight/shared"),
+      import("@tinyglow/shared"),
     ]);
     Sentry.init({
       dsn,

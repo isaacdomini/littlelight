@@ -6,7 +6,7 @@
 -- Security notes:
 -- * The four session functions below are the ONLY access path from any app role into auth.*.
 --   No GRANT on any auth table or schema is given to authenticated / viewer / pipeline /
---   service_role / littlelight_api / littlelight_worker, now or later. GoTrue enables RLS on
+--   service_role / tinyglow_api / tinyglow_worker, now or later. GoTrue enables RLS on
 --   auth.sessions with no policies, so even a stray table grant would return nothing.
 -- * Every function is SECURITY DEFINER, owned by the superuser that runs migrations (postgres),
 --   pins search_path to pg_catalog, public (auth.* is schema-qualified; the search path never

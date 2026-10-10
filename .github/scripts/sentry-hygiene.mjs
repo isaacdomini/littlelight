@@ -22,7 +22,7 @@
 //        its replacement);
 //      - `defaultIntegrations: false`, `tracesSampleRate: 0`, `beforeBreadcrumb` returning null;
 //      - `beforeSend` is `scrubTelemetryEvent` (or `(e) => scrubTelemetryEvent(e)`), and the file
-//        takes `scrubTelemetryEvent` from @littlelight/shared rather than defining its own;
+//        takes `scrubTelemetryEvent` from @tinyglow/shared rather than defining its own;
 //      - no tracesSampler/profiles*/replays* sampling, no `enableLogs: true`, no non-false
 //        `sendDefaultPii`, and no replay/tracing/profiling/console/breadcrumbs/http/request-data
 //        integration in `integrations`;
@@ -516,8 +516,8 @@ for (const file of sources) {
         bs.replace(/\s+/g, " "),
       );
     if (!bsOk) fail(`${where}: beforeSend must be scrubTelemetryEvent (found "${bs || "none"}")`);
-    if (!/["']@littlelight\/shared["']/.test(f.code) || !/\bscrubTelemetryEvent\b/.test(f.code))
-      fail(`${where}: scrubTelemetryEvent is not taken from @littlelight/shared`);
+    if (!/["']@tinyglow\/shared["']/.test(f.code) || !/\bscrubTelemetryEvent\b/.test(f.code))
+      fail(`${where}: scrubTelemetryEvent is not taken from @tinyglow/shared`);
     if (
       /\b(?:function\s+scrubTelemetryEvent|(?:const|let|var)\s+scrubTelemetryEvent\s*=)/.test(
         f.skel,

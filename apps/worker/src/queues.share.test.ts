@@ -1,4 +1,4 @@
-import { JOBS, shareApplyJobSchema } from "@littlelight/shared";
+import { JOBS, shareApplyJobSchema } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   handleShareApplyJob,

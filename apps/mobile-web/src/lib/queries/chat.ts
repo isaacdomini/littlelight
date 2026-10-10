@@ -1,3 +1,4 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CHAT_MESSAGES,
   type ChatEvent,
@@ -5,8 +6,7 @@ import {
   type ChatPhoto,
   type ChatThreadResponse,
   chatThreadResponseSchema,
-} from "@littlelight/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiFetch, isApiError } from "../api";
 import { postEventStream } from "../sse";

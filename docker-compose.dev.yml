@@ -1,4 +1,4 @@
-# Littlelight local development stack. Zero setup: a fresh clone + Docker is enough.
+# Tinyglow local development stack. Zero setup: a fresh clone + Docker is enough.
 #
 #   docker compose -f docker-compose.dev.yml up            (or: pnpm dev)
 #   docker compose -f docker-compose.dev.yml down          (or: pnpm dev:down)
@@ -10,7 +10,7 @@
 # superuser DATABASE_URL, MinIO never sees the JWT secret). Values that two sides must agree on
 # live once, in x-dev-shared below, and are injected into both sides, so they can't drift.
 # Database roles (docs/plans/step-2.md 2.2): db-init/migrate connect as the `postgres` superuser;
-# api connects as `littlelight_api`, worker as `littlelight_worker` (each gets its own
+# api connects as `tinyglow_api`, worker as `tinyglow_worker` (each gets its own
 # DATABASE_URL below); GoTrue as `supabase_auth_admin`.
 # Start order: db -> db-init (roles + auth schema) -> auth (GoTrue runs its own migrations, so
 # auth.users exists once it is healthy) -> migrate (app migrations + demo seed) -> api, worker.
@@ -18,7 +18,7 @@
 # MinIO (docs/plans/step-4.md 2.11): the root key (dev / devdevdev) goes to storage and
 # storage-init only. storage-init (docker/minio/init.sh) creates the bucket, the 7-day
 # noncurrent-version lifecycle rule and two bucket-scoped users: api signs and calls S3 as
-# littlelight-api (get/put/abort/list parts, no delete), worker as littlelight-worker (+ delete,
+# tinyglow-api (get/put/abort/list parts, no delete), worker as tinyglow-worker (+ delete,
 # incl. object versions). The worker also mounts dev-s3 read-only at /storage for the disk alert.
 # Host-side tests may still use the root key against localhost:9000.
 # Ports: the app (8080) and MinIO S3 (9000) listen on all interfaces so a phone on the LAN can
@@ -78,7 +78,7 @@
 # x-dev-no-sentry). The Content-Security-Policy header is production nginx only: the Vite dev
 # server sends none (D9), so check it against the prod web image (.env.example, "Web Content-Security-Policy").
 # Photo import (docs/plans/step-10.md 2.9, 2.10): Google Photos import is FAKE in dev. The
-# `google-fake` service (worker dev image, `pnpm --filter @littlelight/worker google-fake`;
+# `google-fake` service (worker dev image, `pnpm --filter @tinyglow/worker google-fake`;
 # in-memory OAuth + Picker fake, no secrets, no DB/S3 access) always starts; api and worker wait
 # for it. api and worker reach it at http://google-fake:8099; the browser / iOS Simulator open its
 # consent and picker pages at GOOGLE_FAKE_PUBLIC_URL (default http://localhost:$GOOGLE_FAKE_PORT,
@@ -96,7 +96,7 @@
 # (they reach api + worker only; blanked on migrate and web), register
 # http://localhost:${WEB_PORT:-8080}/api/import/google/callback on the OAuth client, then
 #   GOOGLE_IMPORT_PROVIDER=live docker compose -f docker-compose.dev.yml up -d --no-deps api worker
-name: littlelight-dev
+name: tinyglow-dev
 
 x-dev: &dev
   env_file:
@@ -112,22 +112,22 @@ x-dev-shared:
   # MinIO root: storage and storage-init only (also what host-side tests/`mc` use).
   s3-root-user: &dev-s3-root-user dev
   s3-root-password: &dev-s3-root-password devdevdev
-  s3-bucket: &dev-s3-bucket littlelight-dev
+  s3-bucket: &dev-s3-bucket tinyglow-dev
   # Bucket-scoped MinIO users created by storage-init (docker/minio/policy-*.json); api and
   # worker each get only their own pair, as S3_ACCESS_KEY / S3_SECRET_KEY.
-  s3-api-access-key: &dev-s3-api-access-key littlelight-api
+  s3-api-access-key: &dev-s3-api-access-key tinyglow-api
   s3-api-secret-key: &dev-s3-api-secret-key dev-api-s3-secret-16
-  s3-worker-access-key: &dev-s3-worker-access-key littlelight-worker
+  s3-worker-access-key: &dev-s3-worker-access-key tinyglow-worker
   s3-worker-secret-key: &dev-s3-worker-secret-key dev-worker-s3-secret-16
   # db-init (and migrate, which re-runs the idempotent bootstrap) sets these login passwords;
   # each service logs in with the matching URL below.
-  superuser-db-url: &dev-superuser-db-url postgres://postgres:dev@db:5432/littlelight
+  superuser-db-url: &dev-superuser-db-url postgres://postgres:dev@db:5432/tinyglow
   auth-db-password: &dev-auth-db-password dev
-  auth-db-url: &dev-auth-db-url postgres://supabase_auth_admin:dev@db:5432/littlelight
+  auth-db-url: &dev-auth-db-url postgres://supabase_auth_admin:dev@db:5432/tinyglow
   api-db-password: &dev-api-db-password dev
-  api-db-url: &dev-api-db-url postgres://littlelight_api:dev@db:5432/littlelight
+  api-db-url: &dev-api-db-url postgres://tinyglow_api:dev@db:5432/tinyglow
   worker-db-password: &dev-worker-db-password dev
-  worker-db-url: &dev-worker-db-url postgres://littlelight_worker:dev@db:5432/littlelight
+  worker-db-url: &dev-worker-db-url postgres://tinyglow_worker:dev@db:5432/tinyglow
   # pgcrypto key for GPS / home coordinates (migrate's seed, api, worker). Dev-only literal.
   data-encryption-key: &dev-data-encryption-key dev-only-data-encryption-key-32-chars-min
   # Public origin. GoTrue signs JWTs with iss = <public-url>/auth and the API verifies exactly
@@ -141,7 +141,7 @@ x-dev-shared:
   # worker (export ready/failed) send from the same address.
   smtp-host: &dev-smtp-host mail
   smtp-port: &dev-smtp-port "1025"
-  mail-from: &dev-mail-from noreply@littlelight.local
+  mail-from: &dev-mail-from noreply@tinyglow.local
   # Social sign-in: off unless exported in the shell (see the header). One flag per provider
   # feeds GoTrue (GOTRUE_EXTERNAL_*_ENABLED) and the API (AUTH_*_ENABLED, shows the button).
   apple-enabled: &dev-apple-enabled ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
@@ -160,7 +160,7 @@ x-dev-bootstrap-env: &dev-bootstrap-env
 
 # db-init and migrate run the same image (packages/db/Dockerfile), built once.
 x-dev-db-tools: &dev-db-tools
-  image: littlelight-dev-db-tools
+  image: tinyglow-dev-db-tools
   build:
     context: .
     dockerfile: packages/db/Dockerfile
@@ -231,7 +231,7 @@ x-dev-google-import-env: &dev-google-import-env
 
 # worker and google-fake run the same dev image (apps/worker/Dockerfile, target dev), built once.
 x-dev-worker-image: &dev-worker-image
-  image: littlelight-dev-worker
+  image: tinyglow-dev-worker
   build:
     context: .
     dockerfile: apps/worker/Dockerfile
@@ -242,21 +242,21 @@ services:
     image: pgvector/pgvector:0.8.7-pg17
     environment:
       POSTGRES_PASSWORD: dev
-      POSTGRES_DB: littlelight
+      POSTGRES_DB: tinyglow
     volumes:
       - dev-db:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
     healthcheck:
       # TCP (-h 127.0.0.1) so the check can't pass against initdb's socket-only temp server.
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d littlelight"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d tinyglow"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 30s
       start_interval: 1s
 
-  # One-shot: Postgres roles (supabase_auth_admin, littlelight_api, littlelight_worker, viewer,
+  # One-shot: Postgres roles (supabase_auth_admin, tinyglow_api, tinyglow_worker, viewer,
   # pipeline, ...), the auth schema GoTrue needs, and the pgboss schema. Idempotent; it converges
   # passwords and role attributes on every start. Must finish before GoTrue starts.
   db-init:
@@ -350,7 +350,7 @@ services:
       GOTRUE_SMTP_HOST: *dev-smtp-host
       GOTRUE_SMTP_PORT: *dev-smtp-port
       GOTRUE_SMTP_ADMIN_EMAIL: *dev-mail-from
-      GOTRUE_SMTP_SENDER_NAME: Littlelight
+      GOTRUE_SMTP_SENDER_NAME: Tinyglow
       # Dev only: effectively no email throttling (production: 60 s per address, 200/h total).
       GOTRUE_SMTP_MAX_FREQUENCY: 1s
       GOTRUE_RATE_LIMIT_EMAIL_SENT: "1000"
@@ -359,8 +359,8 @@ services:
       # the templates don't use {{ .ConfirmationURL }} (GoTrue's /verify is not browser-facing).
       GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://web:8080/email-templates/confirmation.html
       GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://web:8080/email-templates/magic-link.html
-      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Littlelight sign-in code
-      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Littlelight sign-in code
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Your Tinyglow sign-in code
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your Tinyglow sign-in code
       # Social sign-in (off by default; see the header). Verified-email auto-linking is GoTrue's
       # default; unverified provider emails are never linked.
       GOTRUE_EXTERNAL_APPLE_ENABLED: *dev-apple-enabled
@@ -410,11 +410,11 @@ services:
       start_interval: 1s
 
   # One-shot, idempotent (docker/minio/init.sh, same script as production): bucket with
-  # versioning, the noncurrent-version lifecycle rule, and the littlelight-api /
-  # littlelight-worker users with their bucket-scoped policies. The only root-key consumer
+  # versioning, the noncurrent-version lifecycle rule, and the tinyglow-api /
+  # tinyglow-worker users with their bucket-scoped policies. The only root-key consumer
   # besides storage. Inspect with, e.g.:
   #   docker compose -f docker-compose.dev.yml run --rm --entrypoint sh storage-init -c \
-  #     'mc alias set local http://storage:9000 dev devdevdev >/dev/null && mc admin user info local littlelight-api'
+  #     'mc alias set local http://storage:9000 dev devdevdev >/dev/null && mc admin user info local tinyglow-api'
   storage-init:
     image: ${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}
     restart: "no"
@@ -456,7 +456,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: dev
-    command: ["pnpm", "--filter", "@littlelight/api", "dev"]
+    command: ["pnpm", "--filter", "@tinyglow/api", "dev"]
     init: true
     environment:
       <<: [*dev-app-env, *dev-no-anthropic-key, *dev-no-push-keys, *dev-google-import-env]
@@ -528,7 +528,7 @@ services:
 
   worker:
     <<: [*dev, *dev-worker-image]
-    command: ["pnpm", "--filter", "@littlelight/worker", "dev"]
+    command: ["pnpm", "--filter", "@tinyglow/worker", "dev"]
     init: true
     environment:
       <<: [*dev-app-env, *dev-no-review-account, *dev-google-import-env]
@@ -564,7 +564,7 @@ services:
       AI_BATCH_FLUSH_MINUTES: ${AI_BATCH_FLUSH_MINUTES:-30}
       # Fake provider only: request lines minus image bytes (photo ids, context field lengths),
       # read by `pnpm e2e:ai-gate --provider fake` via `docker compose exec worker cat`.
-      FAKE_VISION_DIR: /tmp/littlelight-fake-vision
+      FAKE_VISION_DIR: /tmp/tinyglow-fake-vision
       # Push notifications (docs/plans/step-9.md 2.8), worker only. Compose INTERPOLATION
       # variables (shell or the git-ignored project `.env`; .env.local cannot change them):
       #   PUSH_PROVIDER             fake (default: logs {kind, provider}, sends nothing) | none |
@@ -616,7 +616,7 @@ services:
         condition: service_healthy
     healthcheck:
       # Own heartbeat row fresh within HEARTBEAT_STALE_MS (only advanced while storage is reachable).
-      test: ["CMD", "pnpm", "--silent", "--filter", "@littlelight/worker", "healthcheck"]
+      test: ["CMD", "pnpm", "--silent", "--filter", "@tinyglow/worker", "healthcheck"]
       interval: 10s
       timeout: 10s
       retries: 2
@@ -629,7 +629,7 @@ services:
   #   curl -s http://localhost:${GOOGLE_FAKE_PORT:-18099}/healthz      -> {"status":"ok"}
   google-fake:
     <<: *dev-worker-image
-    command: ["pnpm", "--filter", "@littlelight/worker", "google-fake"]
+    command: ["pnpm", "--filter", "@tinyglow/worker", "google-fake"]
     init: true
     environment:
       NODE_ENV: development
@@ -660,7 +660,7 @@ services:
       context: .
       dockerfile: apps/mobile-web/Dockerfile
       target: dev
-    command: ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["pnpm", "--filter", "@tinyglow/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
     init: true
     environment:
       <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys]

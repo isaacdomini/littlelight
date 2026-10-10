@@ -1,3 +1,4 @@
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type PhotoShareLinksResponse,
   photoShareLinksResponseSchema,
@@ -13,8 +14,7 @@ import {
   shareLinkPhotosRemoveResponseSchema,
   shareLinkPhotosResponseSchema,
   shareLinksResponseSchema,
-} from "@littlelight/shared";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+} from "@tinyglow/shared";
 import type { z } from "zod";
 import { apiFetch } from "../api";
 

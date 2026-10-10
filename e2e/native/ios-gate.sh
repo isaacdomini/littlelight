@@ -18,7 +18,7 @@
 #      flag, ATS, URL scheme), PrivacyInfo.xcprivacy, entitlements (aps-environment, associated
 #      domains; simulator builds carry them in the __TEXT,__entitlements section, not the signature).
 #   2. Boot, install, launch; screenshots in e2e/native-results/ios/.
-#   3. Deep links (`simctl openurl littlelight://...`): /s/<demo token> and /invite/<fresh token>.
+#   3. Deep links (`simctl openurl tinyglow://...`): /s/<demo token> and /invite/<fresh token>.
 #   4. Real UI sign-in as demo mom (OTP from Mailpit), relaunch still signed in.
 #   5. Notification permission prompt + Settings -> Notifications flow, a push device row for the
 #      signed-in user, `simctl push` of a photos_analyzed payload and a banner tap that must land on
@@ -34,13 +34,13 @@ cd "$ROOT" || exit 2
 OUT="$ROOT/e2e/native-results/ios"
 UITEST="$ROOT/e2e/native/ios-uitest"
 UIDD="$ROOT/e2e/native-results/ios-uitest-dd"
-BUNDLE_ID="com.tesarsoft.littlelight"
+BUNDLE_ID="com.tesarsoft.tinyglow"
 SIM_NAME="${IOS_GATE_SIM_NAME:-iPhone 17}"
 RUNTIME="${IOS_GATE_RUNTIME:-com.apple.CoreSimulator.SimRuntime.iOS-26-4}"
 SHARE_TOKEN="demo-grandparents-share-token"
 MAILPIT="http://localhost:${MAILPIT_PORT:-8025}"
 BASE="http://localhost:${WEB_PORT:-8080}"
-DEMO_EMAIL="demo-mom@littlelight.local"
+DEMO_EMAIL="demo-mom@tinyglow.local"
 mkdir -p "${OUT:?}"
 find "${OUT:?}" -maxdepth 1 -type f \( -name '*.png' -o -name '*.log' -o -name '*.txt' -o -name '*.xml' \) -delete
 
@@ -106,8 +106,8 @@ relaunch() { xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
 # ---- 1. build and static checks ----------------------------------------------------------------
 if [ "${IOS_GATE_SKIP_BUILD:-0}" != "1" ]; then
   step "1. sync + ad-hoc signed simulator build (ios:build:sim)"
-  pnpm --filter @littlelight/mobile-web native:sync:ios >"$OUT/build-sync.log" 2>&1 || { tail -20 "$OUT/build-sync.log"; die "native:sync:ios failed"; }
-  pnpm --filter @littlelight/mobile-web ios:build:sim >"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log"; die "ios:build:sim failed (see $OUT/build.log)"; }
+  pnpm --filter @tinyglow/mobile-web native:sync:ios >"$OUT/build-sync.log" 2>&1 || { tail -20 "$OUT/build-sync.log"; die "native:sync:ios failed"; }
+  pnpm --filter @tinyglow/mobile-web ios:build:sim >"$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log"; die "ios:build:sim failed (see $OUT/build.log)"; }
 fi
 APP="$(find "$ROOT/apps/mobile-web/ios/DerivedData" -name 'App.app' -path '*Debug-iphonesimulator*' -not -path '*Intermediates*' 2>/dev/null | head -1)"
 [ -n "$APP" ] || die "App.app not found under apps/mobile-web/ios/DerivedData (run without IOS_GATE_SKIP_BUILD)"
@@ -130,7 +130,7 @@ done
 # The Debug product is built from App/Info-Debug.plist (debug.xcconfig); Release from App/Info.plist
 # (release.xcconfig), which has neither key (review-fixes D17). The built Debug bundle names its
 # plist Info.plist whichever source it came from, so the reads above and below stay on $APP.
-"$PB" -c 'Print :CFBundleURLTypes' "$APP/Info.plist" 2>/dev/null | grep -q "littlelight" && pass "debug URL scheme littlelight:// registered (Debug build)" || fail "no littlelight:// URL scheme in the Debug build"
+"$PB" -c 'Print :CFBundleURLTypes' "$APP/Info.plist" 2>/dev/null | grep -q "tinyglow" && pass "debug URL scheme tinyglow:// registered (Debug build)" || fail "no tinyglow:// URL scheme in the Debug build"
 "$PB" -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$APP/Info.plist" 2>/dev/null | grep -qi true && pass "ATS: local networking allowed (Debug build)" || fail "ATS NSAllowsLocalNetworking missing from the Debug build"
 SRC=apps/mobile-web/ios/App/App
 check "plutil -lint Info-Debug.plist (source)" plutil -lint "$SRC/Info-Debug.plist"
@@ -141,12 +141,12 @@ for k in CFBundleURLTypes NSAppTransportSecurity; do
 done
 grep -q 'App/Info-Debug.plist' apps/mobile-web/ios/debug.xcconfig && pass "debug.xcconfig points at Info-Debug.plist" || fail "debug.xcconfig does not use Info-Debug.plist"
 grep -q 'App/Info.plist' apps/mobile-web/ios/release.xcconfig && ! grep -q 'Info-Debug' apps/mobile-web/ios/release.xcconfig && pass "release.xcconfig points at Info.plist" || fail "release.xcconfig does not use Info.plist"
-check "pnpm check:ios-plists (Info-Debug.plist = Info.plist + the two debug keys)" pnpm --filter @littlelight/mobile-web check:ios-plists
+check "pnpm check:ios-plists (Info-Debug.plist = Info.plist + the two debug keys)" pnpm --filter @tinyglow/mobile-web check:ios-plists
 "$PB" -c 'Print :NSPrivacyTracking' "$APP/PrivacyInfo.xcprivacy" 2>/dev/null | grep -qi false && pass "PrivacyInfo: NSPrivacyTracking = false" || fail "PrivacyInfo: NSPrivacyTracking is not false"
 ENT="$(otool -arch x86_64 -s __TEXT __entitlements "$APP/App" 2>/dev/null | awk 'NR>2{$1="";print}' | tr -d ' \n' | xxd -r -p 2>/dev/null)"
 printf '%s' "$ENT" > "$OUT/entitlements.xml"
 { grep -q '<key>aps-environment</key>' <<<"$ENT" && grep -q '<string>development</string>' <<<"$ENT"; } && pass "entitlement aps-environment = development" || fail "entitlement aps-environment missing (is the build ad-hoc signed with entitlements?)"
-grep -q 'applinks:littlelight.tesarsoft.com' <<<"$ENT" && pass "entitlement associated domain applinks:littlelight.tesarsoft.com" || fail "associated domain entitlement missing"
+grep -q 'applinks:tinyglow.app' <<<"$ENT" && pass "entitlement associated domain applinks:tinyglow.app" || fail "associated domain entitlement missing"
 CS="$(codesign -dv "$APP" 2>&1)"
 grep -q 'Signature=adhoc' <<<"$CS" && pass "ad-hoc signature (background URLSession needs one)" || fail "app is not ad-hoc signed"
 
@@ -172,8 +172,8 @@ step "3. deep links (signed out; the app may still be signed in from a previous 
 uitest testSignOut && pass "signed out (via the UI; the app wipes stale Keychain items on a fresh install, covered in step 4)" || fail "could not reach the signed-out state (see uitest-testSignOut.log)"
 shot 02-signed-out
 
-xcrun simctl openurl "$UDID" "littlelight://s/$SHARE_TOKEN"
-if uitest testExpectText "LL_EXPECT=s album"; then pass "littlelight://s/<token> opens the shared album"; else fail "littlelight://s/<token> did not show the shared album (title \"<name>'s album\"); see 03-share-link.png"; fi
+xcrun simctl openurl "$UDID" "tinyglow://s/$SHARE_TOKEN"
+if uitest testExpectText "LL_EXPECT=s album"; then pass "tinyglow://s/<token> opens the shared album"; else fail "tinyglow://s/<token> did not show the shared album (title \"<name>'s album\"); see 03-share-link.png"; fi
 shot 03-share-link
 # "Done" leaves the shared album for the app's own start page and must not bounce back into it.
 if uitest testShareDone; then pass "share viewer: Done lands on the start page without bouncing back"; else fail "share viewer: Done did not stay on the start page (see uitest-testShareDone.log)"; fi
@@ -182,8 +182,8 @@ shot 03b-share-done
 relaunch
 INVITE_TOKEN="$(pnpm --silent exec tsx e2e/native/invite-link.ts 2>"$OUT/invite.err")"
 if [ "${#INVITE_TOKEN}" = "43" ]; then
-  xcrun simctl openurl "$UDID" "littlelight://invite/$INVITE_TOKEN"
-  if uitest testExpectText "LL_EXPECT=invited to an album"; then pass "littlelight://invite/<token> opens the invite sign-in page"; else fail "littlelight://invite/<token> did not show the invite page; see 04-invite-link.png"; fi
+  xcrun simctl openurl "$UDID" "tinyglow://invite/$INVITE_TOKEN"
+  if uitest testExpectText "LL_EXPECT=invited to an album"; then pass "tinyglow://invite/<token> opens the invite sign-in page"; else fail "tinyglow://invite/<token> did not show the invite page; see 04-invite-link.png"; fi
   shot 04-invite-link
 else
   fail "could not create an invite token (see $OUT/invite.err)"
@@ -203,14 +203,14 @@ xcrun simctl uninstall "$UDID" "$BUNDLE_ID" >/dev/null 2>&1
 xcrun simctl install "$UDID" "$APP" >/dev/null 2>&1
 xcrun simctl launch "$UDID" "$BUNDLE_ID" >/dev/null 2>&1
 sleep 5
-if uitest testExpectText "LL_EXPECT=Welcome to Littlelight"; then pass "uninstall + reinstall: back at the Welcome step (no session survived)"; else fail "uninstall + reinstall: still signed in (Keychain survived the uninstall)"; fi
+if uitest testExpectText "LL_EXPECT=Welcome to Tinyglow"; then pass "uninstall + reinstall: back at the Welcome step (no session survived)"; else fail "uninstall + reinstall: still signed in (Keychain survived the uninstall)"; fi
 shot 06b-reinstalled
 # sign in again for the notification steps
 if uitest testSignIn "LL_EMAIL=$DEMO_EMAIL" && uitest testExpectText "LL_EXPECT=Ask about"; then pass "signed in again after the reinstall"; else fail "sign-in after reinstall failed (see uitest-testSignIn.log)"; fi
 
 # ---- 5. notifications -----------------------------------------------------------------------------
 step "5. notification permission, device registration, push + banner tap"
-PSQL() { docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d littlelight -Atc "$1"; }
+PSQL() { docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d tinyglow -Atc "$1"; }
 UID_MOM="$(PSQL "select id from auth.users where email='$DEMO_EMAIL'")"
 ENABLED=0
 if uitest testEnablePush; then
@@ -226,7 +226,7 @@ if [ "$ENABLED" = "1" ]; then
   [ "$DEV_AFTER" -ge 1 ] && pass "an enabled APNs device row exists for the signed-in user" || fail "no push device row after enabling"
 fi
 cat > "$OUT/payload.apns" <<JSON
-{"aps":{"alert":{"title":"Littlelight","body":"3 new photos are ready to search."},"sound":"default"},
+{"aps":{"alert":{"title":"Tinyglow","body":"3 new photos are ready to search."},"sound":"default"},
  "ll":{"kind":"photos_analyzed","babyId":"00000000-0000-4000-8000-000000000100"}}
 JSON
 if [ "$ENABLED" = "1" ]; then

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { JOBS } from "@littlelight/shared";
+import { JOBS } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   handleImportSweepJob,

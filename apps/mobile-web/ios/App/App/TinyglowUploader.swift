@@ -3,11 +3,11 @@ import Capacitor
 
 // Background raw-body PUT uploader (docs/plans/step-9.md 2.6).
 //
-// Bridge `LittlelightUploader`:
+// Bridge `TinyglowUploader`:
 //   upload({ url, path, wifiOnly? }) -> { id }
 //                                        PUT the file bytes (no multipart, no extra headers).
 //                                        wifiOnly: true uses a second background session that never
-//                                        uses cellular (com.tesarsoft.littlelight.upload.wifi).
+//                                        uses cellular (com.tesarsoft.tinyglow.upload.wifi).
 //   cancel({ id })                       cancel a running upload (searches both sessions)
 //   events: progress { id, sent, total } | done { id, status } | error { id, message }
 //
@@ -15,8 +15,8 @@ import Capacitor
 // not stored anywhere by this code. Error messages carry only an NSURLError code.
 
 final class LLUploadSession: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
-    static let identifier = "com.tesarsoft.littlelight.upload"
-    static let wifiIdentifier = "com.tesarsoft.littlelight.upload.wifi"
+    static let identifier = "com.tesarsoft.tinyglow.upload"
+    static let wifiIdentifier = "com.tesarsoft.tinyglow.upload.wifi"
     static let shared = LLUploadSession(identifier: identifier, cellular: true)
     static let wifi = LLUploadSession(identifier: wifiIdentifier, cellular: false)
     static let all = [shared, wifi]
@@ -111,10 +111,10 @@ final class LLUploadSession: NSObject, URLSessionDataDelegate, URLSessionTaskDel
     }
 }
 
-@objc(LittlelightUploaderPlugin)
-public class LittlelightUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
-    public let identifier = "LittlelightUploaderPlugin"
-    public let jsName = "LittlelightUploader"
+@objc(TinyglowUploaderPlugin)
+public class TinyglowUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "TinyglowUploaderPlugin"
+    public let jsName = "TinyglowUploader"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "upload", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cancel", returnType: CAPPluginReturnPromise),
@@ -172,9 +172,9 @@ public class LittlelightUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
-final class LittlelightViewController: CAPBridgeViewController {
+final class TinyglowViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
-        bridge?.registerPluginInstance(LittlelightUploaderPlugin())
-        bridge?.registerPluginInstance(LittlelightPhotoSyncPlugin())
+        bridge?.registerPluginInstance(TinyglowUploaderPlugin())
+        bridge?.registerPluginInstance(TinyglowPhotoSyncPlugin())
     }
 }

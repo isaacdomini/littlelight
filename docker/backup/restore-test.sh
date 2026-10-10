@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove a Littlelight database backup restores. Run monthly (PRD "Compose requirements").
+# Prove a Tinyglow database backup restores. Run monthly (PRD "Compose requirements").
 #
 # Runs INSIDE the pgvector/pgvector image: it initdb's a throwaway cluster in /tmp, applies the
 # roles file, pg_restores the dump with --exit-on-error, then sanity-checks the result. Nothing
@@ -9,7 +9,7 @@
 #   docker compose run --rm --no-deps --entrypoint bash backup /scripts/restore-test.sh
 # A specific dump:
 #   docker compose run --rm --no-deps --entrypoint bash backup /scripts/restore-test.sh \
-#     /backups/littlelight-20261008T030000Z.dump
+#     /backups/tinyglow-20261008T030000Z.dump
 # Any folder of dumps (e.g. one restored from the off-site copy):
 #   docker run --rm -v /path/to/dumps:/backups:ro -v "$PWD/docker/backup:/scripts:ro" \
 #     --entrypoint bash pgvector/pgvector:0.8.7-pg17 /scripts/restore-test.sh
@@ -18,10 +18,10 @@
 #
 # Real restore into production (after a passing test), from the app directory:
 #   docker compose stop api worker auth backup
-#   docker compose exec -T db psql -U postgres -d postgres -c 'DROP DATABASE littlelight WITH (FORCE)'
+#   docker compose exec -T db psql -U postgres -d postgres -c 'DROP DATABASE tinyglow WITH (FORCE)'
 #   docker compose exec -T db psql -U postgres -d postgres -f - < "$BACKUP_PATH/<stamp>.roles.sql"
-#   docker compose exec -T db createdb -U postgres -T template0 littlelight
-#   docker compose exec -T db pg_restore -U postgres --exit-on-error -d littlelight < "$BACKUP_PATH/<stamp>.dump"
+#   docker compose exec -T db createdb -U postgres -T template0 tinyglow
+#   docker compose exec -T db pg_restore -U postgres --exit-on-error -d tinyglow < "$BACKUP_PATH/<stamp>.dump"
 #   docker compose run --rm db-init      # re-apply role passwords/attributes from the CURRENT .env
 #   docker compose up -d --wait          # migrate applies anything newer than the dump
 # The roles file carries the password hashes of the dump's day; db-init converges them to .env
@@ -32,7 +32,7 @@ set -euo pipefail
 DIR="${BACKUP_DIR:-/backups}"
 DUMP="${1:-}"
 if [ -z "$DUMP" ]; then
-  DUMP="$(find "$DIR" -maxdepth 1 -name 'littlelight-*.dump' | sort | tail -n 1)"
+  DUMP="$(find "$DIR" -maxdepth 1 -name 'tinyglow-*.dump' | sort | tail -n 1)"
 fi
 [ -n "$DUMP" ] && [ -f "$DUMP" ] || { echo "restore-test: no dump found in $DIR" >&2; exit 1; }
 
@@ -75,18 +75,18 @@ else
   # Grants and RLS policies name these roles; create them bare (NOLOGIN) so ACLs restore.
   # A real restore runs db-init afterwards, which sets the proper attributes and passwords.
   log "WARN: no roles file; creating bare roles and restoring with --no-owner"
-  for r in supabase_auth_admin littlelight_api littlelight_worker anon authenticated service_role viewer pipeline; do
+  for r in supabase_auth_admin tinyglow_api tinyglow_worker anon authenticated service_role viewer pipeline; do
     psql -q -X -d postgres -c "CREATE ROLE \"$r\" NOLOGIN" >/dev/null 2>&1 || true
   done
 fi
 
-createdb -T template0 littlelight
-restore_flags=(--exit-on-error -d littlelight)
+createdb -T template0 tinyglow
+restore_flags=(--exit-on-error -d tinyglow)
 [ -f "$ROLES" ] || restore_flags+=(--no-owner)
 pg_restore "${restore_flags[@]}" "$DUMP"
 log "pg_restore ok"
 
-q() { psql -X -At -d littlelight -c "$1"; }
+q() { psql -X -At -d tinyglow -c "$1"; }
 fail=0
 check() { # name, sql, minimum
   local v; v="$(q "$2")"
@@ -99,7 +99,7 @@ check "auth (GoTrue) tables"      "select count(*) from information_schema.table
 check "auth.users readable"       "select 1 from (select count(*) from auth.users) s" 1
 check "supabase_auth_admin role"  "select count(*) from pg_roles where rolname = 'supabase_auth_admin'" 1
 # Step 2 role model (docs/plans/step-2.md 2.2): every app role present...
-check "app roles (8)"             "select count(*) from pg_roles where rolname in ('littlelight_api','littlelight_worker','anon','authenticated','service_role','viewer','pipeline','supabase_auth_admin')" 8
+check "app roles (8)"             "select count(*) from pg_roles where rolname in ('tinyglow_api','tinyglow_worker','anon','authenticated','service_role','viewer','pipeline','supabase_auth_admin')" 8
 # ...and no login role other than postgres can bypass RLS.
 check "no BYPASSRLS login roles"  "select (count(*) = 0)::int from pg_roles where rolcanlogin and (rolbypassrls or rolsuper) and rolname <> 'postgres'" 1
 # Row-level security survived the restore: enabled + forced on every app table.

@@ -6,7 +6,7 @@ import {
   pushDataSchema,
   pushMessage,
   pushNotifyJobSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { JobWithMetadata } from "pg-boss";
 import { errorCategory } from "../clients";
 import { type PipelinePool, runAsPipeline } from "../db";

@@ -1,4 +1,4 @@
-import { ingestJobSchema, JOBS } from "@littlelight/shared";
+import { ingestJobSchema, JOBS } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   type IngestDeps,

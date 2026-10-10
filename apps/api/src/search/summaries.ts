@@ -1,4 +1,4 @@
-import type { PhotoSummary } from "@littlelight/shared";
+import type { PhotoSummary } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { type PhotoSummaryRow, photoRowsByIds, toPhotoSummary } from "../photos/queries";
 import type { UrlSigner } from "../storage/sign";

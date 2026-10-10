@@ -1,4 +1,4 @@
-import type { ChatModel, Embedder } from "@littlelight/ai";
+import type { ChatModel, Embedder } from "@tinyglow/ai";
 import {
   aiDescriptionV1Schema,
   applyAiOverrides,
@@ -17,7 +17,7 @@ import {
   SEARCH_RESULT_LIMIT,
   SEARCH_TOOL_MAX_RESULTS,
   type SearchPhotosResult,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { Tx, TxContext } from "../auth";
 import { photoAiOverrides } from "../photos/ai-queries";
 import { hybridSearch } from "../search/hybrid";
@@ -25,7 +25,7 @@ import { hybridSearch } from "../search/hybrid";
 // The chat's four server-side tools (docs/plans/step-7.md 2.8 "Tools"; PRD "Chat and RAG
 // pipeline"). Read-only, each in its own short transaction under the caller's claims (RLS
 // decides; no `withServiceRole`), scoped to the baby of the conversation. Every result is
-// validated against its strict schema in `@littlelight/shared` before it is serialised for the
+// validated against its strict schema in `@tinyglow/shared` before it is serialised for the
 // model, so nothing else can leak: `search_photos` never returns `search_text` or a parent note;
 // only `get_photo` returns the note and `text_in_image` (the system prompt declares both data).
 // Never GPS, `raw_json`, storage keys or signed URLs. Arguments and results are never logged.

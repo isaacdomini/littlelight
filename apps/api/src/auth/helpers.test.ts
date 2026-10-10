@@ -1,4 +1,4 @@
-import { INVITE_TOKEN_LENGTH } from "@littlelight/shared";
+import { INVITE_TOKEN_LENGTH } from "@tinyglow/shared";
 import { describe, expect, it } from "vitest";
 import { hashInviteToken, inviteAcceptUrl, newInviteToken, toInvite } from "./invites";
 import { removalRequestLive, toMember } from "./members";

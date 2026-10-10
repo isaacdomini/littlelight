@@ -9,7 +9,7 @@ import {
   IonTitle,
   IonToolbar,
 } from "@ionic/react";
-import type { ShareLinkPhoto } from "@littlelight/shared";
+import type { ShareLinkPhoto } from "@tinyglow/shared";
 import { eyeOffOutline, imagesOutline } from "ionicons/icons";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";

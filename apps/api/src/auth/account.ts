@@ -2,7 +2,7 @@ import {
   type DeletionPreviewResponse,
   deleteAccountRequestSchema,
   deletionPreviewResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { revokeGoogleConnection } from "../imports/google/connection";

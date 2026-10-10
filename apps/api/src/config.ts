@@ -30,20 +30,20 @@ import {
   searchEnvSchema,
   sentryEnvSchema,
   shareEnvSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { z } from "zod";
 
 // API configuration (docs/plans/step-1.md 2.5, 2.8; docs/plans/step-2.md 2.12). Fails fast on
 // missing or invalid env and reports field names only: values are secrets or contain credentials
 // (DATABASE_URL, S3 keys, DATA_ENCRYPTION_KEY). From step 2, DATABASE_URL is the
-// `littlelight_api` role (never the superuser); every request-scoped query will run inside
+// `tinyglow_api` role (never the superuser); every request-scoped query will run inside
 // `withClaims` (step 3: BEGIN; SET LOCAL ROLE ...; set_config('request.jwt.claims', $1, true)).
 // Step 3 adds auth (`PUBLIC_URL` = JWT issuer base, `AUTH_INTERNAL_URL`, provider flags,
 // Turnstile) and SMTP (`SMTP_*`, `MAIL_FROM`) settings (docs/plans/step-3.md 2.6, 2.8).
 // Step 7 (docs/plans/step-7.md 2.9) adds the search and chat settings (`searchEnvSchema`,
 // `chatEnvSchema`). Provider, models and keys (`VISION_PROVIDER`, `OPENAI_API_KEY`, `CHAT_MODEL`,
 // `EMBED_MODEL`, …) are NOT part of this config: `plugins/ai.ts` hands the env to
-// `@littlelight/ai`'s factories (one schema rules), so the key never sits in `app.config`. The
+// `@tinyglow/ai`'s factories (one schema rules), so the key never sits in `app.config`. The
 // one AI setting checked here is `EMBED_DIMS`, which must equal the `photo_search.embedding`
 // column width (1024): anything else fails boot.
 // Step 8 (docs/plans/step-8.md 2.9) adds `SHARE_MEDIA_URL_TTL_SEC` (viewer media URL lifetime,
@@ -92,7 +92,7 @@ const pushApiEnvSchema = z.object({
 export type PushApiEnv = z.output<typeof pushApiEnvSchema>;
 
 /**
- * `EMBED_DIMS` (read by `@littlelight/ai`, default 1024) must equal the `vector(1024)` column.
+ * `EMBED_DIMS` (read by `@tinyglow/ai`, default 1024) must equal the `vector(1024)` column.
  * Unset/empty is fine (the default); anything else is a `ConfigError` naming the field only.
  */
 export const embedDimsGuardSchema = z.object({

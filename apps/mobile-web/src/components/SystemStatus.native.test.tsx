@@ -25,7 +25,7 @@ describe("SystemStatus", () => {
     await waitFor(() => expect(screen.getByTestId("status-api").textContent).toBe("ok"));
     expect(screen.queryByTestId("status-auth")).toBeNull();
     expect(f.calls.map((c) => c.url)).toEqual(["https://api.example.test/api/healthz"]);
-    expect(f.calls[0]?.headers.get("X-Littlelight-Client")).toBe("native");
+    expect(f.calls[0]?.headers.get("X-Tinyglow-Client")).toBe("native");
   });
 
   it("web: both rows", async () => {

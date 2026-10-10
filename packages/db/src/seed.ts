@@ -26,7 +26,7 @@ import { describeError } from "./redact.js";
 
 const { Client } = pg;
 
-/** Fixed ids of the demo family. `@littlelight/shared` mirrors these as `DEMO_IDS`. */
+/** Fixed ids of the demo family. `@tinyglow/shared` mirrors these as `DEMO_IDS`. */
 export const DEMO = {
   users: {
     mom: "00000000-0000-4000-8000-000000000001",
@@ -34,9 +34,9 @@ export const DEMO = {
     nanny: "00000000-0000-4000-8000-000000000003",
   },
   emails: {
-    mom: "demo-mom@littlelight.local",
-    dad: "demo-dad@littlelight.local",
-    nanny: "demo-nanny@littlelight.local",
+    mom: "demo-mom@tinyglow.local",
+    dad: "demo-dad@tinyglow.local",
+    nanny: "demo-nanny@tinyglow.local",
   },
   baby: "00000000-0000-4000-8000-000000000100",
   shareLink: "00000000-0000-4000-8000-000000000200",
@@ -257,7 +257,7 @@ const DEMO_AI = {
   model: "gpt-6-luna",
   promptVersion: "v1",
   schemaVersion: "v1",
-  providerBatchId: "batch_demo_littlelight_seed",
+  providerBatchId: "batch_demo_tinyglow_seed",
   inputTokens: 1400,
   cachedInputTokens: 700,
   outputTokens: 400,
@@ -267,7 +267,7 @@ const DEMO_AI = {
 
 /**
  * The bath photo's structured description in the exact v1 shape (`aiDescriptionV1Schema` in
- * `@littlelight/shared`; a test parses this). Every key present, "absent" = null / [], closed
+ * `@tinyglow/shared`; a test parses this). Every key present, "absent" = null / [], closed
  * sets only, `sensitive_content` carries the flag that makes the photo sensitive.
  */
 function bathDescriptionV1(p: DemoPhoto): Record<string, unknown> {
@@ -325,7 +325,7 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
 
   const client = new Client({
     connectionString: databaseUrl,
-    application_name: "littlelight-seed",
+    application_name: "tinyglow-seed",
   });
   try {
     await client.connect();

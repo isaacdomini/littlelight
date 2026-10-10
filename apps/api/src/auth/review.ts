@@ -1,5 +1,5 @@
-import { reviewBabyId } from "@littlelight/db/review";
-import { reviewAccountEnabled, reviewAccountEnvSchema } from "@littlelight/shared";
+import { reviewBabyId } from "@tinyglow/db/review";
+import { reviewAccountEnabled, reviewAccountEnvSchema } from "@tinyglow/shared";
 import type { FastifyInstance } from "fastify";
 import { type ApiConfig, ConfigError } from "../config";
 import { verifyPasscode } from "../sharing/crypto";

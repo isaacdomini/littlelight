@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { appRoleUrl } from "@littlelight/db";
-import { claimsToSql } from "@littlelight/shared";
+import { appRoleUrl } from "@tinyglow/db";
+import { claimsToSql } from "@tinyglow/shared";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { databaseUrl, ensureMigrated } from "../testing/integration";
 import { TEST_DATA_KEY } from "../testing/support";
 import { runAs, TransactionAbortedError } from "./db";
 
-// runAs against a real littlelight_api connection (docs/plans/step-3.md 2.7; packages/db/README.md
+// runAs against a real tinyglow_api connection (docs/plans/step-3.md 2.7; packages/db/README.md
 // "Per-transaction identity"). One-connection pool: the connection a call used is exactly the one
 // the next call gets, so "nothing leaks to the next request" is directly observable.
 
@@ -38,7 +38,7 @@ describe.skipIf(!databaseUrl)("runAs", () => {
     pool = new pg.Pool({
       connectionString: appRoleUrl(
         databaseUrl as string,
-        "littlelight_api",
+        "tinyglow_api",
         process.env.API_DB_PASSWORD ?? "dev",
       ),
       max: 1,
@@ -64,9 +64,9 @@ describe.skipIf(!databaseUrl)("runAs", () => {
       c.release();
     }
   }
-  const CLEAN = { user: "littlelight_api", claims: null, dataKey: null, inTx: false };
+  const CLEAN = { user: "tinyglow_api", claims: null, dataKey: null, inTx: false };
 
-  it("a fresh connection is littlelight_api with no claims or key", async () => {
+  it("a fresh connection is tinyglow_api with no claims or key", async () => {
     expect(await residue()).toEqual(CLEAN);
   });
 
@@ -190,7 +190,7 @@ describe.skipIf(!databaseUrl)("runAs", () => {
     try {
       const { rows } = await c.query("SELECT pg_backend_pid() AS pid, current_user AS u");
       expect(rows[0].pid).not.toBe(pidBefore);
-      expect(rows[0].u).toBe("littlelight_api");
+      expect(rows[0].u).toBe("tinyglow_api");
     } finally {
       c.release();
     }
@@ -221,7 +221,7 @@ describe.skipIf(!databaseUrl)("runAs", () => {
     expect(await residue()).toEqual(CLEAN);
   });
 
-  it("plain littlelight_api has no table privileges of its own", async () => {
+  it("plain tinyglow_api has no table privileges of its own", async () => {
     const c = await pool.connect();
     try {
       await expect(c.query("SELECT count(*) FROM public.profiles")).rejects.toMatchObject({

@@ -76,7 +76,7 @@ const emptyAsUndefined = (v: unknown) => (v === "" ? undefined : v);
 
 /**
  * API auth settings (docs/plans/step-3.md 2.6, 2.8). `PUBLIC_URL` is the browser origin
- * (`http://localhost:8080` in dev, `https://littlelight.tesarsoft.com` in production) with any
+ * (`http://localhost:8080` in dev, `https://tinyglow.app` in production) with any
  * trailing slash removed; GoTrue's JWT issuer is `${PUBLIC_URL}/auth`. The provider flags are fed
  * by the same `.env` values as GoTrue's `GOTRUE_EXTERNAL_*_ENABLED`. Turnstile is inert unless
  * `TURNSTILE_SECRET_KEY` is set.
@@ -163,7 +163,7 @@ const D = AI_PIPELINE_DEFAULTS;
 /**
  * AI batch pipeline settings, read by the worker (all) and the API (`AI_MAX_ATTEMPTS`,
  * `AI_BABY_MONTHLY_BUDGET_USD`). `AI_BATCH_FLUSH_MINUTES=0` submits on every flush tick (dev and
- * the gate). Model/provider/keys stay in `aiEnvSchema` (`@littlelight/ai`).
+ * the gate). Model/provider/keys stay in `aiEnvSchema` (`@tinyglow/ai`).
  */
 export const aiPipelineEnvSchema = z.object({
   AI_BATCH_MAX_PHOTOS: z.preprocess(
@@ -216,7 +216,7 @@ export type AiPipelineEnv = z.infer<typeof aiPipelineEnvSchema>;
 // ---------------------------------------------------------------------------------------------
 // Search and chat (docs/plans/step-7.md 2.4, 2.7, 2.9; PRD "Chat and RAG pipeline", "Cost
 // controls": 100 chat turns per user per day). Read by the api (both) and the worker (search).
-// Model names, provider and keys stay in `aiEnvSchema` (`@littlelight/ai`).
+// Model names, provider and keys stay in `aiEnvSchema` (`@tinyglow/ai`).
 // ---------------------------------------------------------------------------------------------
 
 /** Defaults of `searchEnvSchema`. */

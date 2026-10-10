@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { reviewBabyId } from "@littlelight/db/review";
-import { sessionResponseSchema } from "@littlelight/shared";
+import { reviewBabyId } from "@tinyglow/db/review";
+import { sessionResponseSchema } from "@tinyglow/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { hashPasscode } from "../sharing/crypto";
 import { createHarness, databaseUrl, type Harness } from "../testing/integration";
@@ -11,8 +11,8 @@ import { GoTrueError } from "./gotrue";
 // refused for an account that belongs to a real family. The config is the only source.
 
 const CODE = "482915";
-const NATIVE = { "x-littlelight-client": "native" };
-const WEB = { "x-littlelight-client": "web" };
+const NATIVE = { "x-tinyglow-client": "native" };
+const WEB = { "x-tinyglow-client": "web" };
 let hash: string;
 
 describe.skipIf(!databaseUrl)("review sign-in (api + db)", () => {

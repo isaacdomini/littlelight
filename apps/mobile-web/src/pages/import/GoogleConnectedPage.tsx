@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import { GOOGLE_CONNECTED_PATH, googleConnectedQuerySchema } from "@littlelight/shared";
+import { GOOGLE_CONNECTED_PATH, googleConnectedQuerySchema } from "@tinyglow/shared";
 import { checkmarkCircle, closeCircle } from "ionicons/icons";
 import { useEffect } from "react";
 import { FlowPage } from "../../components/Page";

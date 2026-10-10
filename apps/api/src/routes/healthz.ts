@@ -1,9 +1,5 @@
 import { HeadBucketCommand } from "@aws-sdk/client-s3";
-import {
-  type HealthzCheck,
-  type HealthzResponse,
-  healthzResponseSchema,
-} from "@littlelight/shared";
+import { type HealthzCheck, type HealthzResponse, healthzResponseSchema } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";

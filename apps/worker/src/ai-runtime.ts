@@ -13,15 +13,15 @@ import {
   embedModelTag,
   getAiStatus,
   type VisionDescriber,
-} from "@littlelight/ai";
-import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION, SEARCH_DOC_VERSION } from "@littlelight/shared";
+} from "@tinyglow/ai";
+import { AI_PROMPT_VERSION, AI_SCHEMA_VERSION, SEARCH_DOC_VERSION } from "@tinyglow/shared";
 import type { AiPipelineConfig, SearchIndexerConfig } from "./ai";
 import { errorCategory } from "./clients";
 import type { WorkerConfig } from "./config";
 import type { WorkerLog } from "./log-types";
 
 // AI wiring shared by `main.ts` and `run-job.ts` (docs/plans/step-6.md 2.7, docs/plans/step-7.md
-// 2.7). The provider, models and keys come from `@littlelight/ai`'s env (`getAiStatus` and the
+// 2.7). The provider, models and keys come from `@tinyglow/ai`'s env (`getAiStatus` and the
 // factories); a missing key or an invalid AI config never fails worker boot: the describer and/or
 // the embedder is null, the pipeline's flush/poll skip with one log line and the search indexer
 // writes rows without vectors (keyword search and filters still work). The describer and the

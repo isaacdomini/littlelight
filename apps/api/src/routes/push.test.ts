@@ -58,7 +58,7 @@ import { pushRoutes } from "./push";
 const TOKEN = "a".repeat(64);
 const body = { platform: "ios", provider: "apns", token: TOKEN, appVersion: "1.0.0" };
 const AUTH = { authorization: "Bearer x" };
-const NATIVE = { ...AUTH, "x-littlelight-client": "native" };
+const NATIVE = { ...AUTH, "x-tinyglow-client": "native" };
 
 async function build(throttle?: { hit: () => { allowed: boolean; retryAfterSec: number } }) {
   const app = Fastify({ logger: false });
@@ -102,9 +102,9 @@ describe("POST /me/push-devices", () => {
     await app.close();
   });
 
-  it("requires X-Littlelight-Client: native: web or missing is 400 validation_failed and touches nothing", async () => {
+  it("requires X-Tinyglow-Client: native: web or missing is 400 validation_failed and touches nothing", async () => {
     const app = await build();
-    for (const headers of [AUTH, { ...AUTH, "x-littlelight-client": "web" }]) {
+    for (const headers of [AUTH, { ...AUTH, "x-tinyglow-client": "web" }]) {
       const res = await app.inject({
         method: "POST",
         url: "/me/push-devices",
@@ -123,7 +123,7 @@ describe("POST /me/push-devices", () => {
     const res = await app.inject({
       method: "POST",
       url: "/me/push-devices",
-      headers: { "x-littlelight-client": "native" },
+      headers: { "x-tinyglow-client": "native" },
       payload: body,
     });
     expect(res.statusCode).toBe(401);

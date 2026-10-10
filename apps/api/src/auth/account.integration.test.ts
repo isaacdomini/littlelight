@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { deletionPreviewResponseSchema } from "@littlelight/shared";
+import { deletionPreviewResponseSchema } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness } from "../testing/integration";
 import { GoTrueError } from "./gotrue";
@@ -124,7 +124,7 @@ describe.skipIf(!databaseUrl)("account deletion", () => {
       const res = await h.app.inject({
         method: "DELETE",
         url: "/me",
-        headers: { "x-littlelight-client": "web" },
+        headers: { "x-tinyglow-client": "web" },
         cookies: { ll_access: u.token },
         payload: { acknowledge: true },
       });
@@ -173,7 +173,7 @@ describe.skipIf(!databaseUrl)("account deletion", () => {
         "DELETE",
         "/me",
         { acknowledge: true },
-        { "x-littlelight-client": "native" },
+        { "x-tinyglow-client": "native" },
       );
       expect(res.statusCode).toBe(204);
       expect(cookiesOf(res)).toHaveLength(0);

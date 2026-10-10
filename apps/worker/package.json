@@ -1,5 +1,5 @@
 {
-  "name": "@littlelight/worker",
+  "name": "@tinyglow/worker",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,8 +20,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.1147.0",
     "@aws-sdk/lib-storage": "3.1147.0",
-    "@littlelight/ai": "workspace:*",
-    "@littlelight/shared": "workspace:*",
+    "@tinyglow/ai": "workspace:*",
+    "@tinyglow/shared": "workspace:*",
     "@sentry/node": "11.6.0",
     "archiver": "8.0.0",
     "exifr": "7.1.3",

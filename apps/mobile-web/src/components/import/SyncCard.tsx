@@ -1,6 +1,6 @@
 import { IonAlert, IonIcon } from "@ionic/react";
-import { FREE_TIER_PHOTO_LIMIT, type ImportSource } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import { FREE_TIER_PHOTO_LIMIT, type ImportSource } from "@tinyglow/shared";
 import { albumsOutline } from "ionicons/icons";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";

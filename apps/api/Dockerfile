@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Littlelight API (Fastify). Build context: repo root (see docs/plans/step-1.md 2.13).
+# Tinyglow API (Fastify). Build context: repo root (see docs/plans/step-1.md 2.13).
 #   dev  : deps installed, source copied; docker-compose.dev.yml bind-mounts the src dirs over it
 #   prod : slim node:22 alpine, non-root, tsup bundle + production node_modules only
 ARG NODE_IMAGE=node:22.23.3-alpine
@@ -25,7 +25,7 @@ COPY packages/shared/package.json packages/shared/
 # ---------------------------------------------------------------------------
 FROM pnpm AS base
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@littlelight/api..."
+    pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@tinyglow/api..."
 
 # ---------------------------------------------------------------------------
 FROM base AS dev
@@ -33,22 +33,22 @@ ENV NODE_ENV=development
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/ai packages/ai
-# Type-only import of @littlelight/db/types (generated row types); tsup erases it in prod.
+# Type-only import of @tinyglow/db/types (generated row types); tsup erases it in prod.
 COPY packages/db packages/db
 COPY apps/api apps/api
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@littlelight/api", "dev"]
+CMD ["pnpm", "--filter", "@tinyglow/api", "dev"]
 
 # ---------------------------------------------------------------------------
 FROM dev AS build
-RUN pnpm --filter @littlelight/api build
+RUN pnpm --filter @tinyglow/api build
 
 # ---------------------------------------------------------------------------
 # Production dependencies only. Workspace packages are bundled into dist by tsup, so their
 # (dangling) workspace links are never resolved at runtime.
 FROM pnpm AS prod-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@littlelight/api" \
+    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@tinyglow/api" \
  && find node_modules -path '*/@sentry*/*' -name '*.map' -type f -delete
 # ^ Sentry ships source maps for every build flavour (~35 MB); production stack traces point at
 # its compiled JS instead (our own dist keeps its maps for --enable-source-maps). Deleted in

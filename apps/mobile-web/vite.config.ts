@@ -22,7 +22,7 @@ function aasaJson(): Plugin {
     next();
   };
   return {
-    name: "littlelight-aasa-json",
+    name: "tinyglow-aasa-json",
     configureServer(server) {
       server.middlewares.use(handler);
     },
@@ -74,7 +74,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      // @littlelight/shared is a pure-module barrel (zod schemas, constants). Treat it as
+      // @tinyglow/shared is a pure-module barrel (zod schemas, constants). Treat it as
       // side-effect free so the web bundle only keeps what the screens import (server-only env and
       // telemetry code stays out).
       treeshake: { moduleSideEffects: (id: string) => !/packages\/shared\/src\//.test(id) },

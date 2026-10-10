@@ -1,5 +1,5 @@
-import type { MeResponse } from "@littlelight/shared";
-import { INVITE_PATH } from "@littlelight/shared";
+import type { MeResponse } from "@tinyglow/shared";
+import { INVITE_PATH } from "@tinyglow/shared";
 
 /**
  * Where a signed-in user must go before the app is usable, or null when onboarded

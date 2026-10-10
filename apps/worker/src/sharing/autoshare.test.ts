@@ -1,5 +1,5 @@
-import { fakeDescription } from "@littlelight/ai";
-import { applyAiOverrides, buildSearchDocument } from "@littlelight/shared";
+import { fakeDescription } from "@tinyglow/ai";
+import { applyAiOverrides, buildSearchDocument } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { PipelineClient } from "../db";
 import { type Handler, recordingLog, scriptedPool } from "../testing/stubs";

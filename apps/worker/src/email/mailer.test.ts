@@ -29,7 +29,7 @@ beforeEach(() => {
 describe("export notices carry no link", () => {
   it("ready: names the album, says where to download, has no URL, token or key", () => {
     const m = exportReadyContent({ babyName: "Maya", expiresAt: EXPIRES });
-    expect(m.subject).toBe("Your Littlelight export of Maya is ready");
+    expect(m.subject).toBe("Your Tinyglow export of Maya is ready");
     for (const part of [m.subject, m.text, m.html]) {
       expect(part).not.toMatch(/https?:|www\.|href|token|X-Amz|\.zip|exports\//i);
     }
@@ -76,7 +76,7 @@ describe("createExportMailer", () => {
     SMTP_HOST: "mail",
     SMTP_PORT: 1025,
     SMTP_SECURE: false,
-    MAIL_FROM: "noreply@littlelight.test",
+    MAIL_FROM: "noreply@tinyglow.test",
   };
 
   it("sends from MAIL_FROM to the recipient and logs the template only", async () => {
@@ -86,7 +86,7 @@ describe("createExportMailer", () => {
     await mailer.sendExportReady("mom@example.test", { babyName: "Maya", expiresAt: EXPIRES });
     expect(sendMail).toHaveBeenCalledTimes(1);
     expect(sendMail.mock.calls[0]?.[0]).toMatchObject({
-      from: "noreply@littlelight.test",
+      from: "noreply@tinyglow.test",
       to: "mom@example.test",
     });
     expect(log.lines).toEqual([

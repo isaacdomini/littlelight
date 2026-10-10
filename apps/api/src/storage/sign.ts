@@ -1,6 +1,6 @@
 import { GetObjectCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { SIGNED_URL_TTL_SEC } from "@littlelight/shared";
+import { SIGNED_URL_TTL_SEC } from "@tinyglow/shared";
 import type { ApiConfig } from "../config";
 
 // Client-facing signed URLs (docs/plans/step-4.md 2.1, 2.10; PRD "Privacy and child safety":

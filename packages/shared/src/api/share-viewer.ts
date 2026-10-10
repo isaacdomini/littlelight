@@ -91,7 +91,7 @@ export const shareUrlSchema = z.url({ protocol: /^https?$/ }).refine((u) => {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * `POST /share/session` body (requires `X-Littlelight-Client`). Responses: 200
+ * `POST /share/session` body (requires `X-Tinyglow-Client`). Responses: 200
  * `shareSessionResponse` + `Set-Cookie: ll_viewer=…`; 401 `passcode_required` /
  * `passcode_invalid {attemptsLeft}`; 429 `rate_limited` / `passcode_locked` + `Retry-After`;
  * 410 `share_link_expired` for every dead or unknown link.
@@ -119,7 +119,7 @@ export const shareAlbumSchema = z.strictObject({
 export type ShareAlbum = z.infer<typeof shareAlbumSchema>;
 
 /**
- * `viewerToken` is present only for `X-Littlelight-Client: native` (step 9: the app stores it
+ * `viewerToken` is present only for `X-Tinyglow-Client: native` (step 9: the app stores it
  * and sends `Authorization: Bearer`); the web gets the httpOnly cookie and never this field.
  */
 export const shareSessionResponseSchema = z.strictObject({

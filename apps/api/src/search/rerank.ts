@@ -1,4 +1,4 @@
-import type { ChatModel } from "@littlelight/ai";
+import type { ChatModel } from "@tinyglow/ai";
 import { z } from "zod";
 import type { Tx } from "../auth";
 
@@ -9,7 +9,7 @@ import type { Tx } from "../auth";
 // Any failure (provider error, invalid JSON, an id it was not given) falls back to the RRF order.
 // The spend is recorded as an `ai_spend` row of kind `rerank` under the caller's claims.
 
-export const RERANK_SCHEMA_NAME = "littlelight_rerank_v1";
+export const RERANK_SCHEMA_NAME = "tinyglow_rerank_v1";
 
 /** Strict-mode JSON Schema of the re-rank answer. */
 export const RERANK_JSON_SCHEMA = Object.freeze({

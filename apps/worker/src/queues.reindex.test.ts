@@ -1,4 +1,4 @@
-import { JOBS, reindexJobSchema } from "@littlelight/shared";
+import { JOBS, reindexJobSchema } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   QUEUES,

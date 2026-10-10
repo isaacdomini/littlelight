@@ -1,6 +1,6 @@
 import { IonContent, IonPage } from "@ionic/react";
-import type { ShareAlbum, ViewerPhoto, ViewerPhotosResponse } from "@littlelight/shared";
 import { type InfiniteData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import type { ShareAlbum, ViewerPhoto, ViewerPhotosResponse } from "@tinyglow/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlowPage } from "../../components/Page";
 import { InstallPrompt } from "../../components/share/InstallPrompt";

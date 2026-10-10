@@ -5,7 +5,7 @@ import {
   FREE_TIER_PHOTO_LIMIT,
   photoSchema,
   photosListResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
 import { seedManyPhotos, seedPhoto } from "../testing/photos";

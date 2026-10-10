@@ -1,4 +1,4 @@
-import type { PhotoSummary } from "@littlelight/shared";
+import type { PhotoSummary } from "@tinyglow/shared";
 import { t } from "../i18n";
 import { ageText } from "./age";
 

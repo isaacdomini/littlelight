@@ -1,5 +1,5 @@
-import type { DataExport } from "@littlelight/shared";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import type { DataExport } from "@tinyglow/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/api";
 import { jsonResponse, setNativePlatform, stubFetch } from "../../testing/native";
@@ -211,7 +211,7 @@ describe("ExportPage request", () => {
 });
 
 describe("ExportPage download", () => {
-  const SIGNED = `https://storage.example.test/littlelight/babies/${BABY}/exports/${E1}.zip?X-Amz-Signature=abc`;
+  const SIGNED = `https://storage.example.test/tinyglow/babies/${BABY}/exports/${E1}.zip?X-Amz-Signature=abc`;
 
   it("web: mints a URL after a fresh sign-in and clicks a hidden anchor; the URL is never shown", async () => {
     exportsNow = [row()];
@@ -234,7 +234,7 @@ describe("ExportPage download", () => {
       HTMLAnchorElement.prototype.click = orig;
     }
     expect(clicks[0]?.href).toBe(SIGNED);
-    expect(clicks[0]?.download).toBe("littlelight-export-2026-10-10.zip");
+    expect(clicks[0]?.download).toBe("tinyglow-export-2026-10-10.zip");
     expect(document.body.textContent).not.toContain("X-Amz-Signature");
     expect(document.querySelector("a[download]")).toBeNull();
     expect(fresh.withFresh).toHaveBeenCalled();

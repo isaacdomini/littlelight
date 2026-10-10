@@ -7,7 +7,7 @@ import {
   measurementValueIssue,
   OZ_PER_LB,
   roundTo,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { t } from "../../i18n";
 import { errorMessage } from "../../lib/api";

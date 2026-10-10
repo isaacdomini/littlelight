@@ -23,7 +23,7 @@ export function FlowPage({
   subtitle?: string;
   children: ReactNode;
   testId?: string;
-  /** Show the Littlelight mark above the title (welcome). */
+  /** Show the Tinyglow mark above the title (welcome). */
   brand?: boolean;
 }) {
   return (

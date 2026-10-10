@@ -17,7 +17,7 @@ import type { PushMessage } from "./types";
 const BABY = "00000000-0000-4000-8000-000000000100";
 const LINK = "00000000-0000-4000-8000-000000000200";
 const msg: PushMessage = {
-  title: "Littlelight",
+  title: "Tinyglow",
   body: "3 new photos are ready to search.",
   data: { kind: "photos_analyzed", babyId: BABY },
   collapseId: `photos_analyzed:${BABY}`,
@@ -31,7 +31,7 @@ describe("apns", () => {
     teamId: "TEAM123456",
     keyId: "KEY1234567",
     privateKeyPem: keys.ecPem,
-    bundleId: "com.tesarsoft.littlelight",
+    bundleId: "com.tesarsoft.tinyglow",
     baseUrl: mock.baseUrl,
     ...extra,
   });
@@ -51,7 +51,7 @@ describe("apns", () => {
     const seen = mock.seen[before];
     expect(seen?.headers[":method"]).toBe("POST");
     expect(seen?.headers[":path"]).toBe(`/3/device/${hex("c0ffee")}`);
-    expect(seen?.headers["apns-topic"]).toBe("com.tesarsoft.littlelight");
+    expect(seen?.headers["apns-topic"]).toBe("com.tesarsoft.tinyglow");
     expect(seen?.headers["apns-push-type"]).toBe("alert");
     expect(seen?.headers["apns-priority"]).toBe("5");
     expect(seen?.headers["apns-collapse-id"]).toBe(`photos_analyzed:${BABY}`);
@@ -62,7 +62,7 @@ describe("apns", () => {
     );
     expect(JSON.parse(seen?.body ?? "")).toEqual({
       aps: {
-        alert: { title: "Littlelight", body: "3 new photos are ready to search." },
+        alert: { title: "Tinyglow", body: "3 new photos are ready to search." },
         sound: "default",
       },
       ll: { kind: "photos_analyzed", babyId: BABY },
@@ -72,14 +72,14 @@ describe("apns", () => {
 
   it("the payload for share_viewed carries ids only, never a name", async () => {
     const m: PushMessage = {
-      title: "Littlelight",
+      title: "Tinyglow",
       body: "Someone opened your shared album.",
       data: { kind: "share_viewed", babyId: BABY, shareLinkId: LINK },
       collapseId: `share_viewed:${BABY}`,
     };
     expect(JSON.parse(apnsPayload(m))).toEqual({
       aps: {
-        alert: { title: "Littlelight", body: "Someone opened your shared album." },
+        alert: { title: "Tinyglow", body: "Someone opened your shared album." },
         sound: "default",
       },
       ll: { kind: "share_viewed", babyId: BABY, shareLinkId: LINK },

@@ -1,4 +1,4 @@
-import { CHAT_SYSTEM_PROMPT_V1 } from "@littlelight/ai";
+import { CHAT_SYSTEM_PROMPT_V1 } from "@tinyglow/ai";
 import {
   CHAT_COST_PER_TURN_ESTIMATE_USD,
   CHAT_LIMITS,
@@ -13,7 +13,7 @@ import {
   chatTurnResponseSchema,
   idParamsSchema,
   type PhotoSummary,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit, requireAuth, requireConsent, withClaims } from "../auth";

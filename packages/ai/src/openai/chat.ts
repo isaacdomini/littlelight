@@ -6,7 +6,7 @@
  *   {model, instructions, input, tools: [{type: "function", name, description, parameters,
  *    strict: true}], tool_choice, parallel_tool_calls: true, reasoning: {effort},
  *    max_output_tokens, store: false, include: ["reasoning.encrypted_content"],
- *    prompt_cache_key: "littlelight-chat-<CHAT_PROMPT_VERSION>", stream: true}
+ *    prompt_cache_key: "tinyglow-chat-<CHAT_PROMPT_VERSION>", stream: true}
  *
  * Message mapping: `system` → `instructions` (joined); `user` / `assistant` → `{role, content}`
  * input messages; an assistant message that carries `providerItems` (the previous call of the
@@ -19,7 +19,7 @@
  * token counts, cost, latency.
  */
 
-import { CHAT_PROMPT_VERSION } from "@littlelight/shared";
+import { CHAT_PROMPT_VERSION } from "@tinyglow/shared";
 import { DEFAULT_OPENAI_BASE_URL, type ReasoningEffort } from "../defaults";
 import { AiProviderError } from "../errors";
 import { HttpClient, type HttpClientOptions } from "../http";
@@ -53,7 +53,7 @@ export interface OpenAiChatModelOptions {
 }
 
 /** `prompt_cache_key` of chat requests (system prompt + tool schemas are the cached prefix). */
-export const CHAT_PROMPT_CACHE_KEY = `littlelight-chat-${CHAT_PROMPT_VERSION}`;
+export const CHAT_PROMPT_CACHE_KEY = `tinyglow-chat-${CHAT_PROMPT_VERSION}`;
 
 /** Responses `input` items for a conversation (exported for tests). */
 export function openAiChatInput(messages: readonly ChatMessage[]): {

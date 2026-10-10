@@ -8,7 +8,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { GOOGLE_PICKER_SCOPE, scopeIncludesPicker } from "@littlelight/shared";
+import { GOOGLE_PICKER_SCOPE, scopeIncludesPicker } from "@tinyglow/shared";
 import { pino } from "pino";
 import { z } from "zod";
 import { buildFakeCatalogue, type FakeCatalogueItem } from "./fake-catalogue";
@@ -313,7 +313,7 @@ export async function startFakeGoogleServer(
   }
   const log = options.logger ?? silentLogger;
   const now = options.now ?? Date.now;
-  const tokenSeed = options.tokenSeed ?? "littlelight-google-fake";
+  const tokenSeed = options.tokenSeed ?? "tinyglow-google-fake";
   const pollIntervalSec = options.pollIntervalSec ?? 3;
   const sessionTtlMs = (options.sessionTtlSec ?? 1800) * 1000;
   const accessTtlSec = options.accessTokenTtlSec ?? 3600;
@@ -697,7 +697,7 @@ export async function startFakeGoogleServer(
       200,
       "Fake Google · Sign in",
       `<p><strong>Fake Google</strong></p>` +
-        `<h1>Littlelight wants to see photos you pick</h1>` +
+        `<h1>Tinyglow wants to see photos you pick</h1>` +
         `<p>Signed in as <code>${escapeHtml(c.account)}</code>. This is a development stand-in for Google; no real account is involved.</p>` +
         `<form method="post" action="/o/oauth2/v2/auth/decide">` +
         hidden("redirect_uri", c.redirectUri) +
@@ -820,7 +820,7 @@ export async function startFakeGoogleServer(
       res,
       200,
       "Fake Google Photos · Done",
-      `<h1>Done</h1><p id="done">${s.picked.length} item(s) added. You can close this window and return to Littlelight.</p>`,
+      `<h1>Done</h1><p id="done">${s.picked.length} item(s) added. You can close this window and return to Tinyglow.</p>`,
     );
   }
 
@@ -841,7 +841,7 @@ export async function startFakeGoogleServer(
       res,
       200,
       "Fake Google Photos · Select",
-      `<p><strong>Fake Google Photos</strong></p><h1>Select photos for Littlelight</h1>` +
+      `<p><strong>Fake Google Photos</strong></p><h1>Select photos for Tinyglow</h1>` +
         `<form method="post" action="/picker/${escapeHtml(s.id)}"><ul>${rows}</ul>` +
         `<button type="submit" id="done" class="primary">Done</button></form>`,
     );
@@ -1249,7 +1249,7 @@ export async function startFakeGoogleServer(
 }
 
 // ---------------------------------------------------------------------------------------------
-// CLI: `pnpm --filter @littlelight/worker google-fake` (dev: tsx; image: dist/import/google/fake-server.js)
+// CLI: `pnpm --filter @tinyglow/worker google-fake` (dev: tsx; image: dist/import/google/fake-server.js)
 // Env: GOOGLE_FAKE_PORT (8099), GOOGLE_FAKE_HOST (0.0.0.0), GOOGLE_FAKE_PUBLIC_URL,
 // GOOGLE_FAKE_INTERNAL_URL (default http://localhost:<port>), FAKE_GOOGLE_FIXTURES_DIR (optional),
 // GOOGLE_FAKE_TOKEN_SEED (optional; random per process otherwise), LOG_LEVEL.

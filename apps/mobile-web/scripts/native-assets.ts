@@ -2,7 +2,7 @@
  * Regenerates every native icon and splash image from `resources/*.svg` (docs/plans/step-9.md 2.12).
  * Deterministic: running it twice produces byte-identical files.
  *
- *   pnpm --filter @littlelight/mobile-web native:assets
+ *   pnpm --filter @tinyglow/mobile-web native:assets
  *
  * Writes into ios/App/App/Assets.xcassets and android/app/src/main/res, plus the Play Store icon
  * under fastlane/metadata/android/en-US/images/. Native sources are plain files; nothing here runs
@@ -141,7 +141,7 @@ async function android(): Promise<void> {
 
     const stat = Math.round(24 * scale);
     out(
-      join(androidRes, `drawable-${d}`, "ic_stat_littlelight.png"),
+      join(androidRes, `drawable-${d}`, "ic_stat_tinyglow.png"),
       await raster(res("notification.svg"), stat).png(png).toBuffer(),
     );
   }

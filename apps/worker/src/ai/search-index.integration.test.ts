@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createFakeEmbedder, type Embedder, fakeDescription } from "@littlelight/ai";
-import { SEARCH_DOC_VERSION } from "@littlelight/shared";
+import { createFakeEmbedder, type Embedder, fakeDescription } from "@tinyglow/ai";
+import { SEARCH_DOC_VERSION } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHarness, type Harness, integrationEnv } from "../testing/harness";
 import { recordingLog } from "../testing/stubs";

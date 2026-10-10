@@ -1,4 +1,4 @@
-import { JOBS } from "@littlelight/shared";
+import { JOBS } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import { type BossLike, createJobQueue, INGEST_SEND_OPTIONS } from "./jobs";
 

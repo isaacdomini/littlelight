@@ -10,7 +10,7 @@ import {
   type PhotoAiOverridePatch,
   type PhotoAiOverrides,
   type PhotoAiStatus,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { AI_STATUS_SQL, toAiStatus } from "./queries";
 

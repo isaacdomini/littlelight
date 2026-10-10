@@ -5,14 +5,14 @@
  * `DESCRIBE_SYSTEM_PROMPT_V1` is static and byte-identical across requests (it is the cached
  * prefix, together with the JSON Schema). Changing a single character changes
  * `DESCRIBE_PROMPT_V1_SHA256`, which a test pins: bump `AI_PROMPT_VERSION` in
- * `@littlelight/shared` with it.
+ * `@tinyglow/shared` with it.
  *
  * `buildUserText` renders the per-photo context. It never contains the baby's name (the
  * pipeline cannot read it), GPS or coordinates, and is never logged (it may hold a parent note).
  */
 
 import { createHash } from "node:crypto";
-import { AI_VISION_CONTEXT_LIMITS, formatAge } from "@littlelight/shared";
+import { AI_VISION_CONTEXT_LIMITS, formatAge } from "@tinyglow/shared";
 import type { VisionContext } from "../types";
 
 export const DESCRIBE_SYSTEM_PROMPT_V1 = `You describe one photo from a family's private baby album so the parents can search and browse their own photos later. Your answer is stored as structured data for this family only.

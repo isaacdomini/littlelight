@@ -1,4 +1,4 @@
-import type { PhotoMime } from "@littlelight/shared";
+import type { PhotoMime } from "@tinyglow/shared";
 import { fileTypeFromBuffer } from "file-type";
 
 // Magic-byte sniffing (docs/plans/step-4.md 2.7 step 3; PRD "FR-2 Upload"). The client's mime

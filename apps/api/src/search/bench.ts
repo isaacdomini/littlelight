@@ -4,8 +4,8 @@
  *
  *   pnpm search:bench [--baby <id>] [--runs 200] [--as <userId>]
  *
- * Host-run, dev only: connects as `littlelight_api` (`BENCH_DATABASE_URL`, else `DATABASE_URL`,
- * else `postgres://littlelight_api:dev@localhost:5432/littlelight`) and refuses any host other
+ * Host-run, dev only: connects as `tinyglow_api` (`BENCH_DATABASE_URL`, else `DATABASE_URL`,
+ * else `postgres://tinyglow_api:dev@localhost:5432/tinyglow`) and refuses any host other
  * than localhost. Every query runs exactly like the API's: `runAs(authenticated)` with the demo
  * mom's claims (RLS and `search_baby_ids()` apply), the same `hybridSearch` SQL, the same
  * indexes. Query vectors come from the deterministic fake embedder: real embeddings change
@@ -17,14 +17,14 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { createFakeEmbedder } from "@littlelight/ai";
+import { createFakeEmbedder } from "@tinyglow/ai";
 import {
   claimsToSql,
   DEMO_IDS,
   EMBED_DIMS,
   SEARCH_DEFAULTS,
   SEARCH_SEED_IDS,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import pg from "pg";
 import { runAs } from "../plugins/db";
 import { searchFacets } from "./facets";
@@ -81,7 +81,7 @@ function rng(seed: number) {
 /** Superuser URL for auto_explain (`LOAD` needs it); local only, like `databaseUrl`. */
 function adminUrl(): string {
   const url =
-    process.env.BENCH_ADMIN_DATABASE_URL ?? "postgres://postgres:dev@localhost:5432/littlelight";
+    process.env.BENCH_ADMIN_DATABASE_URL ?? "postgres://postgres:dev@localhost:5432/tinyglow";
   if (!["localhost", "127.0.0.1", "::1"].includes(new URL(url).hostname)) {
     throw new Error("search:bench only runs against a local database");
   }
@@ -139,7 +139,7 @@ function databaseUrl(): string {
   const url =
     process.env.BENCH_DATABASE_URL ??
     process.env.DATABASE_URL ??
-    "postgres://littlelight_api:dev@localhost:5432/littlelight";
+    "postgres://tinyglow_api:dev@localhost:5432/tinyglow";
   const host = new URL(url).hostname;
   if (!["localhost", "127.0.0.1", "::1"].includes(host)) {
     throw new Error("search:bench only runs against a local database");

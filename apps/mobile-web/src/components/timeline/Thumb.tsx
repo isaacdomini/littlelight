@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import type { BabySummary, PhotoSummary } from "@littlelight/shared";
+import type { BabySummary, PhotoSummary } from "@tinyglow/shared";
 import { eyeOffOutline, flag } from "ionicons/icons";
 import { memo } from "react";
 import { t } from "../../i18n";

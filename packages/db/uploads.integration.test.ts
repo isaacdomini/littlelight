@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-// packages/db has no dependency on @littlelight/shared: relative import on purpose.
+// packages/db has no dependency on @tinyglow/shared: relative import on purpose.
 import { FREE_TIER_PHOTO_LIMIT, HOME_RADIUS_M } from "../shared/src/constants";
 import { UPLOAD_MAX_FILES_PER_SESSION as MAX_FILES_PER_SESSION } from "../shared/src/upload";
 import { BABY, createFixtures, dropFixtures, LINK, P, U } from "./test/fixtures";

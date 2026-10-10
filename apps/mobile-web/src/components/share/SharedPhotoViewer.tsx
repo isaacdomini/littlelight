@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import type { ViewerPhoto } from "@littlelight/shared";
+import type { ViewerPhoto } from "@tinyglow/shared";
 import { closeOutline, downloadOutline } from "ionicons/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Swiper as SwiperType } from "swiper";
@@ -135,7 +135,7 @@ export function SharedPhotoViewer({
       const res = await fetchShareDownload(photo.id);
       if (isNative()) {
         const { downloadAndShare } = await import("../../platform/native/share");
-        if (!(await downloadAndShare(res.url, `Littlelight-${photo.id.slice(0, 8)}`))) {
+        if (!(await downloadAndShare(res.url, `Tinyglow-${photo.id.slice(0, 8)}`))) {
           throw new Error("share failed");
         }
         return;

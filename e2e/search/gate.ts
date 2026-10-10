@@ -115,7 +115,7 @@ async function psql(sql: string): Promise<string> {
     "-U",
     "postgres",
     "-d",
-    "littlelight",
+    "tinyglow",
     "-Atc",
     sql,
   ]);
@@ -143,7 +143,7 @@ async function runJob(name: string, payload?: unknown): Promise<Record<string, u
     "pnpm",
     "--silent",
     "--filter",
-    "@littlelight/worker",
+    "@tinyglow/worker",
     "run-job",
     name,
     ...(payload === undefined ? [] : [JSON.stringify(payload)]),
@@ -204,7 +204,7 @@ async function ensureSeed(count: number): Promise<void> {
     cwd: ROOT,
     env: {
       ...process.env,
-      DATABASE_URL: `postgres://postgres:dev@localhost:${process.env.DB_PORT ?? 5432}/littlelight`,
+      DATABASE_URL: `postgres://postgres:dev@localhost:${process.env.DB_PORT ?? 5432}/tinyglow`,
     },
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -313,7 +313,7 @@ async function chatSse(cookie: string, babyId: string, text: string): Promise<Ch
     method: "POST",
     headers: {
       cookie,
-      "x-littlelight-client": "web",
+      "x-tinyglow-client": "web",
       accept: "text/event-stream",
       "content-type": "application/json",
     },
@@ -414,7 +414,7 @@ async function run(args: Args, startedAt: Date, modelTag: string) {
   // Her 24 h turn ledger and her Golden thread are reset first, so repeated runs do not hit the
   // 100 turns/day limit; chat tests elsewhere use other babies.
   const api = await demoClient("demo-mom");
-  const userId = await psql("select id from auth.users where email='demo-mom@littlelight.local'");
+  const userId = await psql("select id from auth.users where email='demo-mom@tinyglow.local'");
   await psql(`delete from chat_turns where user_id='${userId}'`);
   await psql(`delete from chat_threads where baby_id='${GOLDEN_BABY}' and user_id='${userId}'`);
   const cookie = (await api.storageState()).cookies.map((c) => `${c.name}=${c.value}`).join("; ");

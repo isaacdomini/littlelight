@@ -3,8 +3,8 @@
  * the package surface.
  *
  * - `admin`: a `postgres` superuser client used for fixtures and for asserting persisted state.
- * - `api(role, claims)` / `pipeline(fn)`: run `fn` inside one transaction on a `littlelight_api` /
- *   `littlelight_worker` connection, with `SET LOCAL ROLE` + `set_config('request.jwt.claims', $1,
+ * - `api(role, claims)` / `pipeline(fn)`: run `fn` inside one transaction on a `tinyglow_api` /
+ *   `tinyglow_worker` connection, with `SET LOCAL ROLE` + `set_config('request.jwt.claims', $1,
  *   true)` exactly as the README documents, and ALWAYS roll back.
  */
 
@@ -67,11 +67,11 @@ export async function connect(): Promise<Db> {
   const admin = new pg.Client({ connectionString: databaseUrl });
   await admin.connect();
   const apiPool = new pg.Pool({
-    connectionString: appRoleUrl(databaseUrl, "littlelight_api", env.API_DB_PASSWORD),
+    connectionString: appRoleUrl(databaseUrl, "tinyglow_api", env.API_DB_PASSWORD),
     max: 2,
   });
   const workerPool = new pg.Pool({
-    connectionString: appRoleUrl(databaseUrl, "littlelight_worker", env.WORKER_DB_PASSWORD),
+    connectionString: appRoleUrl(databaseUrl, "tinyglow_worker", env.WORKER_DB_PASSWORD),
     max: 2,
   });
 

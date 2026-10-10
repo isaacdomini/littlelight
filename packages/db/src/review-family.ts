@@ -5,7 +5,7 @@
  * account signs up once through the normal email-code flow) a synthetic baby and nothing else:
  *
  *   DATABASE_URL=<superuser url> pnpm db:review-family --email <addr> [--confirm-production]   (host)
- *   docker compose -f docker-compose.dev.yml run --rm migrate pnpm db:review-family --email demo-dad@littlelight.local
+ *   docker compose -f docker-compose.dev.yml run --rm migrate pnpm db:review-family --email demo-dad@tinyglow.local
  *
  * What it writes, in one transaction with the superuser `DATABASE_URL` (like `db:plan`):
  * - baby "Sunny" (born 10 months before the first run; kept on re-runs), the user as admin,
@@ -115,7 +115,7 @@ const REVIEW_MEASUREMENTS = [
   { nn: 4, kind: "weight", metric: 7900, entered: 7.9, unit: "kg", day: 240 },
 ] as const;
 
-// Id derivation lives in `review-ids.ts` (dependency-free, also exported as `@littlelight/db/review`).
+// Id derivation lives in `review-ids.ts` (dependency-free, also exported as `@tinyglow/db/review`).
 export { reviewBabyId, reviewId, reviewPhotoId };
 
 /**
@@ -210,7 +210,7 @@ export async function provisionReviewFamily(
   const databaseUrl = options.databaseUrl ?? requireDatabaseUrl(env);
   const client = new Client({
     connectionString: databaseUrl,
-    application_name: "littlelight-review-family",
+    application_name: "tinyglow-review-family",
   });
   try {
     await client.connect();

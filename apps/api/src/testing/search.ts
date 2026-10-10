@@ -1,4 +1,4 @@
-import { fakeEmbedding } from "@littlelight/ai";
+import { fakeEmbedding } from "@tinyglow/ai";
 import type pg from "pg";
 
 // Superuser fixtures for the search and chat integration tests (apps/api). Test-only.

@@ -1,5 +1,5 @@
-import type { Photo, PhotoDetailsPatch } from "@littlelight/shared";
 import { useQueryClient } from "@tanstack/react-query";
+import type { Photo, PhotoDetailsPatch } from "@tinyglow/shared";
 import { patchCachedPhotos, photoKey, useUpdatePhotoDetails } from "../../lib/queries/photos";
 
 /**

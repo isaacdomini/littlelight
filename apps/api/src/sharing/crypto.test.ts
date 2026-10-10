@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { SHARE_LINK_MAX_TTL_HOURS, shareTokenSchema } from "@littlelight/shared";
+import { SHARE_LINK_MAX_TTL_HOURS, shareTokenSchema } from "@tinyglow/shared";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 import { verifyAccessToken } from "../auth/jwt";
@@ -202,7 +202,7 @@ describe("viewer JWT", () => {
     expect(Object.keys(payload).sort()).toEqual(
       ["aud", "exp", "iat", "iss", "jti", "role", "share_link_id"].sort(),
     );
-    expect(payload.aud).toBe("littlelight-viewer");
+    expect(payload.aud).toBe("tinyglow-viewer");
     expect(payload.iss).toBe(viewerJwtIssuer(config));
     expect(payload.iss).toBe(`${TEST_PUBLIC_URL}/api/share`);
     expect(JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString())).toEqual({
@@ -228,7 +228,7 @@ describe("viewer JWT", () => {
     const forged = await new SignJWT({ role: "viewer", share_link_id: LINK })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuer(viewerJwtIssuer(config))
-      .setAudience("littlelight-viewer")
+      .setAudience("tinyglow-viewer")
       .setIssuedAt()
       .setExpirationTime("1h")
       .setJti(randomUUID())
@@ -259,7 +259,7 @@ describe("viewer JWT", () => {
       setup(new SignJWT(claims))
         .setProtectedHeader({ alg: "HS256", typ: "JWT" })
         .setIssuer(viewerJwtIssuer(config))
-        .setAudience("littlelight-viewer")
+        .setAudience("tinyglow-viewer")
         .setExpirationTime("1h")
         .sign(viewerJwtKey(config));
     const base = { role: "viewer", share_link_id: LINK };
@@ -286,7 +286,7 @@ describe("viewer JWT", () => {
       new SignJWT({ role: o.role ?? "viewer", share_link_id: LINK })
         .setProtectedHeader({ alg: o.alg ?? "HS256" })
         .setIssuer(o.iss ?? viewerJwtIssuer(config))
-        .setAudience(o.aud ?? "littlelight-viewer")
+        .setAudience(o.aud ?? "tinyglow-viewer")
         .setIssuedAt()
         .setExpirationTime("1h")
         .setJti(randomUUID())

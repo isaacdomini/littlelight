@@ -1,4 +1,4 @@
-import { MILESTONE_NAME_MAX, type MilestoneCategory } from "@littlelight/shared";
+import { MILESTONE_NAME_MAX, type MilestoneCategory } from "@tinyglow/shared";
 import { type FormEvent, useState } from "react";
 import { t } from "../../i18n";
 import { useCreateMilestone } from "../../lib/queries/milestones";

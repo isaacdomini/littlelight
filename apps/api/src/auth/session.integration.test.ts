@@ -3,7 +3,7 @@ import {
   apiErrorSchema,
   sessionResponseSchema,
   sessionsListResponseSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness } from "../testing/integration";
 import { gotrueSession, signAccessToken } from "../testing/support";
@@ -12,8 +12,8 @@ import { GoTrueError } from "./gotrue";
 // Session liveness, session issuing (verify / refresh), new-device alerts, devices list and
 // sign-out against a real database (docs/plans/step-3.md 2.2, 2.3, 3.10).
 
-const WEB = { "x-littlelight-client": "web" };
-const NATIVE = { "x-littlelight-client": "native" };
+const WEB = { "x-tinyglow-client": "web" };
+const NATIVE = { "x-tinyglow-client": "native" };
 const IPHONE =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1";
 

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-// packages/db has no dependency on @littlelight/shared: relative import on purpose.
+// packages/db has no dependency on @tinyglow/shared: relative import on purpose.
 import {
   FREE_TIER_PHOTO_LIMIT,
   INVITES_PER_BABY_PER_DAY,
@@ -64,7 +64,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
     await db.close();
   });
 
-  it("constants in @littlelight/shared match the trigger thresholds", () => {
+  it("constants in @tinyglow/shared match the trigger thresholds", () => {
     expect(MAX_ADMINS_PER_BABY).toBe(2);
     expect(INVITES_PER_BABY_PER_DAY).toBe(20);
     expect(FREE_TIER_PHOTO_LIMIT).toBe(1000);
@@ -232,7 +232,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
         for (const [i, u] of users.entries()) {
           await a().query(
             "INSERT INTO auth.users (id, aud, role, email, created_at, updated_at) VALUES ($1, 'authenticated', 'authenticated', $2, now(), now())",
-            [u, `fx-conc-${i}@littlelight.test`],
+            [u, `fx-conc-${i}@tinyglow.test`],
           );
           await a().query("INSERT INTO profiles (user_id) VALUES ($1)", [u]);
         }
@@ -299,7 +299,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
       q(
         `INSERT INTO invites (baby_id, email, role, token_hash, invited_by, created_at)
          VALUES ($1, $2, 'contributor', gen_random_bytes(32), $3, now() - interval '${ago}')`,
-        [BABY.A, `fx-rl-${i}@littlelight.test`, U.adminA1],
+        [BABY.A, `fx-rl-${i}@tinyglow.test`, U.adminA1],
       );
 
     it("allows 20 invites per baby per 24h and rejects the 21st (fixture already holds one)", async () => {
@@ -307,7 +307,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
         // The fixture baby A already has 1 invite created just now: 19 more fit.
         for (let i = 0; i < INVITES_PER_BABY_PER_DAY - 1; i++) await invite(i);
         const e = await err(
-          `INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-over@littlelight.test', 'contributor', gen_random_bytes(32), $2)`,
+          `INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-over@tinyglow.test', 'contributor', gen_random_bytes(32), $2)`,
           [BABY.A, U.adminA1],
         );
         expect(e?.code).toBe("23514");
@@ -320,7 +320,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
         for (let i = 0; i < INVITES_PER_BABY_PER_DAY - 1; i++) await invite(i);
         expect(
           await err(
-            `INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-b@littlelight.test', 'contributor', gen_random_bytes(32), $2)`,
+            `INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-b@tinyglow.test', 'contributor', gen_random_bytes(32), $2)`,
             [BABY.B, U.adminB],
           ),
         ).toBeNull();
@@ -332,7 +332,7 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
         for (let i = 0; i < 30; i++) await invite(i, "25 hours");
         expect(
           await err(
-            `INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-ok@littlelight.test', 'contributor', gen_random_bytes(32), $2)`,
+            `INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-ok@tinyglow.test', 'contributor', gen_random_bytes(32), $2)`,
             [BABY.A, U.adminA1],
           ),
         ).toBeNull();
@@ -348,12 +348,12 @@ describe.skipIf(!databaseUrl)("triggers and constraints", () => {
         for (let i = 0; i < INVITES_PER_BABY_PER_DAY - 1; i++) {
           await c.query(
             "INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, $2, 'contributor', decode(md5($3) || md5($3 || 'x'), 'hex'), $4)",
-            [BABY.A, `fx-rl-u${i}@littlelight.test`, `t${i}`, U.adminA1],
+            [BABY.A, `fx-rl-u${i}@tinyglow.test`, `t${i}`, U.adminA1],
           );
         }
         const e = await tryQuery(
           c,
-          "INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-uover@littlelight.test', 'contributor', decode(md5('o') || md5('ox'), 'hex'), $2)",
+          "INSERT INTO invites (baby_id, email, role, token_hash, invited_by) VALUES ($1, 'fx-rl-uover@tinyglow.test', 'contributor', decode(md5('o') || md5('ox'), 'hex'), $2)",
           [BABY.A, U.adminA1],
         );
         expect(e?.message).toMatch(/rate limit/);

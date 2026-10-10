@@ -1,10 +1,6 @@
 import { Writable } from "node:stream";
-import { createFakeEmbedder, type Embedder, getAiStatus } from "@littlelight/ai";
-import {
-  apiErrorSchema,
-  searchFacetsResponseSchema,
-  searchResponseSchema,
-} from "@littlelight/shared";
+import { createFakeEmbedder, type Embedder, getAiStatus } from "@tinyglow/ai";
+import { apiErrorSchema, searchFacetsResponseSchema, searchResponseSchema } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loggerOptions } from "../app";
 import type { AiServices } from "../plugins/ai";

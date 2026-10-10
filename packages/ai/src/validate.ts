@@ -15,7 +15,7 @@ import {
   type AiOverrideField,
   aiDescriptionV1Schema,
   applyAiOverrides,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 export type ValidationResult =
   | { ok: true; value: AiDescriptionV1 }

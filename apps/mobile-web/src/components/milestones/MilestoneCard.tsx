@@ -1,4 +1,4 @@
-import type { Milestone } from "@littlelight/shared";
+import type { Milestone } from "@tinyglow/shared";
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../../auth/AuthProvider";
 import { t, tn } from "../../i18n";

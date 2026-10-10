@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { babyPrefix, DEMO_IDS, derivativeKey, photoPrefixes } from "@littlelight/shared";
+import { babyPrefix, DEMO_IDS, derivativeKey, photoPrefixes } from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ingestPhoto } from "../ingest";
 import { purgeTrash } from "../purge";

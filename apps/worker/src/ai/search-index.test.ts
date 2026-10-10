@@ -1,5 +1,5 @@
-import { createFakeEmbedder, type Embedder } from "@littlelight/ai";
-import { buildSearchDocument, SEARCH_DOC_VERSION } from "@littlelight/shared";
+import { createFakeEmbedder, type Embedder } from "@tinyglow/ai";
+import { buildSearchDocument, SEARCH_DOC_VERSION } from "@tinyglow/shared";
 import { describe, expect, it, vi } from "vitest";
 import { type QueryResult, recordingLog, scriptedPool } from "../testing/stubs";
 import {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The LittlelightUploader bridge (docs/plans/step-9.md 2.6, 2.15): events can arrive before
+// The TinyglowUploader bridge (docs/plans/step-9.md 2.6, 2.15): events can arrive before
 // `upload()` returns its id (replayed), non-2xx and error events reject, abort cancels natively.
 
 type Handler = (e: never) => void;

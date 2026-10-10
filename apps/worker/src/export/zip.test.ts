@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { EXPORT_PROGRESS_EVERY } from "@littlelight/shared";
+import { EXPORT_PROGRESS_EVERY } from "@tinyglow/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BABY_ID,

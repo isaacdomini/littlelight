@@ -1,5 +1,5 @@
 /**
- * Model defaults for the AI pipeline. The values live in `@littlelight/shared`
+ * Model defaults for the AI pipeline. The values live in `@tinyglow/shared`
  * (`src/constants.ts`, plan section 2.10) so there is one source of truth; this module adds the
  * provider/effort enums and pins each default to them at compile time.
  */
@@ -12,7 +12,7 @@ import {
   DEFAULT_CHAT_REASONING_EFFORT as SHARED_CHAT_REASONING_EFFORT,
   DEFAULT_VISION_PROVIDER as SHARED_VISION_PROVIDER,
   DEFAULT_VISION_REASONING_EFFORT as SHARED_VISION_REASONING_EFFORT,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 
 /**
  * `fake` is the deterministic in-process provider (no key, no network) used by CI, the dev stack

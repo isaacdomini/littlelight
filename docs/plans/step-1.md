@@ -24,12 +24,12 @@ through the orchestrator.
 
 | Package name | Path | Depends on (workspace) | Entry |
 | --- | --- | --- | --- |
-| `@littlelight/shared` | `packages/shared` | – | `src/index.ts` |
-| `@littlelight/ai` | `packages/ai` | shared | `src/index.ts` |
-| `@littlelight/db` | `packages/db` | – | `src/migrate.ts`, `src/seed.ts`, `src/bootstrap.ts` |
-| `@littlelight/api` | `apps/api` | shared, ai | `src/server.ts` (prod: `dist/server.js`) |
-| `@littlelight/worker` | `apps/worker` | shared, ai | `src/main.ts` (prod: `dist/main.js`), `src/healthcheck.ts` (prod: `dist/healthcheck.js`) |
-| `@littlelight/mobile-web` | `apps/mobile-web` | shared | Vite app; prod output `dist/` |
+| `@tinyglow/shared` | `packages/shared` | – | `src/index.ts` |
+| `@tinyglow/ai` | `packages/ai` | shared | `src/index.ts` |
+| `@tinyglow/db` | `packages/db` | – | `src/migrate.ts`, `src/seed.ts`, `src/bootstrap.ts` |
+| `@tinyglow/api` | `apps/api` | shared, ai | `src/server.ts` (prod: `dist/server.js`) |
+| `@tinyglow/worker` | `apps/worker` | shared, ai | `src/main.ts` (prod: `dist/main.js`), `src/healthcheck.ts` (prod: `dist/healthcheck.js`) |
+| `@tinyglow/mobile-web` | `apps/mobile-web` | shared | Vite app; prod output `dist/` |
 
 - All packages are `"type": "module"`, TypeScript, `"private": true`.
 - `packages/shared` and `packages/ai` export **TypeScript source** (`"main"`/`"types"`/`"exports"` →
@@ -54,7 +54,7 @@ through the orchestrator.
 | `test` | `vitest run` (root config with `test.projects: ["apps/*", "packages/*"]`; unit tests only, no DB/network) |
 | `test:integration` | `vitest run --project db-integration` — skipped unless `DATABASE_URL` set (used with the dev stack) |
 | `build` | `pnpm -r build` |
-| `db:migrate` / `db:migrate:down` / `db:seed` / `db:bootstrap` | `pnpm --filter @littlelight/db <same>` |
+| `db:migrate` / `db:migrate:down` / `db:seed` / `db:bootstrap` | `pnpm --filter @tinyglow/db <same>` |
 | `smoke` | `bash e2e/smoke/dev-stack.sh` |
 
 Per-package scripts every Dockerfile/compose command relies on:
@@ -71,14 +71,14 @@ Per-package scripts every Dockerfile/compose command relies on:
 
 | Compose service | Image (pinned) | Container port | Host port (dev) | Healthcheck |
 | --- | --- | --- | --- | --- |
-| `db` | `pgvector/pgvector:0.8.7-pg17` | 5432 | 5432 | `pg_isready -U postgres -d littlelight` |
+| `db` | `pgvector/pgvector:0.8.7-pg17` | 5432 | 5432 | `pg_isready -U postgres -d tinyglow` |
 | `migrate` (one-shot) | build `packages/db/Dockerfile` | – | – | exits 0 |
 | `auth` | `supabase/auth:v2.197.0` | 9999 | 9999 | `wget --no-verbose --tries=1 --spider http://localhost:9999/health` |
 | `storage` | `${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}` (see Risk R1) | 9000 (S3), 9001 (console) | 9000, 9001 | `curl -sf http://localhost:9000/minio/health/live \|\| mc ready local` (devops verifies which binary the image ships) |
-| `storage-init` (one-shot) | `${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}` (Risk R1) | – | – | exits 0 after `mc mb -p local/littlelight-dev` |
+| `storage-init` (one-shot) | `${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}` (Risk R1) | – | – | exits 0 after `mc mb -p local/tinyglow-dev` |
 | `mail` | `axllent/mailpit:v1.31.4` | 1025 (SMTP, internal only), 8025 (UI/API) | 8025 | `["CMD","/mailpit","readyz"]` |
 | `api` | build `apps/api/Dockerfile` target `dev` | 3000 | 3000 | `node -e "fetch('http://localhost:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"` |
-| `worker` | build `apps/worker/Dockerfile` target `dev` | – | – | `pnpm --filter @littlelight/worker healthcheck` (dev) / `node dist/healthcheck.js` (prod) |
+| `worker` | build `apps/worker/Dockerfile` target `dev` | – | – | `pnpm --filter @tinyglow/worker healthcheck` (dev) / `node dist/healthcheck.js` (prod) |
 | `web` | build `apps/mobile-web/Dockerfile` target `dev` | 8080 | 8080 | `wget -qO- http://localhost:8080/ >/dev/null` (dev) / `wget -qO- http://localhost/healthz` (prod nginx) |
 
 Production-only services: `cloudflared` (`cloudflare/cloudflared:2026.10.0`), `backup`
@@ -117,28 +117,28 @@ Vite dev: `server.proxy` for `/api` and `/auth` with `rewrite` stripping the pre
 | --- | --- | --- |
 | `NODE_ENV` | `development` | api, worker, web |
 | `LOG_LEVEL` | `debug` | api, worker |
-| `DATABASE_URL` | `postgres://postgres:dev@db:5432/littlelight` | migrate, api, worker (superuser in step 1; step 2 introduces an app role) |
+| `DATABASE_URL` | `postgres://postgres:dev@db:5432/tinyglow` | migrate, api, worker (superuser in step 1; step 2 introduces an app role) |
 | `AUTH_DB_PASSWORD` | `dev` | migrate (creates `supabase_auth_admin` with this password) |
 | `JWT_SECRET` | `dev-only-jwt-secret-at-least-32-characters` | api, worker (verifies GoTrue JWTs from step 3) |
 | `GOTRUE_JWT_SECRET` | same literal as `JWT_SECRET` | auth. **Must match `JWT_SECRET`**; api/worker config asserts equality at boot when both are present and refuses to start otherwise |
 | `GOTRUE_API_HOST` / `GOTRUE_API_PORT` | `0.0.0.0` / `9999` | auth |
 | `GOTRUE_DB_DRIVER` | `postgres` | auth |
-| `GOTRUE_DB_DATABASE_URL` | `postgres://supabase_auth_admin:dev@db:5432/littlelight` | auth |
+| `GOTRUE_DB_DATABASE_URL` | `postgres://supabase_auth_admin:dev@db:5432/tinyglow` | auth |
 | `GOTRUE_SITE_URL` | `http://localhost:8080` | auth |
 | `API_EXTERNAL_URL` | `http://localhost:8080/auth` | auth (email links go through the nginx/Vite `/auth` prefix) |
 | `GOTRUE_URI_ALLOW_LIST` | `http://localhost:8080/**` | auth |
 | `GOTRUE_JWT_EXP` / `GOTRUE_JWT_AUD` / `GOTRUE_JWT_DEFAULT_GROUP_NAME` / `GOTRUE_JWT_ADMIN_ROLES` / `GOTRUE_JWT_ISSUER` | `3600` / `authenticated` / `authenticated` / `service_role` / `http://localhost:8080/auth` | auth |
 | `GOTRUE_EXTERNAL_EMAIL_ENABLED` / `GOTRUE_DISABLE_SIGNUP` / `GOTRUE_MAILER_AUTOCONFIRM` | `true` / `false` / `false` | auth |
 | `GOTRUE_MAILER_OTP_EXP` / `GOTRUE_MAILER_OTP_LENGTH` | `600` / `6` | auth (PRD: code valid 10 min, 6 digits) |
-| `GOTRUE_SMTP_HOST` / `GOTRUE_SMTP_PORT` / `GOTRUE_SMTP_ADMIN_EMAIL` / `GOTRUE_SMTP_SENDER_NAME` | `mail` / `1025` / `noreply@littlelight.local` / `Littlelight` | auth (no `SMTP_USER`/`PASS` in dev) |
+| `GOTRUE_SMTP_HOST` / `GOTRUE_SMTP_PORT` / `GOTRUE_SMTP_ADMIN_EMAIL` / `GOTRUE_SMTP_SENDER_NAME` | `mail` / `1025` / `noreply@tinyglow.local` / `Tinyglow` | auth (no `SMTP_USER`/`PASS` in dev) |
 | `GOTRUE_SMTP_MAX_FREQUENCY` / `GOTRUE_RATE_LIMIT_EMAIL_SENT` | `1s` / `1000` | auth (dev only; PRD production limits are set in step 3) |
 | `GOTRUE_MAILER_TEMPLATES_CONFIRMATION` / `GOTRUE_MAILER_TEMPLATES_MAGIC_LINK` | `http://web:8080/email-templates/confirmation.html` / `http://web:8080/email-templates/magic-link.html` | auth (see 2.6) |
-| `GOTRUE_MAILER_SUBJECTS_CONFIRMATION` / `GOTRUE_MAILER_SUBJECTS_MAGIC_LINK` | `Your Littlelight sign-in code` | auth |
+| `GOTRUE_MAILER_SUBJECTS_CONFIRMATION` / `GOTRUE_MAILER_SUBJECTS_MAGIC_LINK` | `Your Tinyglow sign-in code` | auth |
 | `GOTRUE_EXTERNAL_APPLE_ENABLED` / `GOTRUE_EXTERNAL_GOOGLE_ENABLED` | `false` / `false` | auth (step 3 flips with real client IDs) |
 | `S3_ENDPOINT` | `http://storage:9000` | api, worker (server-side) |
 | `S3_PUBLIC_ENDPOINT` | `http://localhost:9000` | api (pre-signed URLs, step 4) |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `dev` / `devdevdev` | api, worker, storage-init (`storage` reads the same literals as `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` in the compose file, written as `${S3_ACCESS_KEY:-dev}` style defaults) |
-| `S3_BUCKET` | `littlelight-dev` | api, worker, storage-init |
+| `S3_BUCKET` | `tinyglow-dev` | api, worker, storage-init |
 | `S3_REGION` / `S3_FORCE_PATH_STYLE` | `us-east-1` / `true` | api, worker |
 | `API_HOST` / `API_PORT` | `0.0.0.0` / `3000` | api |
 | `HEARTBEAT_INTERVAL_MS` / `HEARTBEAT_STALE_MS` | `10000` / `30000` | worker |
@@ -165,7 +165,7 @@ the duplicated-but-asserted literal). Per `CLAUDE.md`, `SUPABASE_URL`, `SUPABASE
   `CREATE ROLE supabase_auth_admin NOINHERIT CREATEROLE LOGIN NOREPLICATION PASSWORD
   '<AUTH_DB_PASSWORD>'` (then `ALTER ROLE ... PASSWORD` on every run so password changes apply);
   `CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin`;
-  `GRANT CREATE ON DATABASE littlelight TO supabase_auth_admin`;
+  `GRANT CREATE ON DATABASE tinyglow TO supabase_auth_admin`;
   `ALTER ROLE supabase_auth_admin SET search_path = 'auth'`;
   plus `NOLOGIN` roles `anon`, `authenticated`, `service_role` (created if missing) so GoTrue's
   JWT `role` claims map to real Postgres roles in step 2. GoTrue runs its own migrations in
@@ -207,7 +207,7 @@ outside our migrations (documented in `packages/db/README.md`).
 Seed (`src/seed.ts`): idempotent no-op in step 1 (logs `seed: nothing to seed yet`), exit 0.
 Step 2 fills in the demo family.
 
-### 2.8 API (`@littlelight/api`)
+### 2.8 API (`@tinyglow/api`)
 
 | Route | Request | Response | Notes |
 | --- | --- | --- | --- |
@@ -219,11 +219,11 @@ pino logger with `redact` for `authorization`/`cookie` headers), `src/config.ts`
 `forcePathStyle`), `src/routes/healthz.ts`. No auth plugin yet (step 3); no `auth/`, `sharing/`,
 `chat/`, `search/` directories created in step 1.
 
-### 2.9 Worker (`@littlelight/worker`)
+### 2.9 Worker (`@tinyglow/worker`)
 
 - `src/main.ts`: load config, start pg-boss (`new PgBoss({ connectionString: DATABASE_URL })`,
   `boss.on('error', log)`), start heartbeat loop, log `AI disabled: OPENAI_API_KEY not set` (or
-  `AI enabled: provider=<p> model=<m>`) using `isAiConfigured()` from `@littlelight/ai`.
+  `AI enabled: provider=<p> model=<m>`) using `isAiConfigured()` from `@tinyglow/ai`.
   Graceful shutdown on SIGTERM. No job handlers registered yet.
 - `src/heartbeat.ts`: every `HEARTBEAT_INTERVAL_MS`, `HeadBucket` on `S3_BUCKET`, then upsert
   the row for `WORKER_ID` (= `os.hostname()`, unique per container so `--scale worker=3` works)
@@ -234,9 +234,9 @@ pino logger with `redact` for `authorization`/`cookie` headers), `src/config.ts`
 - Payload rule (PRD-wide): job payloads carry IDs and keys only, never photo bytes. No jobs yet.
 - The 80%-disk alert from "Compose requirements" is deferred to step 4 (needs MinIO admin API).
 
-### 2.10 Shared contracts (`@littlelight/shared`, architect-defined, backend-engineer writes)
+### 2.10 Shared contracts (`@tinyglow/shared`, architect-defined, backend-engineer writes)
 
-- `src/constants.ts`: `APP_NAME = "Littlelight"`, `API_PREFIX = "/api"`, `AUTH_PREFIX = "/auth"`,
+- `src/constants.ts`: `APP_NAME = "Tinyglow"`, `API_PREFIX = "/api"`, `AUTH_PREFIX = "/auth"`,
   `EMBED_DIMS = 1024`, `DEFAULT_VISION_PROVIDER = "openai"`, `DEFAULT_VISION_MODEL = "gpt-6-luna"`,
   `DEFAULT_VISION_REASONING_EFFORT = "none"`, `DEFAULT_CHAT_MODEL = "gpt-6-luna"`,
   `DEFAULT_CHAT_REASONING_EFFORT = "low"`, `DEFAULT_EMBED_MODEL = "text-embedding-3-small"`,
@@ -252,7 +252,7 @@ pino logger with `redact` for `authorization`/`cookie` headers), `src/config.ts`
   `HealthzResponse`, `HealthzCheck`.
 - `src/index.ts` re-exports. Only `zod` as a dependency. No runtime clients in shared.
 
-### 2.11 AI interfaces (`@littlelight/ai`, stubs only)
+### 2.11 AI interfaces (`@tinyglow/ai`, stubs only)
 
 - `src/types.ts`: `VisionDescriber` (`describeBatch(requests: VisionRequest[]): Promise<VisionBatchHandle>`,
   `pollBatch(handle)`, `describeOne(request)` for the priority path), `ChatModel`
@@ -269,13 +269,13 @@ pino logger with `redact` for `authorization`/`cookie` headers), `src/config.ts`
 - `src/index.ts`: factories `createVisionDescriber(env)`, `createChatModel(env)`,
   `createEmbedder(env)` that throw `AiNotConfiguredError` in step 1. No provider SDKs added yet.
 
-### 2.12 Web shell (`@littlelight/mobile-web`)
+### 2.12 Web shell (`@tinyglow/mobile-web`)
 
 Ionic React app, `IonTabs` with the PRD's five tabs (Chat, Timeline, Upload, Milestones,
 Family) as placeholder pages; Tailwind v4 via `@tailwindcss/vite`; TanStack Query provider;
 a small `SystemStatus` component on the Chat page that fetches `/api/healthz` (parsed with
 `healthzResponseSchema`) and `/auth/health` to prove both proxies. `index.html` has
-`viewport-fit=cover` and title "Littlelight". `public/.well-known/apple-app-site-association`
+`viewport-fit=cover` and title "Tinyglow". `public/.well-known/apple-app-site-association`
 and `public/.well-known/assetlinks.json` placeholders. No Capacitor yet (`ios/`, `android/`,
 `capacitor.config.ts` arrive in step 9); no auth UI yet (step 3).
 
@@ -283,16 +283,16 @@ and `public/.well-known/assetlinks.json` placeholders. No Capacitor yet (`ios/`,
 
 | Dockerfile | Stages | Prod runtime |
 | --- | --- | --- |
-| `apps/api/Dockerfile` | `base` (node:22.23.3-alpine, pnpm, workspace manifests, `pnpm install --frozen-lockfile --filter @littlelight/api...`) → `dev` (full source copied; compose bind-mounts `src` dirs over it) → `build` (`pnpm --filter @littlelight/api build`) → `prod` | non-root `node`, `dist/` + production `node_modules`, `CMD ["node","apps/api/dist/server.js"]`, `HEALTHCHECK` as in 2.3 |
+| `apps/api/Dockerfile` | `base` (node:22.23.3-alpine, pnpm, workspace manifests, `pnpm install --frozen-lockfile --filter @tinyglow/api...`) → `dev` (full source copied; compose bind-mounts `src` dirs over it) → `build` (`pnpm --filter @tinyglow/api build`) → `prod` | non-root `node`, `dist/` + production `node_modules`, `CMD ["node","apps/api/dist/server.js"]`, `HEALTHCHECK` as in 2.3 |
 | `apps/worker/Dockerfile` | same shape | `CMD ["node","apps/worker/dist/main.js"]`, healthcheck `node apps/worker/dist/healthcheck.js` |
 | `apps/mobile-web/Dockerfile` | `base` → `dev` (vite) → `build` (`vite build`) → `prod` (`nginx:1.28-alpine`, `docker/nginx/default.conf`, `COPY --from=build dist`, `COPY docker/gotrue/templates .../email-templates`) | port 80 |
-| `packages/db/Dockerfile` | single stage node:22.23.3-alpine with `@littlelight/db` deps; `CMD ["pnpm","db:migrate"]`; dev compose overrides `command: sh -c "pnpm db:migrate && pnpm db:seed"` | runs as non-root `node` |
+| `packages/db/Dockerfile` | single stage node:22.23.3-alpine with `@tinyglow/db` deps; `CMD ["pnpm","db:migrate"]`; dev compose overrides `command: sh -c "pnpm db:migrate && pnpm db:seed"` | runs as non-root `node` |
 
 Rules: build context is the repo root; `.dockerignore` excludes `node_modules`, `dist`, `.git`,
 `apps/mobile-web/{ios,android}`, `.env`, `.env.local`. Dev bind mounts cover only `src`
 directories (exactly as the PRD YAML), so image `node_modules` (root and per-package) are never
 shadowed; never bind-mount a whole package directory. `tsup` bundles workspace packages
-(`noExternal: [/^@littlelight\//]`) and leaves npm deps external.
+(`noExternal: [/^@tinyglow\//]`) and leaves npm deps external.
 
 ## 3. Tasks
 
@@ -333,7 +333,7 @@ plan assigns them explicitly (see 1.1 and 1.7). Same-owner tasks run in sequence
   `README.md` (how to create/run/revert, pg-boss schema note), scripts from 2.2. Everything
   idempotent: a second `pnpm db:migrate` is a no-op. Security: bootstrap never logs the password;
   RLS enabled on `worker_heartbeats` (section 2.7).
-- Inputs: 1.1. Done-when: against the dev `db` container (`DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight`):
+- Inputs: 1.1. Done-when: against the dev `db` container (`DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow`):
   `pnpm db:migrate` succeeds twice, `psql -c '\dx'` shows `vector` and `pgcrypto`, role
   `supabase_auth_admin` can `\dn auth`, `pnpm db:migrate:down 2` then `up` round-trips cleanly,
   `pnpm db:seed` exits 0.
@@ -342,7 +342,7 @@ plan assigns them explicitly (see 1.1 and 1.7). Same-owner tasks run in sequence
 
 - Owned: `packages/shared/**` (architect-defined shapes in 2.10; orchestrator approval implied by
   this plan).
-- Inputs: 1.1. Done-when: exports exactly the names in 2.10; `pnpm --filter @littlelight/shared
+- Inputs: 1.1. Done-when: exports exactly the names in 2.10; `pnpm --filter @tinyglow/shared
   typecheck` passes; unit tests (1.9) validate a sample healthz payload and the
   `JWT_SECRET`/`GOTRUE_JWT_SECRET` mismatch refinement.
 
@@ -353,14 +353,14 @@ plan assigns them explicitly (see 1.1 and 1.7). Same-owner tasks run in sequence
 - Build per 2.8. Config fails fast on missing/invalid env (zod `safeParse`, print the field names
   only). Pino redacts `req.headers.authorization` and `req.headers.cookie`. `/healthz` returns
   503 with `status: "degraded"` when either check fails; never echoes `DATABASE_URL` or S3 keys.
-- Inputs: 1.3. Done-when: `pnpm --filter @littlelight/api typecheck` passes; with the dev stack up,
+- Inputs: 1.3. Done-when: `pnpm --filter @tinyglow/api typecheck` passes; with the dev stack up,
   `curl -s http://localhost:3000/healthz` returns `{"status":"ok",...,"checks":{"db":{"ok":true..},"storage":{"ok":true..}}}`;
   stopping `storage` flips it to 503 within one request.
 
 ### 1.5 Worker skeleton (backend-engineer) — after 1.3 (may interleave with 1.4)
 
 - Owned: `apps/worker/**` except `apps/worker/Dockerfile` (devops) and `apps/worker/src/ai/**`
-  (ai-engineer; do not create). Build per 2.9. Uses `isAiConfigured` from `@littlelight/ai` (1.6);
+  (ai-engineer; do not create). Build per 2.9. Uses `isAiConfigured` from `@tinyglow/ai` (1.6);
   if 1.6 is not merged yet, build against the signature in 2.11.
 - Inputs: 1.3, 1.2 (table), 1.6 (type only). Done-when: with the dev stack up, `SELECT * FROM
   worker_heartbeats` shows one row per worker container refreshing every 10 s with
@@ -386,7 +386,7 @@ plan assigns them explicitly (see 1.1 and 1.7). Same-owner tasks run in sequence
 - Build per 2.12 and the Vite proxy/allowedHosts/polling rules in 2.4. Mobile-first at 375 px;
   44 px touch targets on the tab bar; no analytics or logging of user data.
 - Inputs: 1.1; `healthzResponseSchema` from 1.3 (shape fixed in 2.10, so work can start before
-  1.3 merges). Done-when: `pnpm --filter @littlelight/mobile-web build` emits `dist/index.html`
+  1.3 merges). Done-when: `pnpm --filter @tinyglow/mobile-web build` emits `dist/index.html`
   and `dist/.well-known/*`; on the dev stack `http://localhost:8080` renders the tab bar and the
   status component shows API `ok` and auth `ok`; `curl -s http://localhost:8080/api/healthz` and
   `curl -s http://localhost:8080/auth/health` succeed through the Vite proxy; `curl -s -H 'Host: web:8080'
@@ -429,7 +429,7 @@ plan assigns them explicitly (see 1.1 and 1.7). Same-owner tasks run in sequence
   up against `DATABASE_URL`, skipped when unset.
 - `e2e/smoke/dev-stack.sh` (bash + curl + `node -e` for JSON): the acceptance commands in
   section 4, exit non-zero on first failure; used by CI (1.10) and `pnpm smoke`.
-- Done-when: `pnpm test` green on the host; `DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight
+- Done-when: `pnpm test` green on the host; `DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow
   pnpm test:integration` green against the dev stack; `pnpm smoke` green against the dev stack.
 
 ### 1.10 CI (devops-engineer) — after 1.8 and 1.9
@@ -494,7 +494,7 @@ Run from the repo root (Docker Desktop running). `e2e/smoke/dev-stack.sh` automa
    curl -fsS "http://localhost:8025/api/v1/message/$ID" | grep -Eq '[0-9]{6}'
    ```
 5. Worker heartbeat and storage gating:
-   `docker compose -f docker-compose.dev.yml exec db psql -U postgres -d littlelight -c "select worker_id, storage_ok, now()-last_seen_at < interval '30 seconds' as fresh from worker_heartbeats"`
+   `docker compose -f docker-compose.dev.yml exec db psql -U postgres -d tinyglow -c "select worker_id, storage_ok, now()-last_seen_at < interval '30 seconds' as fresh from worker_heartbeats"`
    shows `t | t`. Then `docker compose -f docker-compose.dev.yml stop storage`; within 60 s
    `curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/healthz` is `503` and
    `docker compose -f docker-compose.dev.yml ps worker` shows `unhealthy`; `start storage` restores both.
@@ -505,7 +505,7 @@ Run from the repo root (Docker Desktop running). `e2e/smoke/dev-stack.sh` automa
    pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm test
    for f in apps/api apps/worker apps/mobile-web; do docker build --target prod -f $f/Dockerfile . ; done
    docker build -f packages/db/Dockerfile .
-   DATABASE_URL=postgres://postgres:dev@localhost:5432/littlelight pnpm test:integration
+   DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow pnpm test:integration
    pnpm smoke
    ```
    Then ask the user to push so `.github/workflows/ci.yml` runs for real.

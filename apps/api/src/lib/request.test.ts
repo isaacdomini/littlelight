@@ -35,11 +35,11 @@ describe("request facts", () => {
   });
 
   it("clientKind is native only when declared; unknown values are null for the CSRF check", () => {
-    expect(clientKindHeader(r({ "x-littlelight-client": "web" }))).toBe("web");
-    expect(clientKindHeader(r({ "x-littlelight-client": "NATIVE" }))).toBe("native");
-    expect(clientKindHeader(r({ "x-littlelight-client": "other" }))).toBeNull();
-    expect(clientKind(r({ "x-littlelight-client": "other" }))).toBe("web");
-    expect(clientKind(r({ "x-littlelight-client": "native" }))).toBe("native");
+    expect(clientKindHeader(r({ "x-tinyglow-client": "web" }))).toBe("web");
+    expect(clientKindHeader(r({ "x-tinyglow-client": "NATIVE" }))).toBe("native");
+    expect(clientKindHeader(r({ "x-tinyglow-client": "other" }))).toBeNull();
+    expect(clientKind(r({ "x-tinyglow-client": "other" }))).toBe("web");
+    expect(clientKind(r({ "x-tinyglow-client": "native" }))).toBe("native");
     expect(clientKind(r())).toBe("web");
   });
 

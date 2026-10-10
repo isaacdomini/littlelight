@@ -30,7 +30,7 @@ import {
   searchReconcileJobSchema,
   shareApplyJobSchema,
   shareReconcileJobSchema,
-} from "@littlelight/shared";
+} from "@tinyglow/shared";
 import type { Job, JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
 import type { AiPipeline, FlushResult, PollResult } from "./ai";
 import { errorCategory } from "./clients";
