@@ -16,6 +16,8 @@ export interface PutPartOptions {
   /** Bytes of this part sent so far. */
   onProgress?: (loaded: number) => void;
   signal?: AbortSignal;
+  /** Native whole-file PUTs: keep the transfer off the cellular network. */
+  wifiOnly?: boolean;
 }
 
 /** A picked or captured file on the device, copied into app-private storage (native only). */
@@ -25,6 +27,10 @@ export interface NativeFileRef {
   name: string;
   mime: string;
   size: number;
+  /** Lowercase hex SHA-256 when the platform already computed it (album sync). */
+  sha256?: string;
+  /** ISO capture time from the platform (album sync); a hint, the server re-reads EXIF. */
+  takenAt?: string;
 }
 
 export interface Uploader {

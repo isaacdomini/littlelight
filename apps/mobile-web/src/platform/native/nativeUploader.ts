@@ -14,7 +14,7 @@ import {
 // URLs carry `X-Amz-Signature` and paths are private: nothing here is ever logged.
 
 interface LittlelightUploaderPlugin {
-  upload(opts: { url: string; path: string }): Promise<{ id: string }>;
+  upload(opts: { url: string; path: string; wifiOnly?: boolean }): Promise<{ id: string }>;
   cancel(opts: { id: string }): Promise<void>;
   addListener(
     event: "progress",
@@ -84,7 +84,11 @@ async function putFile(url: string, file: NativeFileRef, opts: PutPartOptions = 
   const { uploader } = await load();
   let id: string;
   try {
-    ({ id } = await uploader.upload({ url, path: file.path }));
+    ({ id } = await uploader.upload({
+      url,
+      path: file.path,
+      ...(opts.wifiOnly ? { wifiOnly: true } : {}),
+    }));
   } catch {
     throw new PartUploadError(0);
   }

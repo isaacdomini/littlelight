@@ -7,7 +7,11 @@ import {
   type DataExportJob,
   dataExportJobSchema,
   dataExportSingletonKey,
+  type ImportGoogleJob,
   type IngestJob,
+  importGoogleJobSchema,
+  importGoogleSingletonKey,
+  importSweepJobSchema,
   ingestJobSchema,
   JOBS,
   type JobName,
@@ -32,6 +36,12 @@ import type { AiPipeline, FlushResult, PollResult } from "./ai";
 import { errorCategory } from "./clients";
 import type { WorkerConfig } from "./config";
 import { type DataExportDeps, handleDataExportJob } from "./export";
+import {
+  handleImportGoogleJob,
+  type ImportGoogleDeps,
+  type ImportSweepResult,
+  sweepImports,
+} from "./import";
 import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
@@ -88,8 +98,14 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // admin's export request committed, `singletonKey = exportId` (one queued/active job per export),
 // `retryLimit 1`, `retryDelay 60` (a storage/internal error re-queues the row once), 4-hour
 // expiry. One export at a time per worker process (`batchSize 1`, `localConcurrency 1`).
-// Fourteen queues in total. Every handler is wrapped by `wrapHandler` (Sentry capture with tags
-// `{service: "worker", queue}`, then rethrow: pg-boss semantics unchanged).
+//
+// Step 10 (docs/plans/step-10.md 2.3, 2.7): `import.google` is sent by the api once a Picker batch
+// turned `queued` (and re-sent by `import.sweep`), `singletonKey = batchId`, `retryLimit 2`,
+// `retryDelay 60` (storage/network trouble only), 2-hour expiry; one batch at a time per process
+// (`batchSize 1`, `localConcurrency 1`; the handler itself downloads `IMPORT_CONCURRENCY` items
+// at a time). `import.sweep` is an hourly cron singleton (`37 * * * *`, no retry: the next tick
+// is the retry). Sixteen queues in total. Every handler is wrapped by `wrapHandler` (Sentry
+// capture with tags `{service: "worker", queue}`, then rethrow: pg-boss semantics unchanged).
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -146,6 +162,13 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     retryDelay: 60,
     expireInSeconds: 14_400,
   },
+  [JOBS.importGoogle]: {
+    policy: "exclusive",
+    retryLimit: 2,
+    retryDelay: 60,
+    expireInSeconds: 7200,
+  },
+  [JOBS.importSweep]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 3000 },
 });
 
 /** Handlers per worker process for `photo.reindex` (docs/plans/step-7.md 2.7). */
@@ -158,6 +181,7 @@ export const SCHEDULES: ReadonlyArray<readonly [JobName, string]> = Object.freez
   [JOBS.ingestReconcile, "*/5 * * * *"],
   [JOBS.purgeTrash, "7 * * * *"],
   [JOBS.uploadsSweep, "23,53 * * * *"],
+  [JOBS.importSweep, "37 * * * *"],
 ] as const);
 
 export type ScheduleConfig = Pick<
@@ -359,6 +383,34 @@ export async function sendDataExport(
   return boss.send(JOBS.dataExport, data, dataExportSendOptions(data));
 }
 
+/**
+ * `import.google` send options: the same as the api's `IMPORT_GOOGLE_SEND_OPTIONS`, keyed by the
+ * batch id (one queued/active job per batch).
+ */
+export function importGoogleSendOptions(job: ImportGoogleJob): SendOptions {
+  return {
+    singletonKey: importGoogleSingletonKey(job),
+    retryLimit: 2,
+    retryDelay: 60,
+    expireInSeconds: 7200,
+  };
+}
+
+/** Validate and enqueue one `import.google` (sweep re-send, run-job `--enqueue`). Null when queued. */
+export async function sendImportGoogle(
+  boss: Pick<PgBoss, "send">,
+  job: ImportGoogleJob,
+): Promise<string | null> {
+  const data = importGoogleJobSchema.parse(job);
+  return boss.send(JOBS.importGoogle, data, importGoogleSendOptions(data));
+}
+
+/** Same options as the `import.sweep` queue (run-job `--enqueue`; cron ticks send no data). */
+export const IMPORT_SWEEP_SEND_OPTIONS: SendOptions = Object.freeze({
+  retryLimit: 0,
+  expireInSeconds: 3000,
+});
+
 /** Push settings of the worker (`pushEnvSchema`): the sender, the gap and the photos debounce. */
 export interface PushQueueDeps {
   sender: PushSender;
@@ -396,6 +448,13 @@ export interface QueueDeps {
    * tests written before the review fixes) the `data.export` queue gets no handler and jobs wait.
    */
   dataExport?: DataExportDeps;
+  /**
+   * Google Picker import (docs/plans/step-10.md 2.7) without `sendIngest` (wired here to this
+   * boss). `main.ts` always passes it; when omitted (unit tests written before step 10) the
+   * `import.google` queue gets no handler and jobs wait; `import.sweep` still runs (it needs only
+   * the pool and storage of `sweep`).
+   */
+  importGoogle?: Omit<ImportGoogleDeps, "sendIngest">;
   log: WorkerLog;
   ingestConcurrency: number;
 }
@@ -617,6 +676,28 @@ export async function handleShareReconcileJob(
   return deps.autoSharer.reconcile();
 }
 
+/**
+ * `import.sweep` handler (cron tick, no payload). A malformed payload is logged and dropped;
+ * errors propagate (the next tick is the retry).
+ */
+export async function handleImportSweepJob(
+  deps: Pick<QueueDeps, "sweep" | "log">,
+  boss: Pick<PgBoss, "send">,
+  job: AiJob,
+): Promise<ImportSweepResult | null> {
+  const parsed = importSweepJobSchema.safeParse(job.data ?? {});
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "import.sweep: invalid job payload, dropped");
+    return null;
+  }
+  return sweepImports({
+    pool: deps.sweep.pool,
+    storage: deps.sweep.storage,
+    sendImportGoogle: (j) => sendImportGoogle(boss, j),
+    log: deps.log,
+  });
+}
+
 /** The `photo.ingest` handler for one job (exported for run-job and tests). */
 export async function handleIngestJob(
   deps: IngestDeps,
@@ -832,4 +913,28 @@ export async function startWorkers(
       }),
     );
   }
+  // Step 10 (docs/plans/step-10.md 2.7): one Picker batch at a time per process (the handler runs
+  // `IMPORT_CONCURRENCY` downloads); metadata for the retry count (the last attempt fails the
+  // batch instead of rethrowing). Booked photos go through the normal `photo.ingest`.
+  const importDeps = deps.importGoogle;
+  if (importDeps) {
+    const withIngest: ImportGoogleDeps = {
+      ...importDeps,
+      sendIngest: (job) => sendIngest(boss, job),
+    };
+    await boss.work(
+      JOBS.importGoogle,
+      { pollingIntervalSeconds: 2, batchSize: 1, localConcurrency: 1, includeMetadata: true },
+      wrapHandler(JOBS.importGoogle, async (jobs: JobWithMetadata<unknown>[]) => {
+        for (const job of jobs) await handleImportGoogleJob(withIngest, job);
+      }),
+    );
+  }
+  await boss.work(
+    JOBS.importSweep,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.importSweep, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleImportSweepJob(deps, boss, job);
+    }),
+  );
 }

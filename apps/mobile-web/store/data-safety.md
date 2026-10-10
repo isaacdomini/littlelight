@@ -23,13 +23,19 @@ Global answers:
 Not collected: contacts, financial info, health info, web browsing, audio, files and docs, calendar,
 device or other IDs, app info and performance (crash logs, diagnostics), advertising data.
 
+Google Photos import (web, Android and iPhone): the user connects a Google account and chooses photos
+in Google's own picker, which opens in the system browser. The server keeps an encrypted refresh token
+(Personal info > User IDs, already declared). Photos are Photos and videos > Photos, already declared.
+Google strips location from downloads, so it adds no Location data. Not shared. The Android app has
+**no auto-sync**, so there is no new permission.
+
 Other Console declarations:
 
 - Ads: **No ads**. Target audience: 18+. News app / government / health app: No.
 - Permissions declaration: only `INTERNET`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE` and
   `FOREGROUND_SERVICE_DATA_SYNC`. The foreground service type `dataSync` is used for visible photo
   uploads ("Uploading N photos"); describe it that way in the foreground-service declaration form.
-  No photo/media or location permissions (system Photo Picker).
+  No photo/media or location permissions (system Photo Picker). Google Photos import adds none: it goes through the browser and the server, so `READ_MEDIA_IMAGES` and `READ_MEDIA_VISUAL_USER_SELECTED` stay removed from the manifest.
 - Photo and video permissions policy: not applicable (no READ_MEDIA_*).
 - Push token: stored against the account for notifications; if Play review asks, it is "Device or
   other IDs, App functionality, not shared". Declare it if you want to be conservative (same

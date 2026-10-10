@@ -93,9 +93,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 19 migrations applied"
+step "3a. database: all 20 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "19" ] || fail "expected 19 applied migrations, found $MIGS"
+[ "$MIGS" = "20" ] || fail "expected 20 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -208,7 +208,7 @@ echo "api/worker use their own MinIO service accounts; worker queues ready; logs
 step "5e. step 6: AI wiring (queues line, provider line), seeded bath description, paid-tier gate, no keys in clients"
 # step 6 added 2 queues (10), step 7/8 more (12), step 9 push.notify (13), review fixes data.export (14):
 # the boot line carries the total
-grep -Eq 'queues: 14' <<<"$WLOG" || fail "worker log does not show 14 queues"
+grep -Eq 'queues: 16' <<<"$WLOG" || fail "worker log does not show 16 queues"
 W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
 W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
 if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
@@ -426,6 +426,16 @@ for u in $(printf '%s' "$DEMO_URLS" | json 'Object.values(j.urls).map(x=>x.thumb
 done
 [ "$(printf '%s' "$DEMO_URLS" | json 'Object.keys(j.urls).length')" = "12" ] || fail "expected thumbnail URLs for 12 demo photos"
 echo "association files, CORS, native sign-in, push device route and 12 demo thumbnails ok"
+
+step "5h2. step 10: photo import: google-fake healthy, provider fake, tables locked down, connection endpoint"
+GPORT="${GOOGLE_FAKE_PORT:-18099}"
+[ "$(curl -fsS "http://localhost:$GPORT/healthz" | tr -d ' \n')" = '{"status":"ok"}' ] || fail "google-fake is not healthy on :$GPORT"
+[ "$("${DC[@]}" exec -T api printenv GOOGLE_IMPORT_PROVIDER | tr -d '\r')" = "fake" ] || fail "api GOOGLE_IMPORT_PROVIDER is not fake"
+[ "$("${DC[@]}" exec -T worker printenv GOOGLE_IMPORT_PROVIDER | tr -d '\r')" = "fake" ] || fail "worker GOOGLE_IMPORT_PROVIDER is not fake"
+[ "$("${PSQL[@]}" -c "select count(*) from pg_class where relname in ('import_sources','google_accounts','import_batches','import_items') and relrowsecurity and relforcerowsecurity")" = "4" ] || fail "the four import tables are not all FORCE RLS"
+[ "$("${PSQL[@]}" -c "select has_column_privilege('authenticated','public.google_accounts','refresh_token_enc','SELECT')")" = "f" ] || fail "authenticated can read refresh_token_enc"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/me/import/google/connection")" = "401" ] || fail "the connection endpoint answers without a session"
+echo "google-fake healthy, provider fake, import tables forced RLS, token column locked, connection endpoint needs a session"
 
 step "5i. review fixes: member_profiles view, data_exports locked down, Sentry silent without a DSN, worker mail, no CSP in dev, export routes"
 [ "$("${PSQL[@]}" -c "select relkind from pg_class where relname='member_profiles' and relnamespace='public'::regnamespace")" = "v" ] \

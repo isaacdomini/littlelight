@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { aiOverrideFieldSchema } from "./ai-description";
 import { aiUsageMonthSchema } from "./api/ai";
+import { importBatchKindSchema, importSourceKindSchema } from "./api/imports";
 import { SHARE_LINK_MAX_TTL_HOURS } from "./constants";
 import {
   aiSpendKindSchema,
@@ -166,7 +167,7 @@ export function userAgentLabel(ua: string | null | undefined): string {
  * `audit_log.event` values: step 3 (auth, invites, members, babies, account), step 4 (uploads,
  * photo moderation, purge, safety), step 5 (details, milestones, measurements), step 6 (AI
  * overrides, AI retry, plan changes, AI budget), step 7 (chat history cleared), step 8
- * (share links) and the review-fixes batch (data exports).
+ * (share links), the review-fixes batch (data exports) and step 10 (photo import).
  */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
@@ -252,6 +253,25 @@ export const AUDIT_EVENTS = [
   "export.expired",
   /** The hourly sweep deleted the ZIP (`actor_user_id` NULL); metadata `{export_id}`. */
   "export.purged",
+  // Photo import (docs/plans/step-10.md 2.3, 2.6, 2.7). The row's `baby_id` names the baby where
+  // there is one; metadata never carries a token, a Google session or item id, a URL, a file
+  // name, an album title, a device label or a PHAsset identifier.
+  /** An admin turned on Apple album sync on a device; metadata `{source_id, kind}`. */
+  "import.source_created",
+  /** A sync row was removed (owner or baby admin); metadata `{source_id}`. */
+  "import.source_deleted",
+  /** The user connected Google Photos (no `baby_id`); no metadata. */
+  "import.google_connected",
+  /** The user disconnected Google Photos (token revoked best effort; no `baby_id`); no metadata. */
+  "import.google_disconnected",
+  /** A Picker batch was created; metadata `{batch_id, kind}`. */
+  "import.batch_created",
+  /** The worker finished a batch (`actor_user_id` NULL); metadata `{batch_id, count, duplicates, failed}`. */
+  "import.batch_finished",
+  /** The requester cancelled a batch; metadata `{batch_id}`. */
+  "import.batch_cancelled",
+  /** The worker gave up on a batch (`actor_user_id` NULL); metadata `{batch_id}`. */
+  "import.batch_failed",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -292,10 +312,18 @@ export const auditMetadataSchema = z.strictObject({
   measurement_id: z.uuid().optional(),
   /**
    * Measurement kind (`weight`/`height`/`head`), never the value; or, on `ai.budget_exceeded`
-   * (step 7), the AI spend kind that hit the budget (`embed`/`chat`/`rerank`). The two value
-   * sets do not overlap.
+   * (step 7), the AI spend kind that hit the budget (`embed`/`chat`/`rerank`); or, on
+   * `import.source_created` / `import.batch_created` (step 10), the import kind
+   * (`apple_photos`/`google_picker`). The value sets do not overlap.
    */
-  kind: z.union([measurementKindSchema, aiSpendKindSchema]).optional(),
+  kind: z
+    .union([
+      measurementKindSchema,
+      aiSpendKindSchema,
+      importSourceKindSchema,
+      importBatchKindSchema,
+    ])
+    .optional(),
   /** `baby.plan_changed`: the new plan. */
   plan: planSchema.optional(),
   /** `ai.override_*`: which AI field, never its value. */
@@ -316,5 +344,9 @@ export const auditMetadataSchema = z.strictObject({
   export_id: z.uuid().optional(),
   /** `export.requested`: whether GPS columns were asked for (never a coordinate). */
   include_location: z.boolean().optional(),
+  /** `import.source_*`: the `import_sources` row (never its album title, device label or device id). */
+  source_id: z.uuid().optional(),
+  /** `import.batch_*`: the `import_batches` row (never the Google session id). */
+  batch_id: z.uuid().optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

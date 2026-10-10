@@ -4,16 +4,33 @@ import Capacitor
 // Background raw-body PUT uploader (docs/plans/step-9.md 2.6).
 //
 // Bridge `LittlelightUploader`:
-//   upload({ url, path }) -> { id }      PUT the file bytes (no multipart, no extra headers)
-//   cancel({ id })                       cancel a running upload
+//   upload({ url, path, wifiOnly? }) -> { id }
+//                                        PUT the file bytes (no multipart, no extra headers).
+//                                        wifiOnly: true uses a second background session that never
+//                                        uses cellular (com.tesarsoft.littlelight.upload.wifi).
+//   cancel({ id })                       cancel a running upload (searches both sessions)
 //   events: progress { id, sent, total } | done { id, status } | error { id, message }
 //
 // Privacy: the presigned URL (carries X-Amz-Signature) and the file path are never logged and are
 // not stored anywhere by this code. Error messages carry only an NSURLError code.
 
 final class LLUploadSession: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
-    static let shared = LLUploadSession()
     static let identifier = "com.tesarsoft.littlelight.upload"
+    static let wifiIdentifier = "com.tesarsoft.littlelight.upload.wifi"
+    static let shared = LLUploadSession(identifier: identifier, cellular: true)
+    static let wifi = LLUploadSession(identifier: wifiIdentifier, cellular: false)
+    static let all = [shared, wifi]
+
+    static func forIdentifier(_ id: String) -> LLUploadSession? { all.first { $0.identifier == id } }
+
+    let identifier: String
+    private let cellular: Bool
+
+    private init(identifier: String, cellular: Bool) {
+        self.identifier = identifier
+        self.cellular = cellular
+        super.init()
+    }
 
     private let lock = NSLock()
     private var buffered: [(String, [String: Any])] = []
@@ -22,7 +39,9 @@ final class LLUploadSession: NSObject, URLSessionDataDelegate, URLSessionTaskDel
     private var lastProgress: [String: Date] = [:]
 
     private(set) lazy var session: URLSession = {
-        let config = URLSessionConfiguration.background(withIdentifier: LLUploadSession.identifier)
+        let config = URLSessionConfiguration.background(withIdentifier: identifier)
+        config.allowsCellularAccess = cellular
+        config.waitsForConnectivity = true
         config.sessionSendsLaunchEvents = true
         config.isDiscretionary = false
         config.httpShouldSetCookies = false
@@ -102,9 +121,12 @@ public class LittlelightUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     override public func load() {
-        LLUploadSession.shared.attach { [weak self] name, data in
-            // done / error are retained until the JS side registers a listener.
-            self?.notifyListeners(name, data: data, retainUntilConsumed: name != "progress")
+        for session in LLUploadSession.all {
+            session.attach { [weak self] name, data in
+                // done / error are retained until the JS side registers a listener.
+                self?.notifyListeners(name, data: data, retainUntilConsumed: name != "progress")
+            }
+            _ = session.session  // reattach to tasks that outlived the previous process
         }
     }
 
@@ -129,7 +151,8 @@ public class LittlelightUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
         request.httpMethod = "PUT"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let id = UUID().uuidString
-        let task = LLUploadSession.shared.session.uploadTask(with: request, fromFile: fileURL)
+        let target = (call.getBool("wifiOnly") ?? false) ? LLUploadSession.wifi : LLUploadSession.shared
+        let task = target.session.uploadTask(with: request, fromFile: fileURL)
         task.taskDescription = id
         task.resume()
         call.resolve(["id": id])
@@ -137,15 +160,21 @@ public class LittlelightUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func cancel(_ call: CAPPluginCall) {
         guard let id = call.getString("id") else { call.reject("bad-args"); return }
-        LLUploadSession.shared.session.getAllTasks { tasks in
-            tasks.filter { $0.taskDescription == id }.forEach { $0.cancel() }
-            call.resolve()
+        let group = DispatchGroup()
+        for s in LLUploadSession.all {
+            group.enter()
+            s.session.getAllTasks { tasks in
+                tasks.filter { $0.taskDescription == id }.forEach { $0.cancel() }
+                group.leave()
+            }
         }
+        group.notify(queue: .main) { call.resolve() }
     }
 }
 
 final class LittlelightViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(LittlelightUploaderPlugin())
+        bridge?.registerPluginInstance(LittlelightPhotoSyncPlugin())
     }
 }

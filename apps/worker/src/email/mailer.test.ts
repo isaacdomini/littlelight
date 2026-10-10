@@ -79,7 +79,7 @@ describe("createExportMailer", () => {
     MAIL_FROM: "noreply@littlelight.test",
   };
 
-  it("sends from MAIL_FROM to the recipient and logs the template and message id only", async () => {
+  it("sends from MAIL_FROM to the recipient and logs the template only", async () => {
     sendMail.mockResolvedValue({ messageId: "<abc@mail>" });
     const log = recordingLog();
     const mailer = createExportMailer(smtp, log);
@@ -92,7 +92,7 @@ describe("createExportMailer", () => {
     expect(log.lines).toEqual([
       {
         level: "info",
-        obj: { template: "export_ready", messageId: "<abc@mail>" },
+        obj: { template: "export_ready" },
         msg: "mail sent",
       },
     ]);

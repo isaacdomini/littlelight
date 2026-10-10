@@ -4,6 +4,7 @@ import {
   EMBED_DIMS,
   encryptionEnvSchema,
   exportEnvSchema,
+  googleImportEnvSchema,
   ingestEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
@@ -38,6 +39,11 @@ import { z } from "zod";
 // (`sentryEnvSchema`: `SENTRY_DSN` unset ⇒ off) and the api's SMTP settings (`mailEnvSchema`) for
 // the export notices. SMTP is required in production (boot fails without it, like the api) and
 // optional elsewhere: without `SMTP_HOST` the export still completes and logs `emailed: false`.
+// Step 10 (docs/plans/step-10.md 2.3, 2.7, D6, D7) adds `googleImportEnvSchema` as-is:
+// `GOOGLE_IMPORT_PROVIDER` (none|fake|live; `fake` fails boot in production, `live` needs the
+// client id + secret), the fake's internal URL, the download host allow-list
+// (`GOOGLE_IMPORT_MEDIA_HOSTS`) and `IMPORT_CONCURRENCY` (downloads in flight per batch). The
+// client secret is a secret: never logged.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -57,6 +63,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof workerShareEnvSchema> &
   z.output<typeof pushEnvSchema> &
   z.output<typeof exportEnvSchema> &
+  z.output<typeof googleImportEnvSchema> &
   z.output<typeof sentryEnvSchema> &
   Partial<MailEnv> &
   z.output<typeof logEnvSchema>;
@@ -151,6 +158,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     workerShareEnvSchema,
     pushEnvSchema,
     exportEnvSchema,
+    googleImportEnvSchema,
     sentryEnvSchema,
     ...(mailRequired(env) ? [mailEnvSchema] : []),
     embedDimsGuardSchema,

@@ -38,8 +38,10 @@ describe("JOBS", () => {
       shareReconcile: "share.reconcile",
       pushNotify: "push.notify",
       dataExport: "data.export",
+      importGoogle: "import.google",
+      importSweep: "import.sweep",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(14);
+    expect(new Set(Object.values(JOBS)).size).toBe(16);
   });
 });
 

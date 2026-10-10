@@ -46,7 +46,12 @@ describe.skipIf(!databaseUrl)("account deletion", () => {
       const body = deletionPreviewResponseSchema.parse(
         (await h.inject(u, "GET", "/me/deletion-preview")).json(),
       );
-      expect(body).toEqual({ blockingBabies: [], babiesKept: [], freshSignIn: false });
+      expect(body).toEqual({
+        googlePhotosConnected: false,
+        blockingBabies: [],
+        babiesKept: [],
+        freshSignIn: false,
+      });
       expect((await h.inject(null, "GET", "/me/deletion-preview")).statusCode).toBe(401);
     });
 

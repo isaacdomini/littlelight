@@ -111,11 +111,14 @@ export function tsType(pgType: string): string {
   }
 }
 
-/** `CHECK ((col = ANY (ARRAY['a'::text, 'b'::text])))` → `{ column, values }`; otherwise null. */
+/**
+ * `CHECK ((col = ANY (ARRAY['a'::text, 'b'::text])))` → `{ column, values }`; also the
+ * single-value form Postgres stores for `col IN ('a')`: `CHECK ((col = 'a'::text))`. Otherwise null.
+ */
 export function parseEnumCheck(definition: string): { column: string; values: string[] } | null {
-  const match = /^CHECK \(\((\w+) = ANY \(\(?ARRAY\[(.*)\]\)?(?:::text\[\])?\)\)\)$/.exec(
-    definition,
-  );
+  const match =
+    /^CHECK \(\((\w+) = ANY \(\(?ARRAY\[(.*)\]\)?(?:::text\[\])?\)\)\)$/.exec(definition) ??
+    /^CHECK \(\((\w+) = ('(?:[^']|'')*'::(?:text|character varying))\)\)$/.exec(definition);
   if (!match) return null;
   const column = match[1];
   const body = match[2];

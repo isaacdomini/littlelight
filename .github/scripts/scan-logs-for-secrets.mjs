@@ -31,6 +31,21 @@
 //               pino-pretty (`lat: 40.7`) form: lat, lng, latitude, longitude, gps_lat, gps_lng
 //               (a "[redacted]" censor, null or a boolean such as `includeLocation` is fine)
 //   export-key  a data-export object key `babies/<uuid>/exports/<uuid>.zip` (also URL-encoded)
+// Photo-import patterns (docs/plans/step-10.md 2.3 TELEMETRY_SCRUB_PATTERNS, 2.9, 4.3 step 10;
+// task 10.14), for the import gate's api + worker + google-fake logs:
+//   google-access-token   `ya29.<8+ base64url>` (a real Google OAuth access token)
+//   google-refresh-token  `1//<8+ base64url>` not preceded by a word char, `/` or `:` (so `http://`,
+//                         `v1//` and `:1//` paths do not match)
+//   google-auth-code      `4/0A<20+ base64url>` (a real Google authorization code)
+//   fake-google-token     `fake-access-…`, `fake-refresh-…`, `fake-code-…` (the fake's token shapes)
+//   google-media-url      `googleusercontent.com/<path>` (a Picker baseUrl; the bare host name, e.g.
+//                         a configured host suffix, is fine)
+//   picker-url            `photospicker.googleapis.com/v1/sessions|mediaItems/…`,
+//                         `photos.google.com/picker/…`, or a fake `/picker/<session id>` path
+//   fake-media-path       `/media/<item id>` (the fake's baseUrl path; no api route has it)
+//   picker-uri-field      a `pickerUri` / `baseUrl` field with a real value (a "[redacted]" censor,
+//                         null or empty is fine)
+//   native-upload-path    `ll-uploads/<file>` (the iOS upload cache)
 // Only file:line and the pattern name are printed, never the matching text. `--require` makes the
 // scan non-vacuous: each regex must match somewhere in the scanned logs (e.g. `push\.notify`
 // proves the worker's push jobs ran while the tap was on). ANSI colour codes are stripped first.
@@ -87,6 +102,21 @@ const PATTERNS = [
     /(?<![A-Za-z0-9_])["']?(lat|lng|latitude|longitude|gps_lat|gps_lng)["']?\s*[:=]\s*["']?-?\d/i,
   ],
   ["export-key", new RegExp(`babies(?:/|%2F)${UUID}(?:/|%2F)exports(?:/|%2F)${UUID}\\.zip`, "i")],
+  ["google-access-token", /(?<![A-Za-z0-9_])ya29\.[A-Za-z0-9_-]{8,}/],
+  ["google-refresh-token", /(?<![\w/:])1\/\/[A-Za-z0-9_-]{8,}/],
+  ["google-auth-code", /(?<![\w/.])4\/0A[A-Za-z0-9_-]{20,}/],
+  ["fake-google-token", /(?<![A-Za-z0-9_])fake-(?:access|refresh|code)-[A-Za-z0-9_-]{4,}/],
+  ["google-media-url", /googleusercontent\.com(?::\d+)?\/(?!\[redacted\])[^\s"'<>]+/i],
+  [
+    "picker-url",
+    /photospicker\.googleapis\.com\/v1\/(?:sessions|mediaItems)[/?][^\s"'<>]|photos\.google\.com\/picker\/[^\s"'<>]|\/picker\/[A-Za-z0-9_-]{6,}/i,
+  ],
+  ["fake-media-path", /\/media\/[A-Za-z0-9][\w-]*/],
+  [
+    "picker-uri-field",
+    /(?<![A-Za-z0-9_])["']?(pickerUri|baseUrl|picker_uri|base_url)["']?\s*[:=]\s*(?!["']?\[redacted\])(?!["']?\s*[,}\]]|\s*$|null\b)["']?[^\s"',}]/i,
+  ],
+  ["native-upload-path", /(?<![\w-])ll-uploads\/[^\s"'<>]+/],
 ];
 
 const files = [];
@@ -143,5 +173,5 @@ required.forEach((re, k) => {
 });
 if (fail) process.exit(1);
 console.log(
-  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value or export key in the logs`,
+  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL or upload-cache path in the logs`,
 );

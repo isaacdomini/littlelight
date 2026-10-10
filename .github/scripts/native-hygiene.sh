@@ -19,6 +19,18 @@
 #      non-comment occurrence, with that value): Capacitor's debug logging prints plugin call
 #      arguments (tokens, presigned URLs) into logcat / the Xcode console.
 #   4. No console.log / console.debug in apps/mobile-web/src/platform/native (tests included).
+#   5. Album sync background refresh (docs/plans/step-10.md 2.4): both iOS plists (Info.plist and
+#      Info-Debug.plist) carry UIBackgroundModes with `fetch` and
+#      BGTaskSchedulerPermittedIdentifiers with exactly the SYNC_BG_TASK_ID of
+#      packages/shared/src/imports.ts (so the id the app registers is the one iOS permits).
+#   6. The Photos permission prompt appears only on the album-sync enable path (step-10.md 10.14):
+#      every non-test, non-comment line of apps/mobile-web/src naming `requestAuthorization`
+#      is one of the six allow-listed lines below (the plugin interface, the manager method and
+#      its single plugin call, the native facade, the one internal caller, and the setup
+#      sheet's "Allow access" handler); `this.requestAuthorization(` occurs exactly once
+#      (grep -c = 1) and inside `async enable(`, and the setup-sheet call sits in its `allow`
+#      handler. On the native side PHPhotoLibrary.requestAuthorization occurs exactly once in
+#      ios/App/App/*.swift, in LittlelightPhotoSync.swift.
 #
 # The merged Android manifest's forbidden-permission check needs a Gradle build and runs in the
 # android-debug job (.github/scripts/check-android-manifest.mjs).
@@ -152,5 +164,117 @@ case "$rc" in
     fail=1
     ;;
 esac
+
+# 5. Background-refresh plist keys, both plists, id = SYNC_BG_TASK_ID.
+SHARED_IMPORTS=packages/shared/src/imports.ts
+IOS_APP=apps/mobile-web/ios/App/App
+task_id="$(sed -nE 's/^export const SYNC_BG_TASK_ID = "([^"]+)";.*/\1/p' "$SHARED_IMPORTS" 2>/dev/null)"
+if [ -z "$task_id" ]; then
+  echo "::error::SYNC_BG_TASK_ID not found in $SHARED_IMPORTS"
+  fail=1
+fi
+# plist_array <file> <key>: the <string> values of the array right after <key>KEY</key>, one per line.
+plist_array() {
+  awk -v key="<key>$2</key>" '
+    index($0, key) { on = 1; next }
+    on && /<\/array>|<array\/>/ { exit }
+    on && /<key>/ { exit }
+    on {
+      rest = $0
+      while (match(rest, /<string>[^<]*<\/string>/)) {
+        print substr(rest, RSTART + 8, RLENGTH - 17)
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+  ' "$1"
+}
+for plist in "$IOS_APP/Info.plist" "$IOS_APP/Info-Debug.plist"; do
+  what="$plist: UIBackgroundModes has fetch, BGTaskSchedulerPermittedIdentifiers = [$task_id]"
+  if [ ! -f "$plist" ]; then
+    echo "::error::$plist is missing"
+    fail=1
+    continue
+  fi
+  modes="$(plist_array "$plist" UIBackgroundModes)"
+  ids="$(plist_array "$plist" BGTaskSchedulerPermittedIdentifiers)"
+  if [ -n "$task_id" ] && printf '%s\n' "$modes" | grep -qx 'fetch' && [ "$ids" = "$task_id" ]; then
+    echo "ok: $what"
+  else
+    echo "  UIBackgroundModes: [$(printf '%s' "$modes" | tr '\n' ' ')] BGTaskSchedulerPermittedIdentifiers: [$(printf '%s' "$ids" | tr '\n' ' ')]"
+    echo "::error::$what"
+    fail=1
+  fi
+done
+
+# 6. The Photos permission prompt: allow-listed call sites only (path: trimmed line).
+PHOTO_SYNC_TS="$NATIVE/photoSync.ts"
+SETUP_SHEET=apps/mobile-web/src/components/import/SetupSyncSheet.tsx
+PROMPT_ALLOWED="$(cat <<'ALLOWED'
+apps/mobile-web/src/platform/native/photoSync.ts: requestAuthorization(): Promise<{ status: AuthStatus }>;
+apps/mobile-web/src/platform/native/photoSync.ts: async requestAuthorization(): Promise<AuthStatus> {
+apps/mobile-web/src/platform/native/photoSync.ts: return (await p.requestAuthorization()).status;
+apps/mobile-web/src/platform/native/photoSync.ts: if ((await this.requestAuthorization()) !== "authorized") {
+apps/mobile-web/src/platform/native/photoSync.ts: requestAuthorization: () => call((p) => p.requestAuthorization()),
+apps/mobile-web/src/components/import/SetupSyncSheet.tsx: apply(await photoSync.requestAuthorization());
+ALLOWED
+)"
+what="requestAuthorization in apps/mobile-web/src only on the allow-listed lines (album-sync enable path)"
+for f in "$PHOTO_SYNC_TS" "$SETUP_SHEET"; do
+  [ -f "$f" ] || {
+    echo "::error::$f is missing"
+    fail=1
+  }
+done
+hits="$(grep -rn --exclude='*.test.ts' --exclude='*.test.tsx' 'requestAuthorization' apps/mobile-web/src)"
+rc=$?
+if [ "$rc" -gt 1 ]; then
+  echo "::error::grep failed (exit $rc) while checking: $what"
+  fail=1
+else
+  code_hits="$(printf '%s\n' "$hits" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' | grep -v '^$' \
+    | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*/\1: /; s/[[:space:]]+$//' || true)"
+  unlisted=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$PROMPT_ALLOWED" | grep -qxF -- "$line" || unlisted="$unlisted$line"$'\n'
+  done <<<"$code_hits"
+  n_hits="$(printf '%s\n' "$code_hits" | grep -c . || true)"
+  n_allowed="$(printf '%s\n' "$PROMPT_ALLOWED" | grep -c .)"
+  if [ -n "$unlisted" ] || [ "$n_hits" -ne "$n_allowed" ]; then
+    printf '%s' "$unlisted"
+    echo "::error::$what (found $n_hits line(s), expected the $n_allowed allow-listed ones; unlisted above)"
+    fail=1
+  else
+    echo "ok: $what"
+  fi
+fi
+# The one internal caller sits in `async enable(` (nearest enclosing method header above it), and
+# the setup sheet's call in its `allow` handler.
+what="this.requestAuthorization( occurs once in $PHOTO_SYNC_TS, inside enable(); the sheet calls it from allow"
+n_this="$(grep -c 'this\.requestAuthorization(' "$PHOTO_SYNC_TS" 2>/dev/null || true)"
+in_enable="$(awk '
+  /^  (async )?[A-Za-z_][A-Za-z0-9_]*(<[^>]*>)?\(/ && !/^  (if|for|while|switch|return|catch|await)[ (]/ { m = $0; sub(/^  (async )?/, "", m); sub(/[(<].*/, "", m); method = m }
+  /this\.requestAuthorization\(/ { print method }
+' "$PHOTO_SYNC_TS" 2>/dev/null)"
+in_allow="$(awk '
+  /^  const [A-Za-z_][A-Za-z0-9_]* = / { h = $0; sub(/^  const /, "", h); sub(/ = .*/, "", h); handler = h }
+  /photoSync\.requestAuthorization\(/ { print handler }
+' "$SETUP_SHEET" 2>/dev/null)"
+if [ "$n_this" = "1" ] && [ "$in_enable" = "enable" ] && [ "$in_allow" = "allow" ]; then
+  echo "ok: $what"
+else
+  echo "  this.requestAuthorization count: ${n_this:-0}, enclosing method: ${in_enable:-none}, sheet handler: ${in_allow:-none}"
+  echo "::error::$what"
+  fail=1
+fi
+what="PHPhotoLibrary.requestAuthorization exactly once in $IOS_APP/*.swift, in LittlelightPhotoSync.swift"
+swift_hits="$(grep -nE 'PHPhotoLibrary\.requestAuthorization' "$IOS_APP"/*.swift | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)"
+if [ "$(printf '%s\n' "$swift_hits" | grep -c .)" -eq 1 ] && printf '%s\n' "$swift_hits" | grep -q '/LittlelightPhotoSync\.swift:'; then
+  echo "ok: $what"
+else
+  printf '%s\n' "$swift_hits" | cut -d: -f1,2
+  echo "::error::$what"
+  fail=1
+fi
 
 exit "$fail"

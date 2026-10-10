@@ -13,6 +13,7 @@ import { chatRoutes } from "./chat";
 import { type ApiConfig, chatSettings, nativeSettings, searchSettings } from "./config";
 import { createSmtpMailer, type Mailer } from "./email/mailer";
 import { exportsRoutes } from "./exports/routes";
+import { type ImportsRoutesOptions, importsRoutes } from "./imports";
 import { registerErrorHandling } from "./lib/errors";
 import { trustProxyHop } from "./lib/request";
 import { measurementsRoutes } from "./measurements/routes";
@@ -68,6 +69,11 @@ export interface BuildAppOptions {
   aiEnv?: AiEnvInput;
   /** Override logger options (tests usually pass `false`). */
   logger?: FastifyServerOptions["logger"];
+  /**
+   * Photo import overrides (tests): the Google client (`null` = provider `none`), its `fetch`,
+   * throttles. Default: built from `config` (docs/plans/step-10.md 2.6).
+   */
+  imports?: ImportsRoutesOptions;
 }
 
 /**
@@ -125,6 +131,16 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         // Step 9 (docs/plans/step-9.md 2.8): `POST /me/push-devices {token}` is covered by
         // `req.body.token` above; the app version is not secret but not request context either.
         "req.body.appVersion",
+        // Step 10 (docs/plans/step-10.md 2.6): the Google OAuth callback's code and state, and
+        // any Google token or capability URL a handler might ever log as an object field.
+        "req.query.code",
+        "req.query.state",
+        "*.refresh_token",
+        "*.access_token",
+        "*.refreshToken",
+        "*.accessToken",
+        "*.pickerUri",
+        "*.baseUrl",
       ],
       censor: "[redacted]",
     },
@@ -147,7 +163,11 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
  * Route modules, registered after auth so its `onRequest` hook (`request.auth`) covers them.
  * Auth-owned modules (`/auth/*`, invites, members, account) are registered by `registerAuth`.
  */
-function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
+function registerRoutes(
+  app: FastifyInstance,
+  config: ApiConfig,
+  imports: ImportsRoutesOptions = {},
+): void {
   healthzRoutes(app, {
     bucket: config.S3_BUCKET,
     service: SERVICE_NAME,
@@ -182,6 +202,9 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
   chatRoutes(app, searchChat);
   // Review fixes (docs/plans/review-fixes.md 2.5; PRD FR-10.1): admin-only album export.
   exportsRoutes(app);
+  // Step 10 (docs/plans/step-10.md 2.6): Apple album sync status, Google Photos connection and
+  // Picker batches. Decorates `app.googleImport` (null when GOOGLE_IMPORT_PROVIDER=none).
+  importsRoutes(app, imports);
 }
 
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */
@@ -249,7 +272,7 @@ export async function buildApp(opts: BuildAppOptions) {
   // search, `/babies`), and the viewer hook never reads `ll_access` or a GoTrue bearer.
   registerViewerAuth(app, config);
 
-  registerRoutes(app, config);
+  registerRoutes(app, config, opts.imports);
   // Admin share-link routes + viewer routes (`apps/api/src/sharing`, tasks 8.6/8.7). They read
   // `app.config` (`shareSettings`), `app.jobs.enqueueShareApply` and `app.signer`.
   await registerSharing(app);

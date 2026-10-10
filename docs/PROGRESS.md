@@ -612,3 +612,108 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - The GoTrue audit log keeps deleted users' emails (retention note only).
   - Still open from step 9: Android runtime gate, part B store work, real GitHub CI run.
 - **Commit**: review fixes: export, Sentry, RLS hardening
+
+## Step 10: Photo import (Apple Photos album sync + Google Photos Picker)
+
+- **Request (user, 2026-10-09)**: "automatically import photos with metadata from a google photos or
+  apple photos album". Platform limits: no server can watch either service's albums (Google removed
+  the Library API read scopes in 2025; there is no iCloud shared-album API).
+- **Built**:
+  - **Apple album sync (iPhone only).** In-house `LittlelightPhotoSync` plugin (PhotoKit):
+    - lists user albums
+    - exports the original resource (HEIC kept, EXIF + GPS intact) with a native SHA-256
+    - keeps an on-device ledger (asset ids never leave the phone; excluded from backup)
+    - exports into `Caches/ll-sync-export`
+    - uploads over a Wi-Fi-only background session
+    - runs on launch, resume, "Sync now" and best-effort `BGAppRefreshTask`
+
+    JS side:
+    - `PhotoSyncManager` feeds the `UploadManager` on a low-priority sync lane (2 slots, user
+      uploads first). It syncs newest first, 50 photos per foreground batch and 25 per background
+      wake. It pauses in Low Power Mode, under thermal pressure and on cellular (Wi-Fi only by
+      default), stops at the free-tier cap, and never deletes from Littlelight.
+    - UI: Upload → "Album sync" card → "Set up", and Settings → "Photo import". Parents only.
+    - Full Photos permission is requested only from setup.
+    - Demotion turns sync off; sign-out wipes the ledger.
+  - **Google Photos import (web, Android, iPhone).**
+    - Server-side OAuth (one web client, HMAC state JWT, picker scope only). The refresh token is
+      stored pgcrypto-encrypted, readable only through `service_role` or a SECURITY DEFINER worker
+      function. Access tokens live in memory only.
+    - Picker sessions are created and polled by the API. The worker job `import.google` lists and
+      downloads originals through a host allow-list (https only, no IPs, same-host redirects, at
+      most 2), with a size cap, staging, sha256 and mime sniffing. It books each photo through
+      `import_book_photo()`: an admin's photo is approved by them, a contributor's goes to pending;
+      duplicates and the free cap are handled. Videos are skipped.
+    - `import.sweep` re-sends stuck batches, expires abandoned pickers, fails orphaned batches and
+      cleans up staging.
+    - Disconnect and account deletion revoke at Google.
+    - UI: a "Google Photos" card on Upload and in Settings, an import sheet with progress and
+      results, a `/import/google/connected` return page, and a line on the deletion screen.
+    - A fake Google server (`google-fake`, host port `${GOOGLE_FAKE_PORT:-18099}`) is used in dev
+      and CI and refused in production.
+  - **Migration 20** (`import_sources`, `google_accounts`, `import_batches`, `import_items`; FORCE RLS,
+    rate limits, transition rules). 16 queues.
+  - **Store copy and privacy:**
+    - Review notes and privacy/Data Safety drafts updated, and `NATIVE.md` updated.
+    - Store descriptions mention importing from Apple Photos albums and Google Photos.
+    - A leftover "(LITTLELIGHT PLUS)" heading was removed.
+  - **Other:**
+    - The email logs no longer include `messageId`.
+    - Counts are formatted with thousands separators ("1,240").
+    - CI: import hygiene (worker never reads `google_accounts` or inserts `photos`, URL guard before
+      every fetch, fake refused in production, AI-path drift vs `b3f2b56`), Google token, media-URL
+      and picker patterns in the log scan, Google canaries in the compose-keys check, the import gate
+      in the dev-stack job, and 3 new required suites.
+- **Gate**: orchestrator ran:
+  - lint, typecheck, and share/native/ai/sentry/import hygiene;
+  - unit tests: 3,562/3,562;
+  - integration: 1,534/1,534 (49 files, 0 skipped);
+  - `pnpm e2e:import-gate` 42/42, share gate 50/50, push gate 23/23, web e2e 42/42, smoke;
+  - export gate: 37/40 on the first run (Maya's export hit `storage_error` right after the
+    integration suite had run against the dev DB), then 44/44 on rerun;
+  - iOS gate 55/55;
+  - iOS album-sync gate 41/41, after test-engineer made the sign-in keyboard-focus step robust (it
+    first failed at sign-in on a freshly erased simulator; then passed twice, including straight
+    after the iOS gate).
+
+  Test-engineer ran integration on fresh pgvector and MinIO (1,534/1,534) and the import gate three
+  times; devops ran actionlint and the negative tests.
+- **Decisions**:
+  - **User (2026-10-09/10):**
+    - build both import paths, as step 10, after the review fixes;
+    - full Photos permission only when sync is turned on;
+    - Apple sync for parents only; Google import for parents and helpers (helpers' photos pending);
+    - available on Free within the photo cap;
+    - Wi-Fi only by default;
+    - planner defaults D2–D20: never delete from Littlelight; no Android auto-sync; one web OAuth
+      client; Google strips GPS and the UI says so; a fake Picker in dev and CI.
+  - Encryption functions are `service_role` only. A demotion deletes the user's Apple sync rows.
+    Abandoned pickers auto-expire.
+  - `feature_unavailable` is 404. The contributor Apple upsert returns `forbidden`. The deletion
+    preview gains `googlePhotosConnected`.
+- **Open issues**:
+  - **Real Google use (user):**
+    - a Google Cloud project with the Photos Picker API;
+    - an OAuth consent screen with the `photospicker.mediaitems.readonly` scope, test users (7-day
+      tokens in Testing), then Google verification;
+    - a Web application client with redirect
+      `https://littlelight.tesarsoft.com/api/import/google/callback`;
+    - production `.env`: `GOOGLE_IMPORT_PROVIDER=live`, `GOOGLE_IMPORT_CLIENT_ID`,
+      `GOOGLE_IMPORT_CLIENT_SECRET`;
+    - a Google test account for the store review notes.
+
+    The first real run must confirm Google's download semantics (HEIC kept, capture date kept, GPS
+    stripped).
+  - **Real-device checks:** `BGAppRefresh` (LLDB `_simulateLaunchForTaskWithIdentifier`), Wi-Fi-only
+    on cellular, iCloud-only originals, and the limited-access flow. The native export download
+    (`Filesystem.downloadFile`) is also untested on a device.
+  - **Flaky:**
+    - the export gate right after the integration suite runs on the dev DB (seen twice, passes on
+      rerun);
+    - one unexplained iOS-gate run (48/51) right after the focus fix, which did not recur.
+  - Apple sync device label is a generic "iPhone"; Android has no album sync in v1.
+  - `syncFlag.ts` localStorage marker (`ll.sync.on` = "1") is allow-listed and needs a review sign-off.
+  - Port 8099 on this Mac is used by an unrelated process, so the fake is published on 18099.
+  - Still open from earlier: Android runtime gate, part B store work, Sentry DSNs, CSP enforcing, a
+    real GitHub CI run.
+- **Commit**: step 10: photo import

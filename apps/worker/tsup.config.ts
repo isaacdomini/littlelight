@@ -9,6 +9,9 @@ export default defineConfig({
     healthcheck: "src/healthcheck.ts",
     "run-job": "src/run-job.ts",
     "demo-media": "src/demo/demo-media.ts",
+    // Fake Google Picker server (docs/plans/step-10.md 2.9): dev Compose `google-fake` runs
+    // `node dist/import/google/fake-server.js`; refused with NODE_ENV=production.
+    "import/google/fake-server": "src/import/google/fake-server.ts",
   },
   format: ["esm"],
   platform: "node",

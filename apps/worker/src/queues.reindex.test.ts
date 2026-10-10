@@ -15,8 +15,8 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("reindex queue (step 5) in the fourteen-queue set", () => {
-  it("QUEUES has exactly the fourteen jobs, all exclusive except push.notify (short)", () => {
+describe("reindex queue (step 5) in the sixteen-queue set", () => {
+  it("QUEUES has exactly the sixteen jobs, all exclusive except push.notify (short)", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
       [
         "photo.ingest",
@@ -33,6 +33,8 @@ describe("reindex queue (step 5) in the fourteen-queue set", () => {
         "share.reconcile",
         "push.notify",
         "data.export",
+        "import.google",
+        "import.sweep",
       ].sort(),
     );
     for (const [name, q] of Object.entries(QUEUES))
@@ -49,9 +51,9 @@ describe("reindex queue (step 5) in the fourteen-queue set", () => {
     });
   });
 
-  it("reindex is not scheduled (only the three fixed crons are; AI and search crons come from config)", () => {
+  it("reindex is not scheduled (only the four fixed crons are; AI and search crons come from config)", () => {
     expect(SCHEDULES.map(([n]) => n)).not.toContain(JOBS.reindex);
-    expect(SCHEDULES).toHaveLength(3);
+    expect(SCHEDULES).toHaveLength(4);
   });
 
   it("reindexSendOptions keys the job by photo id with the queue's retry settings", () => {
@@ -77,7 +79,7 @@ describe("reindex queue (step 5) in the fourteen-queue set", () => {
     );
   });
 
-  it("startWorkers registers fourteen handlers; reindex runs batches of 25 through one indexer call", async () => {
+  it("startWorkers registers fifteen handlers (import.google needs its deps); reindex runs batches of 25 through one indexer call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;
@@ -114,7 +116,11 @@ describe("reindex queue (step 5) in the fourteen-queue set", () => {
       log,
       ingestConcurrency: 2,
     });
-    expect(registered.map((r) => r.name).sort()).toEqual(Object.values(JOBS).sort());
+    expect(registered.map((r) => r.name).sort()).toEqual(
+      Object.values(JOBS)
+        .filter((n) => n !== JOBS.importGoogle)
+        .sort(),
+    );
     const worker = registered.find((r) => r.name === JOBS.reindex);
     expect(worker?.options).toMatchObject({
       localConcurrency: REINDEX_CONCURRENCY,

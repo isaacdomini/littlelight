@@ -69,6 +69,19 @@ export const JOBS = {
    * `exclusive`, `retryLimit 1`, `retryDelay 60`, `expireInSeconds 14400`. No model call.
    */
   dataExport: "data.export",
+  /**
+   * On demand (`importGoogleJobSchema`, singleton key `batchId`): one Google Picker batch import
+   * (docs/plans/step-10.md 2.7). Sent by the api after the batch turned `queued` and re-sent by
+   * `import.sweep`; `exclusive`, `retryLimit 2`, `retryDelay 60`, `expireInSeconds 7200`. No model
+   * call.
+   */
+  importGoogle: "import.google",
+  /**
+   * Cron `37 * * * *`, singleton, no payload (`importSweepJobSchema`): expires abandoned picker
+   * sessions, re-sends stuck `queued` batches, fails stale `running` ones, cleans orphaned objects
+   * and applies item retention (docs/plans/step-10.md 2.7).
+   */
+  importSweep: "import.sweep",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -283,3 +296,42 @@ export type DataExportJob = z.infer<typeof dataExportJobSchema>;
 export function dataExportSingletonKey(job: DataExportJob): string {
   return job.exportId;
 }
+
+// Photo import (docs/plans/step-10.md 2.3, 2.7): `JOBS.importGoogle` / `JOBS.importSweep`; the
+// constants below are aliases kept for the producers.
+
+/**
+ * Queue name of one Google Picker batch import (`importGoogleJobSchema`). Sent by the api after
+ * the batch turned `queued` (commit first) and re-sent by `import.sweep`. Queue policy
+ * `exclusive`, `singletonKey = batchId` (`importGoogleSingletonKey`), `retryLimit 2`,
+ * `retryDelay 60`, `expireInSeconds 7200`. No model call: imported photos follow the ingest →
+ * reindex path, whose paid-tier gate is unchanged.
+ */
+export const IMPORT_GOOGLE_JOB = JOBS.importGoogle;
+
+/**
+ * Queue name of the hourly import sweep (`importSweepJobSchema`, cron `37 * * * *`, `exclusive`):
+ * expires abandoned picker sessions, re-sends stuck `queued` batches, fails stale `running` ones,
+ * deletes orphaned objects and finished items after 30 days.
+ */
+export const IMPORT_SWEEP_JOB = JOBS.importSweep;
+
+/**
+ * `import.google` payload: ids only (strict: never a token, a Google session or item id, a
+ * `baseUrl`, a file name or a time zone). The worker re-reads the batch (status, requester,
+ * `tz_hint`, `provider_session_id`) as `pipeline` at run time.
+ */
+export const importGoogleJobSchema = z.strictObject({
+  batchId: z.uuid(),
+  babyId: z.uuid(),
+});
+export type ImportGoogleJob = z.infer<typeof importGoogleJobSchema>;
+
+/** pg-boss `singletonKey` of an `import.google` job: the batch id (one queued/active job per batch). */
+export function importGoogleSingletonKey(job: ImportGoogleJob): string {
+  return job.batchId;
+}
+
+/** `import.sweep` payload: none (cron ticks send no data; handlers parse `job.data ?? {}`). */
+export const importSweepJobSchema = z.strictObject({});
+export type ImportSweepJob = z.infer<typeof importSweepJobSchema>;

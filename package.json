@@ -25,6 +25,8 @@
     "e2e:push-gate": "tsx e2e/native/push-gate.ts",
     "e2e:native-android": "tsx e2e/native/android-gate.ts",
     "e2e:native-ios": "bash e2e/native/ios-gate.sh",
+    "e2e:native-ios-sync": "bash e2e/native/ios-sync-gate.sh",
+    "e2e:import-gate": "tsx e2e/import/gate.ts",
     "e2e:perf": "playwright test -c e2e/playwright.perf.config.ts",
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @littlelight/db db:migrate",

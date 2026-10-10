@@ -6,6 +6,8 @@ import { useSignOut } from "../../auth/useSignOut";
 import { AppHeader } from "../../components/AppHeader";
 import { Button } from "../../components/ui";
 import { t } from "../../i18n";
+import { useGoogleConnection } from "../../lib/googleImport";
+import { useAppleSyncAvailable } from "../../lib/queries/imports";
 import { isNative } from "../../platform/platform";
 import { usePushKinds } from "./NotificationsPage";
 
@@ -15,9 +17,18 @@ export function SettingsPage() {
   const native = isNative();
   const kinds = usePushKinds();
   const { baby } = useCurrentBaby();
+  const appleSync = useAppleSyncAvailable();
+  // Google import: any member who can add photos, when the server offers it.
+  const google = useGoogleConnection(baby?.role === "admin" || baby?.role === "contributor");
+  const googleImport = google.data?.available === true;
   const rows: (readonly [string, string, string])[] = [
     ...(native && (kinds.shareViewed || kinds.photosAnalyzed)
       ? ([["settings-notifications", "/settings/notifications", t("push.settings.row")]] as const)
+      : []),
+    // Photo import: Google (admins and contributors) and Apple album sync (iPhone admins). The API
+    // enforces the roles too.
+    ...(appleSync || googleImport
+      ? ([["settings-import", "/settings/import", t("settings.import")]] as const)
       : []),
     // Data export is admin-only (the API enforces it too).
     ...(baby?.role === "admin"

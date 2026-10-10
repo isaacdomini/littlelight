@@ -38,7 +38,11 @@
 # to web, migrate, db-init or the backup job. Native apps (docs/plans/step-9.md 2.3, 2.5, 2.8):
 # push credentials (PUSH_PROVIDER, APNS_*, FCM_*) go to the worker only; the store-review
 # account (REVIEW_ACCOUNT_*) and the CORS allow-list (NATIVE_APP_ORIGINS) to the api only; the
-# api additionally gets PUSH_SHARE_DEBOUNCE_SEC (a delay, not a secret). A new app
+# api additionally gets PUSH_SHARE_DEBOUNCE_SEC (a delay, not a secret). Photo import
+# (docs/plans/step-10.md 2.10): GOOGLE_IMPORT_PROVIDER (default none) and the Google OAuth client
+# (GOOGLE_IMPORT_CLIENT_ID / GOOGLE_IMPORT_CLIENT_SECRET) go to api and worker only (x-app-env);
+# there is no fake Google service in production (`fake` is refused with NODE_ENV=production).
+# A new app
 # variable must be added to .env.example AND to the x-app-env anchor (or the service's own
 # block) below.
 #
@@ -140,6 +144,16 @@ x-app-env: &app-env
   # => NODE_ENV (production).
   SENTRY_DSN: ${SENTRY_DSN:-}
   SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+  # Google Photos import (docs/plans/step-10.md 2.3, 2.7, D18), api (OAuth, Picker sessions) and
+  # worker (token refresh, downloads) only: none (default; the import card says "not available")
+  # | live (needs both client values). `fake` is dev-only and refused here; no GOOGLE_IMPORT_FAKE_*
+  # value is passed. The secret is a Google "Web application" OAuth client secret: only api and
+  # worker merge this anchor, so web, migrate, db-init and backup never get it.
+  GOOGLE_IMPORT_PROVIDER: ${GOOGLE_IMPORT_PROVIDER:-none}
+  GOOGLE_IMPORT_CLIENT_ID: ${GOOGLE_IMPORT_CLIENT_ID:-}
+  GOOGLE_IMPORT_CLIENT_SECRET: ${GOOGLE_IMPORT_CLIENT_SECRET:-}
+  # Host suffixes a Picker media URL may point at (SSRF guard); empty = googleusercontent.com.
+  GOOGLE_IMPORT_MEDIA_HOSTS: ${GOOGLE_IMPORT_MEDIA_HOSTS:-}
 
 # Node services: non-root image user, no capabilities, read-only root filesystem.
 x-hardened: &hardened
@@ -477,6 +491,14 @@ services:
       SMTP_PASS: ${SMTP_PASS:?Set SMTP_PASS in .env}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       MAIL_FROM: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}}
+      # Photo import (docs/plans/step-10.md 2.7): Picker downloads in flight per import.google job
+      # (1-4). Each streams to /tmp (<= 100 MiB per file) before it goes to MinIO; see tmpfs.
+      IMPORT_CONCURRENCY: ${IMPORT_CONCURRENCY:-2}
+    # Read-only root (x-hardened); /tmp is the only writable path. Import staging needs at most
+    # IMPORT_CONCURRENCY x 100 MiB (400 MiB at the maximum of 4); 1 GiB leaves headroom for
+    # libvips temp files. tmpfs pages count against mem_limit below.
+    tmpfs:
+      - /tmp:size=1g
     volumes:
       # MinIO's data folder, read-only, only for statfs (objects are read through S3).
       - type: bind

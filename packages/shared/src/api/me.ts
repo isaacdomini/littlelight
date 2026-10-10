@@ -83,6 +83,8 @@ export const deletionPreviewResponseSchema = z.object({
   /** Babies that stay with the other admin after deletion. */
   babiesKept: z.array(z.object({ id: z.uuid(), name: z.string(), otherAdminName: z.string() })),
   freshSignIn: z.boolean(),
+  /** A Google Photos import connection exists; it is revoked at Google and removed on deletion. */
+  googlePhotosConnected: z.boolean().optional(),
 });
 export type DeletionPreviewResponse = z.infer<typeof deletionPreviewResponseSchema>;
 

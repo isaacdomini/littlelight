@@ -103,6 +103,48 @@ debug source set only.
 - Android release signing: `android/keystore.properties` (git-ignored) with `storeFile`,
   `storePassword`, `keyAlias`, `keyPassword`. Without it release tasks fail with a message.
 
+## Album sync (PhotoKit)
+
+iPhone only, parents only (the JS side decides). Plugin `LittlelightPhotoSync`
+(`ios/App/App/LittlelightPhotoSync.swift`, JS bridge `src/platform/native/photoSync.ts`). Calls:
+`authorizationStatus`, `requestAuthorization` (the only call that shows the Photos prompt, run only
+when a parent taps Set up), `listAlbums` (user albums only), `listPendingAssets`, `exportAssets`,
+`discardFiles`, `recordOutcomes`, `ledgerSummary`, `resetLedger`, `conditions`,
+`scheduleBackgroundRefresh`, `completeBackgroundTask`, and events `backgroundSync` and
+`backgroundSyncExpired`. It asks for full Photos access because reading an album's originals with
+EXIF and GPS needs it; only the chosen album is read and nothing is ever deleted.
+
+- Ledger: `Application Support/ll-sync/<sha256(albumId)>.json` records each asset outcome so nothing
+  is imported twice. No paths, names, URLs or identifiers are logged.
+- Export directory: originals are written to `Caches/ll-sync-export`, **not** `ll-uploads`. The
+  upload cleanup (`cleanup.ts`) sweeps `ll-uploads` for finished uploads; sharing it would let that
+  sweep delete files the sync still needs, and `discardFiles` refuses anything outside
+  `ll-sync-export`. Both directories are excluded from backup.
+- Wi-Fi session: the uploader has a second background `URLSession`
+  (`com.tesarsoft.littlelight.upload.wifi`, `allowsCellularAccess = false`). Sync uploads pass
+  `wifiOnly: true` unless the parent allows cellular. iCloud original downloads follow the system
+  cellular setting and are not controlled by the app.
+- Background refresh: `BGAppRefreshTask` id `com.tesarsoft.littlelight.sync` (listed in
+  `BGTaskSchedulerPermittedIdentifiers`). iOS decides when it runs, often never, so launch,
+  foreground and Sync now are the real triggers. The simulator cannot fire it from the shell. Run
+  the app from Xcode, pause, and at the LLDB prompt enter:
+  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.littlelight.sync"]`
+  then resume. Treat this as a manual check; unit tests cover the JS path.
+- XCUITest: the Photos alert is a system alert, so the e2e test taps it through
+  `XCUIApplication(bundleIdentifier: "com.apple.springboard")` and presses **Allow Full Access**
+  (not "Limited Access"; the app sets `PHPhotoLibraryPreventAutomaticLimitedAccessAlert`).
+  `simctl privacy booted grant photos com.tesarsoft.littlelight` is a shortcut that skips the alert.
+
+## Google import on devices
+
+Google Photos import connects a Google account, then uses Google's own picker. Google refuses OAuth
+and the picker inside embedded web views, so the app opens them with `@capacitor/browser`
+(SFSafariViewController on iOS, Custom Tabs on Android) and returns through the deep link. Do not
+swap this for an in-app WebView or a `window.open`. The server keeps an encrypted refresh token;
+downloads keep the capture date but Google removes the location. Android has no photo auto-sync and no
+media permission. For local development with the fake Google server run
+`adb reverse tcp:18099 tcp:18099 (the fake Google host port, `GOOGLE_FAKE_PORT`)` on the Android emulator (iOS Simulator shares the host network).
+
 ## Pitfalls
 
 Three iOS bugs have already been fixed. Do not reintroduce them.
@@ -129,7 +171,9 @@ cannot hang the UI. Keep them when refactoring.
 - Android: no media/location permissions (system Photo Picker); manifest removes them explicitly;
   backups and device transfer disabled. iOS: `PrivacyInfo.xcprivacy` declares collected data
   (no tracking); WebKit and `Caches/ll-*` are excluded from backup at launch.
-- `Info.plist` strings: photo library (read and add) and camera only.
+- `Info.plist` strings: photo library (read and add) and camera only. The read string is now shown only
+  when a parent turns on Album sync (full access); the regular upload uses the system picker.
+  Android is unchanged: still no media or location permission.
 
 ## iOS Debug-only surface
 

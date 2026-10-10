@@ -10,9 +10,10 @@ A CALM TIMELINE
 - Your photos grouped by your baby's age: first week, first month, six months and so on.
 - Photo-first design with large, quiet grids and a full-screen viewer.
 - Add photos from your library or take one with the camera. Uploads continue in the background.
+- Import from Apple Photos albums and from Google Photos.
 - Add milestones, measurements and notes to any photo.
 
-FIND ANY MOMENT (LITTLELIGHT PLUS)
+FIND ANY MOMENT
 - Search in your own words: "first smile", "grandma holding the baby", "beach in June".
 - Ask questions about your album and get answers with the matching photos.
 

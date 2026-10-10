@@ -348,6 +348,205 @@ export interface DataExportsInsert {
   last_downloaded_at?: Date | null;
 }
 
+export interface GoogleAccountsRow {
+  user_id: string;
+  refresh_token_enc: Buffer;
+  scope: string;
+  connected_at: Date;
+  last_used_at: Date | null;
+  refresh_failures: number;
+  needs_reconnect: boolean;
+  updated_at: Date;
+}
+
+export interface GoogleAccountsInsert {
+  user_id: string;
+  refresh_token_enc: Buffer;
+  scope: string;
+  connected_at?: Date;
+  last_used_at?: Date | null;
+  refresh_failures?: number;
+  needs_reconnect?: boolean;
+  updated_at?: Date;
+}
+
+export interface ImportBatchesRow {
+  id: string;
+  baby_id: string;
+  requested_by: string | null;
+  kind: "google_picker";
+  status: "picking" | "queued" | "running" | "done" | "failed" | "cancelled" | "expired";
+  error:
+    | "google_denied"
+    | "google_reconnect"
+    | "session_expired"
+    | "storage_error"
+    | "requester_not_member"
+    | "baby_trashed"
+    | "too_many_items"
+    | "internal"
+    | null;
+  provider_session_id: string | null;
+  poll_interval_sec: number;
+  picker_expires_at: Date | null;
+  last_polled_at: Date | null;
+  tz_hint: string | null;
+  items_total: number | null;
+  items_imported: number;
+  items_duplicate: number;
+  items_failed: number;
+  items_skipped: number;
+  cancel_requested_at: Date | null;
+  created_at: Date;
+  started_at: Date | null;
+  finished_at: Date | null;
+  updated_at: Date;
+}
+
+export interface ImportBatchesInsert {
+  id?: string;
+  baby_id: string;
+  requested_by?: string | null;
+  kind: "google_picker";
+  status?: "picking" | "queued" | "running" | "done" | "failed" | "cancelled" | "expired";
+  error?:
+    | "google_denied"
+    | "google_reconnect"
+    | "session_expired"
+    | "storage_error"
+    | "requester_not_member"
+    | "baby_trashed"
+    | "too_many_items"
+    | "internal"
+    | null;
+  provider_session_id?: string | null;
+  poll_interval_sec?: number;
+  picker_expires_at?: Date | null;
+  last_polled_at?: Date | null;
+  tz_hint?: string | null;
+  items_total?: number | null;
+  items_imported?: number;
+  items_duplicate?: number;
+  items_failed?: number;
+  items_skipped?: number;
+  cancel_requested_at?: Date | null;
+  created_at?: Date;
+  started_at?: Date | null;
+  finished_at?: Date | null;
+  updated_at?: Date;
+}
+
+export interface ImportItemsRow {
+  id: string;
+  batch_id: string;
+  baby_id: string;
+  provider_item_id: string;
+  mime_hint: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  width: number | null;
+  height: number | null;
+  taken_at_hint: Date | null;
+  bytes: string | null;
+  sha256: Buffer | null;
+  status: "pending" | "downloaded" | "booked" | "duplicate" | "failed" | "skipped";
+  error:
+    | "unsupported_media_type"
+    | "file_too_large"
+    | "download_failed"
+    | "free_tier_limit"
+    | "storage_error"
+    | "not_member"
+    | "baby_trashed"
+    | null;
+  storage_key: string;
+  photo_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ImportItemsInsert {
+  id?: string;
+  batch_id: string;
+  baby_id: string;
+  provider_item_id: string;
+  mime_hint?: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  width?: number | null;
+  height?: number | null;
+  taken_at_hint?: Date | null;
+  bytes?: string | null;
+  sha256?: Buffer | null;
+  status?: "pending" | "downloaded" | "booked" | "duplicate" | "failed" | "skipped";
+  error?:
+    | "unsupported_media_type"
+    | "file_too_large"
+    | "download_failed"
+    | "free_tier_limit"
+    | "storage_error"
+    | "not_member"
+    | "baby_trashed"
+    | null;
+  photo_id?: string | null;
+  created_at?: Date;
+  updated_at?: Date;
+}
+
+export interface ImportSourcesRow {
+  id: string;
+  baby_id: string;
+  user_id: string;
+  kind: "apple_photos";
+  device_id: string;
+  device_label: string;
+  album_title: string;
+  wifi_only: boolean;
+  paused: boolean;
+  last_sync_at: Date | null;
+  last_trigger: "launch" | "resume" | "manual" | "background" | null;
+  imported_count: number;
+  duplicate_count: number;
+  failed_count: number;
+  skipped_count: number;
+  last_error:
+    | "free_tier_limit"
+    | "permission_denied"
+    | "album_missing"
+    | "network"
+    | "storage_error"
+    | "baby_trashed"
+    | "signed_out"
+    | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ImportSourcesInsert {
+  id?: string;
+  baby_id: string;
+  user_id: string;
+  kind: "apple_photos";
+  device_id: string;
+  device_label: string;
+  album_title: string;
+  wifi_only?: boolean;
+  paused?: boolean;
+  last_sync_at?: Date | null;
+  last_trigger?: "launch" | "resume" | "manual" | "background" | null;
+  imported_count?: number;
+  duplicate_count?: number;
+  failed_count?: number;
+  skipped_count?: number;
+  last_error?:
+    | "free_tier_limit"
+    | "permission_denied"
+    | "album_missing"
+    | "network"
+    | "storage_error"
+    | "baby_trashed"
+    | "signed_out"
+    | null;
+  created_at?: Date;
+  updated_at?: Date;
+}
+
 export interface InvitesRow {
   id: string;
   baby_id: string;
@@ -708,7 +907,7 @@ export interface PushDevicesRow {
   created_at: Date;
   last_registered_at: Date;
   disabled_at: Date | null;
-  disabled_reason: string | null;
+  disabled_reason: "invalid_token" | null;
 }
 
 export interface PushDevicesInsert {
@@ -722,7 +921,7 @@ export interface PushDevicesInsert {
   created_at?: Date;
   last_registered_at?: Date;
   disabled_at?: Date | null;
-  disabled_reason?: string | null;
+  disabled_reason?: "invalid_token" | null;
 }
 
 export interface ShareLinksRow {
@@ -972,6 +1171,10 @@ export interface Tables {
   chat_threads: { row: ChatThreadsRow; insert: ChatThreadsInsert };
   chat_turns: { row: ChatTurnsRow; insert: ChatTurnsInsert };
   data_exports: { row: DataExportsRow; insert: DataExportsInsert };
+  google_accounts: { row: GoogleAccountsRow; insert: GoogleAccountsInsert };
+  import_batches: { row: ImportBatchesRow; insert: ImportBatchesInsert };
+  import_items: { row: ImportItemsRow; insert: ImportItemsInsert };
+  import_sources: { row: ImportSourcesRow; insert: ImportSourcesInsert };
   invites: { row: InvitesRow; insert: InvitesInsert };
   measurements: { row: MeasurementsRow; insert: MeasurementsInsert };
   milestones: { row: MilestonesRow; insert: MilestonesInsert };
@@ -1009,6 +1212,10 @@ export const TABLE_NAMES = [
   "chat_threads",
   "chat_turns",
   "data_exports",
+  "google_accounts",
+  "import_batches",
+  "import_items",
+  "import_sources",
   "invites",
   "measurements",
   "milestones",

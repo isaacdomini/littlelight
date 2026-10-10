@@ -15,8 +15,14 @@ WHAT TO LOOK AT
 - Notifications: not requested at launch. Settings > Notifications turns them on. Notification text is generic ("12 new photos are ready to search.") and never contains names or photo content.
 - Account deletion: Settings > Account > Delete account (requires re-entering the email code; for the review account use the static code above).
 
+ALBUM SYNC AND IMPORT (optional, parents only)
+- Album sync (iPhone): Upload tab > "Album sync" card > "Set up". The controls (pause, Wi-Fi only, change album, "Stop syncing") are also in Settings > "Photo import". This is the only place the app asks for Photos access, and only when a parent turns sync on. It asks for full Photos library access because iOS only lets an app read an album, with originals and their capture date and location, with full access. The regular "Choose photos" upload uses the system photo picker and needs no permission.
+- Only the one album the parent picks is read. Nothing else in the library is read or uploaded. Photos are never deleted from the library or from Littlelight when they are removed from the source. Sync is Wi-Fi only by default, runs in the background when iOS allows, and the parent can stop it with "Stop syncing" on that card or in Settings > "Photo import".
+- To test: tap Set up, tap Allow Full Access, pick an album (create one in Photos with a few pictures first), and tap Sync now. If you deny access, the app keeps working and explains how to change it in Settings.
+- Google Photos import (Upload tab > "Google Photos" card > "Import from Google Photos"; the button reads "Connect Google Photos" until the account is connected, "Reconnect Google Photos" if it needs reconnecting; the same card is in Settings > "Photo import") opens Google's picker in the system browser and needs a Google account. The review account has none; use this test account: GOOGLE_TEST_ACCOUNT_EMAIL / GOOGLE_TEST_ACCOUNT_PASSWORD (placeholder). Only photos chosen in Google's picker are downloaded. The connection can be removed in Settings > "Photo import" > "Disconnect Google Photos", then confirm "Disconnect".
+
 PERMISSIONS
-- Photo library: only to let the parent choose photos to upload (the system picker). We do not read the whole library.
+- Photo library: the regular upload uses the system picker and needs no permission. Full library access is requested only if a parent turns on Album sync (above), and only the chosen album is read.
 - Camera: only to take a photo to add to the album.
 - Location: the app never asks for your location. If a photo contains GPS in its metadata (iPhone photos do), we store it encrypted and show only a coarse place name to the parent; it is never shown to people who receive a share link.
 - No tracking, no ads, no analytics SDKs, no face recognition.

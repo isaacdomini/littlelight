@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { emailSchema } from "./auth";
 import { EXPORT_MAX_BYTES_DEFAULT } from "./constants";
+import type { MediaUrlGuardOptions } from "./google-photos";
+import { GOOGLE_ENDPOINTS, GOOGLE_MEDIA_HOST_SUFFIX_DEFAULT } from "./imports";
 import { APP_ID, NATIVE_ORIGINS_DEFAULT } from "./native";
 import {
   PUSH_MIN_GAP_MIN_DEFAULT,
@@ -589,3 +591,197 @@ export const sentryEnvSchema = z
     SENTRY_ENVIRONMENT: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV,
   }));
 export type SentryEnv = z.output<typeof sentryEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Photo import (docs/plans/step-10.md 2.3, 2.6, 2.7, 2.10, D6, D7). Read by the api (OAuth,
+// Picker sessions) and the worker (downloads; `IMPORT_CONCURRENCY`). The client secret reaches
+// these two services only. Errors name the field, never the value.
+// ---------------------------------------------------------------------------------------------
+
+/** `GOOGLE_IMPORT_PROVIDER`: `none` (production default), `fake` (dev/CI; refused in production), `live`. */
+export const GOOGLE_IMPORT_PROVIDERS = ["none", "fake", "live"] as const;
+export const googleImportProviderSchema = z.enum(GOOGLE_IMPORT_PROVIDERS);
+export type GoogleImportProvider = z.infer<typeof googleImportProviderSchema>;
+
+/** Defaults of `googleImportEnvSchema`. */
+export const GOOGLE_IMPORT_DEFAULTS = {
+  GOOGLE_IMPORT_PROVIDER: "none",
+  /** The fake Picker server as the api/worker reach it (Compose service `google-fake`). */
+  GOOGLE_IMPORT_FAKE_URL: "http://google-fake:8099",
+  /** The fake as the browser reaches it (consent and picker pages); api only. */
+  GOOGLE_IMPORT_FAKE_PUBLIC_URL: "http://localhost:8099",
+  GOOGLE_IMPORT_MEDIA_HOSTS: GOOGLE_MEDIA_HOST_SUFFIX_DEFAULT,
+  /** Downloads in flight per `import.google` job (worker /tmp holds ≤ this × 100 MiB). */
+  IMPORT_CONCURRENCY: 2,
+} as const;
+
+const GI = GOOGLE_IMPORT_DEFAULTS;
+
+/** One media host suffix: lowercase DNS name of ≥ 2 labels, the last one alphabetic (no IP literal). */
+const MEDIA_HOST_SUFFIX_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/**
+ * Photo import settings (api and worker).
+ * - `GOOGLE_IMPORT_CLIENT_ID` / `GOOGLE_IMPORT_CLIENT_SECRET`: the Google "Web application"
+ *   OAuth client (D18); both required when `live`, ignored otherwise.
+ * - `GOOGLE_IMPORT_FAKE_URL` / `GOOGLE_IMPORT_FAKE_PUBLIC_URL`: used only when `fake`.
+ * - `GOOGLE_IMPORT_MEDIA_HOSTS`: comma-separated host suffixes a Picker `baseUrl` may point at
+ *   (parsed to a lowercase, de-duplicated array); the SSRF guard (`parseAllowedMediaUrl`) allows
+ *   https hosts equal to or under one of them. In `fake` mode the fake's own origin is added by
+ *   `googleImportMediaAllowList`, not here.
+ * - `IMPORT_CONCURRENCY` (worker): 1..4.
+ * `fake` is refused when `NODE_ENV=production` (like `PUSH_PROVIDER`).
+ */
+export const googleImportEnvSchema = z
+  .object({
+    GOOGLE_IMPORT_PROVIDER: z.preprocess(
+      emptyAsUndefined,
+      googleImportProviderSchema.default(GI.GOOGLE_IMPORT_PROVIDER),
+    ),
+    GOOGLE_IMPORT_CLIENT_ID: z.preprocess(
+      emptyAsUndefined,
+      z
+        .string()
+        .max(256)
+        .regex(/^[A-Za-z0-9._-]+$/, "must be an OAuth client id")
+        .optional(),
+    ),
+    GOOGLE_IMPORT_CLIENT_SECRET: z.preprocess(
+      emptyAsUndefined,
+      z.string().max(512).regex(/^\S+$/, "must not contain whitespace").optional(),
+    ),
+    GOOGLE_IMPORT_FAKE_URL: z.preprocess(
+      emptyAsUndefined,
+      overrideUrlSchema.default(GI.GOOGLE_IMPORT_FAKE_URL),
+    ),
+    GOOGLE_IMPORT_FAKE_PUBLIC_URL: z.preprocess(
+      emptyAsUndefined,
+      overrideUrlSchema.default(GI.GOOGLE_IMPORT_FAKE_PUBLIC_URL),
+    ),
+    GOOGLE_IMPORT_MEDIA_HOSTS: z.preprocess(
+      emptyAsUndefined,
+      z
+        .string()
+        .default(GI.GOOGLE_IMPORT_MEDIA_HOSTS)
+        .transform((v) => [
+          ...new Set(
+            v
+              .split(",")
+              .map((h) => h.trim().toLowerCase().replace(/^\.+/, ""))
+              .filter((h) => h !== ""),
+          ),
+        ])
+        .pipe(
+          z
+            .array(
+              z.string().max(253).regex(MEDIA_HOST_SUFFIX_RE, "each entry must be a host suffix"),
+            )
+            .min(1)
+            .max(10),
+        ),
+    ),
+    IMPORT_CONCURRENCY: z.preprocess(
+      emptyAsUndefined,
+      z.coerce.number().int().min(1).max(4).default(GI.IMPORT_CONCURRENCY),
+    ),
+    /** Same field as `logEnvSchema` (default `production`), read here for the refinements. */
+    NODE_ENV: logEnvSchema.shape.NODE_ENV,
+  })
+  .superRefine((env, ctx) => {
+    if (env.GOOGLE_IMPORT_PROVIDER === "fake" && env.NODE_ENV === "production") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["GOOGLE_IMPORT_PROVIDER"],
+        message: "fake is refused in production",
+      });
+    }
+    if (env.GOOGLE_IMPORT_PROVIDER === "live") {
+      for (const key of ["GOOGLE_IMPORT_CLIENT_ID", "GOOGLE_IMPORT_CLIENT_SECRET"] as const) {
+        if (env[key] === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: [key],
+            message: "required when GOOGLE_IMPORT_PROVIDER=live",
+          });
+        }
+      }
+    }
+  });
+export type GoogleImportEnv = z.infer<typeof googleImportEnvSchema>;
+
+/** Where the api/worker talk to Google (or the fake). */
+export interface GoogleImportEndpoints {
+  /** Consent page, opened by the **browser** (`fake`: `GOOGLE_IMPORT_FAKE_PUBLIC_URL`). */
+  readonly authUrl: string;
+  /** Token exchange / refresh (server to server). */
+  readonly tokenUrl: string;
+  /** Token revocation (server to server). */
+  readonly revokeUrl: string;
+  /** Picker API base; paths `/v1/sessions`, `/v1/mediaItems` are appended. */
+  readonly pickerBaseUrl: string;
+}
+
+/**
+ * Endpoints for the configured provider: `GOOGLE_ENDPOINTS` when `live`; the fake's paths
+ * (`/o/oauth2/v2/auth` on the public base, `/token`, `/revoke`, Picker at the root of the internal
+ * base) when `fake`; `null` when `none` (the feature is unavailable).
+ */
+export function googleImportEndpoints(
+  env: Pick<
+    GoogleImportEnv,
+    "GOOGLE_IMPORT_PROVIDER" | "GOOGLE_IMPORT_FAKE_URL" | "GOOGLE_IMPORT_FAKE_PUBLIC_URL"
+  >,
+): GoogleImportEndpoints | null {
+  switch (env.GOOGLE_IMPORT_PROVIDER) {
+    case "live":
+      return {
+        authUrl: GOOGLE_ENDPOINTS.AUTH,
+        tokenUrl: GOOGLE_ENDPOINTS.TOKEN,
+        revokeUrl: GOOGLE_ENDPOINTS.REVOKE,
+        pickerBaseUrl: GOOGLE_ENDPOINTS.PICKER,
+      };
+    case "fake": {
+      const internal = env.GOOGLE_IMPORT_FAKE_URL.replace(/\/+$/, "");
+      const external = env.GOOGLE_IMPORT_FAKE_PUBLIC_URL.replace(/\/+$/, "");
+      return {
+        authUrl: `${external}/o/oauth2/v2/auth`,
+        tokenUrl: `${internal}/token`,
+        revokeUrl: `${internal}/revoke`,
+        pickerBaseUrl: internal,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Arguments of the download guard: `parseAllowedMediaUrl(url, a.hostSuffixes, a)`. */
+export interface GoogleMediaAllowList extends MediaUrlGuardOptions {
+  readonly hostSuffixes: readonly string[];
+  readonly exactOrigins: readonly string[];
+}
+
+/**
+ * The worker's download allow-list: `GOOGLE_IMPORT_MEDIA_HOSTS`, plus, in `fake` mode only, the
+ * exact origin of `GOOGLE_IMPORT_FAKE_URL` (http and a port are accepted for that origin alone;
+ * the schema refuses `fake` in production).
+ */
+export function googleImportMediaAllowList(
+  env: Pick<
+    GoogleImportEnv,
+    "GOOGLE_IMPORT_PROVIDER" | "GOOGLE_IMPORT_FAKE_URL" | "GOOGLE_IMPORT_MEDIA_HOSTS"
+  >,
+): GoogleMediaAllowList {
+  const exactOrigins: string[] = [];
+  if (env.GOOGLE_IMPORT_PROVIDER === "fake") {
+    try {
+      exactOrigins.push(new URL(env.GOOGLE_IMPORT_FAKE_URL).origin);
+    } catch {
+      // the schema already validated the URL; nothing to add otherwise
+    }
+  }
+  return Object.freeze({
+    hostSuffixes: Object.freeze([...env.GOOGLE_IMPORT_MEDIA_HOSTS]),
+    exactOrigins: Object.freeze(exactOrigins),
+  });
+}

@@ -153,6 +153,8 @@ grep -q 'Signature=adhoc' <<<"$CS" && pass "ad-hoc signature (background URLSess
 # ---- 2. boot, install, launch -----------------------------------------------------------------
 step "2. boot, install, launch"
 [ "${IOS_GATE_RESTART_API:-1}" = "1" ] && bash .github/scripts/restart-api.sh >/dev/null 2>&1
+pkill -x Simulator >/dev/null 2>&1 || true
+defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false >/dev/null 2>&1
 xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1
 if ! xcodebuild -project "$UITEST/LLUITests.xcodeproj" -scheme LLUITests -destination "platform=iOS Simulator,id=$UDID" \

@@ -1,8 +1,10 @@
+import { nativePlatform } from "../platform";
 import { setTokenStore } from "../tokenStore";
 import { setUploader } from "../uploader";
 import { nativeUploader } from "./nativeUploader";
 import { createSecureTokenStore } from "./secureTokenStore";
 import { refreshIfNeeded } from "./session";
+import { syncMayBeOn } from "./syncFlag";
 import { hideSplash, syncStatusBar } from "./ui";
 
 /**
@@ -13,6 +15,11 @@ import { hideSplash, syncStatusBar } from "./ui";
 export async function bootstrapNative(): Promise<void> {
   setTokenStore(createSecureTokenStore());
   setUploader(nativeUploader);
+  if (nativePlatform() === "ios" && syncMayBeOn()) {
+    // Album sync (iOS): listen for background refreshes. Lazy and fire-and-forget, so a missing
+    // plugin or a slow Keychain never delays the first render.
+    void import("./photoSync").then((m) => m.photoSync.init()).catch(() => undefined);
+  }
   try {
     await refreshIfNeeded();
   } catch {

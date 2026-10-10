@@ -3,6 +3,10 @@ import {
   aiFlushJobSchema,
   aiPollJobSchema,
   dataExportJobSchema,
+  googleImportMediaAllowList,
+  IMPORT_MAX_FILE_BYTES,
+  importGoogleJobSchema,
+  importSweepJobSchema,
   ingestJobSchema,
   JOBS,
   type JobName,
@@ -20,6 +24,7 @@ import { createPool, createS3Client, errorCategory } from "./clients";
 import { ConfigError, loadConfig, mailConfigOf } from "./config";
 import { createExportMailer, type ExportMailer } from "./email/mailer";
 import { runDataExport } from "./export";
+import { createWorkerGoogleClient, runImportGoogle, sweepImports } from "./import";
 import { ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
@@ -27,11 +32,13 @@ import { purgeTrash } from "./purge";
 import { createPushSender, handlePushNotifyJob, type PushSender } from "./push";
 import {
   chainSearchBackfill,
+  IMPORT_SWEEP_SEND_OPTIONS,
   SEARCH_RECONCILE_SEND_OPTIONS,
   SHARE_RECONCILE_SEND_OPTIONS,
   sendAiBackfill,
   sendAiFlush,
   sendDataExport,
+  sendImportGoogle,
   sendIngest,
   sendPushNotify,
   sendReindex,
@@ -61,12 +68,20 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"share_viewed","shareLinkId":"…"}'
 //   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"photos_analyzed","babyId":"…"}'
 //   pnpm --filter @littlelight/worker run-job data.export '{"exportId":"…","babyId":"…"}'
+//   pnpm --filter @littlelight/worker run-job import.google '{"batchId":"…","babyId":"…"}'
+//   pnpm --filter @littlelight/worker run-job import.sweep
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
 //   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue push.notify '{"kind":"photos_analyzed","babyId":"…"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue data.export '{"exportId":"…","babyId":"…"}'
+//   pnpm --filter @littlelight/worker run-job --enqueue import.google '{"batchId":"…","babyId":"…"}'
+//
+// `import.google` in-process runs one Picker batch with this process's `GOOGLE_IMPORT_*` env as a
+// last attempt (storage/network trouble fails the batch, no retry); a batch a running worker
+// already claimed is processed again only for its open items. Booked photos are sent to
+// `photo.ingest` through the queue. `import.sweep` re-sends stuck batches through the queue too.
 //
 // `data.export` in-process claims the row only while it is `queued` (a running worker usually
 // takes it first: then the result is `{outcome: "skipped"}`), runs as a last attempt (a storage
@@ -203,6 +218,16 @@ async function main(argv: string[]): Promise<number> {
         case JOBS.dataExport:
           result = { jobId: await sendDataExport(b, dataExportJobSchema.parse(payload)) };
           break;
+        case JOBS.importGoogle:
+          result = { jobId: await sendImportGoogle(b, importGoogleJobSchema.parse(payload)) };
+          break;
+        case JOBS.importSweep:
+          result = {
+            jobId: await b.send(name, importSweepJobSchema.parse(payload), {
+              ...IMPORT_SWEEP_SEND_OPTIONS,
+            }),
+          };
+          break;
         default:
           result = { jobId: await b.send(name, {}) };
       }
@@ -305,6 +330,36 @@ async function main(argv: string[]): Promise<number> {
           );
           break;
         }
+        case JOBS.importGoogle: {
+          const job = importGoogleJobSchema.parse(payload);
+          result = await runImportGoogle(
+            {
+              pool,
+              storage,
+              dataKey: config.DATA_ENCRYPTION_KEY,
+              google: createWorkerGoogleClient(config),
+              download: {
+                allowList: googleImportMediaAllowList(config),
+                maxBytes: IMPORT_MAX_FILE_BYTES,
+              },
+              concurrency: config.IMPORT_CONCURRENCY,
+              sendIngest: async (j) => sendIngest(await getBoss(), j),
+              log,
+            },
+            job,
+            { lastAttempt: true },
+          );
+          break;
+        }
+        case JOBS.importSweep:
+          importSweepJobSchema.parse(payload);
+          result = await sweepImports({
+            pool,
+            storage,
+            sendImportGoogle: async (j) => sendImportGoogle(await getBoss(), j),
+            log,
+          });
+          break;
         case JOBS.aiFlush:
         case JOBS.aiPoll:
         case JOBS.aiBackfill: {

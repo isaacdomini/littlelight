@@ -5,7 +5,7 @@ import {
   type UploadDetails,
 } from "@littlelight/shared";
 import { cameraOutline, chevronDown, cloudUploadOutline, imagesOutline } from "ionicons/icons";
-import { type DragEvent, useEffect, useRef, useState } from "react";
+import { type DragEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { AppHeader } from "../components/AppHeader";
@@ -21,13 +21,23 @@ import {
   TextField,
 } from "../components/ui";
 import { t } from "../i18n";
+import { useGoogleConnection } from "../lib/googleImport";
 import { hapticSuccess } from "../lib/haptics";
 import { usePhotosInvalidation } from "../lib/queries";
+import { useAppleSyncAvailable } from "../lib/queries/imports";
 import { clearResumableUpload, hasResumableUpload, uploadManager } from "../lib/upload/manager";
 import { useUploadItems } from "../lib/upload/useUploads";
 import { FILE_ACCEPT } from "../lib/upload/validate";
 import type { PickOutcome } from "../platform/native/picker";
 import { isNative, nativePlatform } from "../platform/platform";
+
+// Album sync (iPhone, admins): its own lazy chunk, so the web bundle carries no native code.
+const GoogleCard = lazy(() =>
+  import("../components/import/GoogleCard").then((m) => ({ default: m.GoogleCard })),
+);
+const SyncCard = lazy(() =>
+  import("../components/import/SyncCard").then((m) => ({ default: m.SyncCard })),
+);
 
 interface DetailsForm {
   milestoneId: string;
@@ -165,6 +175,10 @@ export function UploadPage() {
   const [tooMany, setTooMany] = useState(false);
 
   const isContributor = baby?.role === "contributor";
+  const appleSync = useAppleSyncAvailable();
+  const googleImport =
+    useGoogleConnection(baby?.role === "admin" || baby?.role === "contributor").data?.available ===
+    true;
   const retryableCount = items.filter((i) => i.state === "failed" && i.retryable).length;
   const finishedCount = items.filter(
     (i) =>
@@ -395,6 +409,18 @@ export function UploadPage() {
                     </Message>
                   ) : null}
                 </div>
+
+                {appleSync ? (
+                  <Suspense fallback={null}>
+                    <SyncCard compact />
+                  </Suspense>
+                ) : null}
+
+                {googleImport ? (
+                  <Suspense fallback={null}>
+                    <GoogleCard compact returnTo="/upload" />
+                  </Suspense>
+                ) : null}
 
                 <div className="flex flex-col gap-3">
                   <Button

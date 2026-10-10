@@ -5,6 +5,7 @@ import {
 } from "@littlelight/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { revokeGoogleConnection } from "../imports/google/connection";
 import { ApiError, safeErrorLog } from "../lib/errors";
 import { audit, requireFreshSignIn, type Tx, withClaims, withServiceRole } from "./context";
 import { GoTrueError } from "./gotrue";
@@ -29,6 +30,13 @@ import { clearSessionCookies } from "./session";
 // call and cleared again if it fails, so it is only left set by a deletion that happened;
 // `account.deleted` is written only after GoTrue succeeded (`account.deletion_requested` records
 // every attempt).
+//
+// Google Photos connection (docs/plans/step-10.md 2.8, task 10.10): between steps 2 and 3 the
+// user's Google refresh token is revoked at Google (best effort) and the `google_accounts` row
+// deleted, while the profile still exists; the row would cascade with the profile anyway. A failed
+// revoke never blocks deletion, and only `{ revoked }` is logged (never the token or Google's
+// answer). If GoTrue then fails, the connection stays removed: the user reconnects if they keep the
+// account, which is the safe direction for a credential.
 
 interface BabyRef {
   id: string;
@@ -83,6 +91,15 @@ async function keptBabies(client: Tx, uid: string): Promise<DeletionPreviewRespo
   }));
 }
 
+/** Whether the caller has a Google Photos connection (RLS: `authenticated` sees its own row). */
+async function googlePhotosConnected(client: Tx, uid: string): Promise<boolean> {
+  const { rows } = await client.query<{ connected: boolean }>(
+    "SELECT EXISTS (SELECT 1 FROM public.google_accounts WHERE user_id = $1) AS connected",
+    [uid],
+  );
+  return rows[0]?.connected === true;
+}
+
 /**
  * D14 step 5: clear the pre-mark after a failed GoTrue delete. "gone" when no profile row exists
  * any more (the cascade ran, so the deletion actually happened); "failed" when the compensation
@@ -133,6 +150,7 @@ export function accountRoutes(app: FastifyInstance, runtime: AuthRuntime): void 
         blockingBabies: await blockingBabies(client, ctx.uid),
         babiesKept: await keptBabies(client, ctx.uid),
         freshSignIn: ctx.isFresh,
+        googlePhotosConnected: await googlePhotosConnected(client, ctx.uid),
       })),
   });
 
@@ -177,6 +195,12 @@ export function accountRoutes(app: FastifyInstance, runtime: AuthRuntime): void 
           return rows.length === 1;
         },
       );
+
+      // 2b. Revoke the Google Photos grant (if any) before the account goes. Never throws by
+      // contract; the catch only guards that contract, so deletion is never blocked by Google.
+      await revokeGoogleConnection(request.server, uid, request.log).catch(() => {
+        request.log.warn({ revoked: false }, "google connection revoke skipped");
+      });
 
       // 3. GoTrue hard delete: cascades sessions, identities, profile, memberships.
       try {

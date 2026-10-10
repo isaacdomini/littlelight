@@ -17,6 +17,7 @@ e2e/test-results-perf/
 e2e/ai-gate/
 e2e/search-gate/
 e2e/share-gate/
+e2e/import-gate/
 e2e/native-results/
 
 # Capacitor native projects (docs/plans/step-9.md 2.14): generated web copies, build output,

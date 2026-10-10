@@ -12,6 +12,7 @@
     "perf-seed": "tsx src/tools/perf-seed.ts",
     "search-seed": "tsx src/ai/search-seed.ts",
     "demo-media": "tsx src/demo/demo-media.ts",
+    "google-fake": "tsx src/import/google/fake-server.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'",
     "search-calibrate": "tsx src/ai/search-calibrate.ts"

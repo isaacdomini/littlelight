@@ -45,8 +45,8 @@ const pipeline = () => ({
 });
 
 describe("search queue definitions (step 7)", () => {
-  it("there are fourteen queues, all exclusive except push.notify (short)", () => {
-    expect(Object.keys(QUEUES)).toHaveLength(14);
+  it("there are sixteen queues, all exclusive except push.notify (short)", () => {
+    expect(Object.keys(QUEUES)).toHaveLength(16);
     for (const [name, q] of Object.entries(QUEUES))
       expect(q.policy).toBe(name === "push.notify" ? "short" : "exclusive");
   });
@@ -69,16 +69,16 @@ describe("search queue definitions (step 7)", () => {
     });
   });
 
-  it("the reconcile cron comes from config and is scheduled in addition to the six others", () => {
+  it("the reconcile cron comes from config and is scheduled in addition to the seven others", () => {
     const all = schedules({
       AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
       AI_POLL_INTERVAL_CRON: "*/5 * * * *",
       SEARCH_RECONCILE_CRON: "31 * * * *",
     });
-    expect(all).toHaveLength(7);
+    expect(all).toHaveLength(8);
     expect(Object.fromEntries(all)[JOBS.searchReconcile]).toBe("31 * * * *");
     expect(Object.fromEntries(all)[JOBS.searchBackfill]).toBeUndefined(); // on demand only
-    expect(SCHEDULES).toHaveLength(3);
+    expect(SCHEDULES).toHaveLength(4);
   });
 
   it("without a configured cron the shared default is used", () => {
@@ -281,7 +281,7 @@ describe("startWorkers: the search handlers", () => {
       log,
       ingestConcurrency: 1,
     });
-    expect(registered.size).toBe(14);
+    expect(registered.size).toBe(15);
     await registered.get(JOBS.searchReconcile)?.handler([job({}), job({ bad: 1 })]);
     expect(ix.reconcile).toHaveBeenCalledTimes(1);
     await registered.get(JOBS.searchBackfill)?.handler([job({ reason: "manual", babyId: BABY })]);

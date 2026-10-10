@@ -14,19 +14,26 @@
 #                    no @sentry/capacitor, replay, tracing or @opentelemetry package in any
 #                    package.json; every Sentry.init has dataCollection all off,
 #                    defaultIntegrations false, tracesSampleRate 0, beforeSend scrubTelemetryEvent),
-#                    typecheck (workspace + e2e/, incl. e2e/native and e2e/export), unit tests
+#                    the step-10 photo-import hygiene (.github/scripts/import-hygiene.sh: nothing
+#                    logs a baseUrl/pickerUri/token/code, the worker never reads google_accounts
+#                    nor inserts into photos, the URL guard precedes every media fetch, the fake
+#                    Google provider is refused in production (static + runtime), no AI-path
+#                    change and no new dependency but @capacitor/browser since b3f2b56),
+#                    typecheck (workspace + e2e/, incl. e2e/native, e2e/export and e2e/import), unit tests
 #                    (incl. packages/ai adapters against local mock servers), integration tests
 #                    (db-integration: RLS matrix, search + chat + sharing tables etc.;
 #                    api-integration: auth, invites, babies, uploads, photos, search, chat, share
 #                    links + viewer, data exports via Fastify inject with a stubbed GoTrue and S3
 #                    and the fake chat model / embedder; worker-integration: ingest, purge, sweep,
-#                    the AI batch pipeline, the search indexer, the auto-sharer and the data-export
-#                    ZIP job with the in-process fake provider against a standalone MinIO) on a
+#                    the AI batch pipeline, the search indexer, the auto-sharer, the data-export
+#                    ZIP job and the Google Photos import job against an in-process fake Google
+#                    server, with the in-process fake provider against a standalone MinIO) on a
 #                    pgvector service container (auth.* is stubbed by the test harness) with a guard that fails the job if any project
 #                    or named suite silently skipped, a generated-DB-types drift check against a
 #                    database migrated in production order (bootstrap -> GoTrue migrate -> app
 #                    migrations), and `docker compose config` for both files plus a canary check
-#                    of which services receive which provider key.
+#                    of which services receive which provider key / Google OAuth client value and
+#                    where the fake Google server may run (dev only).
 #   images           builds every production image (api, worker, web, migrate) with buildx + GHA
 #                    cache, then runs the web image standalone and checks its CSP header with
 #                    `curl -sI` (.github/scripts/check-web-csp.sh: Report-Only by default,
@@ -51,7 +58,11 @@
 #                    tokens, JWTs, bearer values and presign parts; between the share gate and the
 #                    push gate, the review-fix data-export gate (docs/plans/review-fixes.md 2.14:
 #                    `pnpm e2e:export-gate`) with its own log tap and a scan of those logs for
-#                    coordinates, lat/lng values, export object keys, JWTs and presign parts.
+#                    coordinates, lat/lng values, export object keys, JWTs and presign parts; then
+#                    the step-10 Google import gate (docs/plans/step-10.md 4.3: `pnpm
+#                    e2e:import-gate` against the `google-fake` service, GOOGLE_IMPORT_PROVIDER=fake)
+#                    with a log tap on api, worker and google-fake and a scan of those logs for
+#                    Google/fake tokens and codes, media and picker URLs, JWTs and presign parts.
 #   android-debug    step-9 Android debug build on every push/PR (docs/plans/step-9.md 2.14):
 #                    JDK 21 and the Android SDK from the runner image, `native:sync:android`,
 #                    `android:build:debug` (assembleDebug) + lintDebug, then the merged-manifest
@@ -63,7 +74,10 @@
 #                    (`check:ios-plists`, macOS plutil) and a Release simulator build whose
 #                    Info.plist must lack the two debug-only keys. The native gates
 #                    (`pnpm e2e:native-ios`, `pnpm e2e:native-android`) need a simulator / an HVF/KVM emulator and run
-#                    locally only (docs/plans/step-9.md 4.4, 4.5); no store upload runs in CI.
+#                    locally only (docs/plans/step-9.md 4.4, 4.5); so does the step-10 iOS album
+#                    sync gate (`pnpm e2e:native-ios-sync`, e2e/native/ios-sync-gate.sh + XCUITests:
+#                    a booted simulator with the installed iOS runtime, a seeded photo library and
+#                    the dev stack; docs/plans/step-10.md 4.4). No store upload runs in CI.
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
 name: CI
@@ -92,10 +106,10 @@ jobs:
   check:
     name: Lint, typecheck, test
     runs-on: ubuntu-24.04
-    # Step 9 + review fixes: ~2,600 unit tests (~30 s locally) and ~1,350 integration tests
-    # (~150 s locally incl. the export ZIP suites, roughly 2-3x on a hosted runner) plus install,
-    # lint, typecheck, types drift.
-    timeout-minutes: 30
+    # Step 10: ~3,000 unit tests (~35 s locally) and ~1,500 integration tests (~180 s locally
+    # incl. the export ZIP and Google import suites, roughly 2-3x on a hosted runner) plus
+    # install, lint, hygiene, typecheck, types drift.
+    timeout-minutes: 35
     services:
       db:
         # Same image as both Compose files.
@@ -111,10 +125,12 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     steps:
+      # Full history: the import hygiene's drift check diffs against b3f2b56 (below).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up pnpm (version from package.json "packageManager")
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -183,6 +199,21 @@ jobs:
       - name: Sentry hygiene (errors-only telemetry, no replay/tracing/OTel packages)
         run: bash .github/scripts/sentry-hygiene.sh
 
+      # docs/plans/step-10.md 2.10 "CI (10.14)" / 4.1: static (.github/scripts/import-hygiene.mjs)
+      # - no logger call in apps/api/src/imports, apps/worker/src/import or the native photoSync.ts
+      # carries a baseUrl, pickerUri, token, code, secret or raw error, no console.*, no print/NSLog
+      # in LittlelightPhotoSync.swift; the worker never names google_accounts / refresh_token_enc /
+      # service_role and never inserts into photos (migrations and the bootstrap grant it neither);
+      # every media request goes through parseAllowedMediaUrl / resolveMediaRedirect, null-checked,
+      # redirect "manual"; GOOGLE_IMPORT_CLIENT_SECRET never in the client app or the web image.
+      # Runtime (tsx, needs the install above): the env schema, startFakeGoogleServer and the
+      # google-fake CLI all refuse NODE_ENV=production (controls start). Drift vs b3f2b56 (hence
+      # fetch-depth 0): no change under packages/ai, apps/worker/src/ai, apps/api/src/chat and
+      # apps/api/src/search, and @capacitor/browser is the only new dependency. The plist keys and
+      # the Photos-prompt call sites are in native-hygiene.sh above. Same script runs locally.
+      - name: Import hygiene (logging, worker grants, URL guard, fake refused in production, drift)
+        run: bash .github/scripts/import-hygiene.sh
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -192,7 +223,8 @@ jobs:
       # e2e/helpers/*.ts covers e2e/helpers/native.ts and e2e/helpers/reset.ts; e2e/native/*.ts
       # are the step-9 push, Android and invite-link gate scripts (the XCUITest project under
       # e2e/native/ios-uitest is Swift and is built by Xcode, not here); e2e/export/*.ts is the
-      # review-fix data-export gate. global-setup/teardown are the Playwright
+      # review-fix data-export gate; e2e/import/*.ts is the step-10 Google import gate (the iOS
+      # album sync gate's helper is e2e/native/ios-sync-helper.ts). global-setup/teardown are the Playwright
       # globalSetup/globalTeardown hooks referenced by playwright.config.ts.
       - name: Typecheck e2e
         run: >-
@@ -200,7 +232,7 @@ jobs:
           --target es2022 --strict --types node
           e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts
           e2e/search/*.ts e2e/chat/*.ts e2e/sharing/*.ts e2e/fixtures/*.ts e2e/native/*.ts
-          e2e/export/*.ts e2e/playwright.config.ts e2e/playwright.perf.config.ts
+          e2e/export/*.ts e2e/import/*.ts e2e/playwright.config.ts e2e/playwright.perf.config.ts
           e2e/global-setup.ts e2e/global-teardown.ts
 
       - name: Unit tests
@@ -287,6 +319,11 @@ jobs:
           # apps/api/src/auth/review.integration.test.ts sets and clears it itself.
           PUSH_PROVIDER: fake
           NATIVE_APP_ORIGINS: capacitor://localhost,https://localhost
+          # Step-10 photo-import suites (docs/plans/step-10.md 10.13): the worker suite starts the
+          # fake Google server in-process on an ephemeral port (with e2e/fixtures/heic for H-1),
+          # and the api suite injects its fetch into the Google client, so no google-fake service
+          # and no OAuth client is needed. GOOGLE_IMPORT_PROVIDER stays unset (default `none`)
+          # for any config read from process.env.
           REPORT: ${{ runner.temp }}/integration-report.json
         run: |
           set -euo pipefail
@@ -294,8 +331,9 @@ jobs:
             --reporter=default --reporter=github-actions \
             --reporter=json --outputFile.json="$REPORT"
           # Project dirs, plus the step-6 AI, step-7 search/chat, step-8 sharing, step-9
-          # push / review-account / demo-media and the review-fix (migrations 18-19, data
-          # export api + worker) suites by name so a rename cannot drop them silently.
+          # push / review-account / demo-media, the review-fix (migrations 18-19, data
+          # export api + worker) and the step-10 photo-import (migration 20, import api, Google
+          # import worker) suites by name so a rename cannot drop them silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
@@ -319,7 +357,10 @@ jobs:
             apps/worker/src/demo/media.integration.test.ts \
             packages/db/review-fixes.integration.test.ts \
             apps/api/src/exports/exports.integration.test.ts \
-            apps/worker/src/export/export.integration.test.ts
+            apps/worker/src/export/export.integration.test.ts \
+            packages/db/photo-import.integration.test.ts \
+            apps/api/src/imports/imports.integration.test.ts \
+            apps/worker/src/import/google/import.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -367,29 +408,33 @@ jobs:
             docker compose -f docker-compose.yml config -q
           rm -f .env
 
-      # Provider-key placement (docs/plans/step-7.md 2.11): OPENAI_API_KEY reaches worker + api,
-      # ANTHROPIC_API_KEY the worker only, neither reaches migrate/web/anything else. Rendered
-      # with throwaway canary values (not secrets; .github/scripts/check-compose-keys.mjs prints
-      # service names only): dev via a temporary .env.local (its env_file), production via the
-      # shell environment (x-app-env interpolation). The checkout has neither file; both are
-      # removed again.
+      # Provider-key placement (docs/plans/step-7.md 2.11, step-10.md 2.10): OPENAI_API_KEY reaches
+      # worker + api, ANTHROPIC_API_KEY the worker only, GOOGLE_IMPORT_CLIENT_ID / _SECRET api +
+      # worker only; none reaches migrate/web/google-fake/anything else. Rendered with throwaway
+      # canary values (not secrets) that `check-compose-keys.mjs --print-env` prints, so the key
+      # list lives in one place (the script prints service names only, never values): dev via a
+      # temporary .env.local (its env_file), production via the shell environment (x-app-env
+      # interpolation). The same script asserts where the fake Google server may run: dev has a
+      # healthy-gated google-fake and api + worker default to GOOGLE_IMPORT_PROVIDER=fake;
+      # production has no google-fake and api + worker on none/live with NODE_ENV=production. The
+      # checkout has neither env file; both are removed again.
       - name: Provider keys reach only the allowed services (canary)
-        env:
-          CANARY_OPENAI: ci-canary-openai-key-not-a-secret
-          CANARY_ANTHROPIC: ci-canary-anthropic-key-not-a-secret
         run: |
           set -euo pipefail
           test ! -e .env.local && test ! -e .env
           trap 'rm -f .env.local .env' EXIT
-          printf 'OPENAI_API_KEY=%s\nANTHROPIC_API_KEY=%s\n' "$CANARY_OPENAI" "$CANARY_ANTHROPIC" > .env.local
+          node .github/scripts/check-compose-keys.mjs --print-env > .env.local
           docker compose -f docker-compose.dev.yml config --format json \
             | node .github/scripts/check-compose-keys.mjs dev
           rm -f .env.local
           cp .env.example .env
-          OPENAI_API_KEY="$CANARY_OPENAI" ANTHROPIC_API_KEY="$CANARY_ANTHROPIC" \
+          (
+            while IFS= read -r kv; do export "${kv?}"; done \
+              < <(node .github/scripts/check-compose-keys.mjs --print-env)
             STORAGE_PATH="$RUNNER_TEMP/storage" BACKUP_PATH="$RUNNER_TEMP/backups" \
-            docker compose -f docker-compose.yml config --format json \
-            | node .github/scripts/check-compose-keys.mjs prod
+              docker compose -f docker-compose.yml config --format json \
+              | node .github/scripts/check-compose-keys.mjs prod
+          )
 
   images:
     name: Build image (${{ matrix.image }})
@@ -455,8 +500,9 @@ jobs:
     # (2,000-photo seed + 50 search and 50 chat queries, a few minutes, capped at 15), share gate
     # + log scan (~1-2 min, capped at 15), export gate + log scan (~30 s locally; four exports,
     # each polled to ready within 120 s, one api restart, a purge job; capped at 15), push
-    # gate + log scan (~3-5 min, capped at 15).
-    timeout-minutes: 150
+    # gate + log scan (~3-5 min, capped at 15), Google import gate + log scan (~20-30 s
+    # locally, capped at 15).
+    timeout-minutes: 160
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -514,6 +560,30 @@ jobs:
             exit 1
           fi
           echo "api + worker on the fake provider, no provider key"
+
+      # docs/plans/step-10.md 2.10 / 4.2: the zero-setup stack runs the fake Google server and
+      # api + worker default to it (GOOGLE_IMPORT_PROVIDER=fake from docker-compose.dev.yml, not
+      # from an env file; CI has no Google OAuth client). `up --wait` above already required
+      # google-fake healthy; this pins it explicitly (Compose health + /healthz on the published
+      # host port) and checks what api and worker actually run with.
+      - name: Fake Google healthy, api + worker on the fake import provider
+        run: |
+          set -euo pipefail
+          DC=(docker compose -f docker-compose.dev.yml)
+          cid="$("${DC[@]}" ps -q google-fake)"
+          test -n "$cid" || { echo "::error::google-fake is not running"; exit 1; }
+          health="$(docker inspect -f '{{.State.Health.Status}}' "$cid")"
+          [ "$health" = "healthy" ] || { echo "::error::google-fake is $health"; exit 1; }
+          body="$(curl -fsS "http://localhost:${GOOGLE_FAKE_PORT:-18099}/healthz")"
+          [ "$body" = '{"status":"ok"}' ] || { echo "::error::google-fake /healthz answered: $body"; exit 1; }
+          for svc in api worker; do
+            provider="$("${DC[@]}" exec -T "$svc" printenv GOOGLE_IMPORT_PROVIDER | tr -d '[:space:]')"
+            [ "$provider" = "fake" ] || { echo "::error::$svc GOOGLE_IMPORT_PROVIDER=$provider (expected fake)"; exit 1; }
+            secret="$("${DC[@]}" exec -T "$svc" printenv GOOGLE_IMPORT_CLIENT_SECRET || true)"
+            [ -z "$(printf '%s' "$secret" | tr -d '[:space:]')" ] \
+              || { echo "::error::$svc has a GOOGLE_IMPORT_CLIENT_SECRET in CI"; exit 1; }
+          done
+          echo "google-fake healthy; api + worker on GOOGLE_IMPORT_PROVIDER=fake, no OAuth secret"
 
       - name: Smoke test (step-1..8 acceptance checks)
         env:
@@ -845,6 +915,73 @@ jobs:
           node .github/scripts/scan-logs-for-secrets.mjs --require 'push\.notify'
           "$RUNNER_TEMP/push-logs"
 
+      # The import gate signs demo mom and the nanny in (OTP via Mailpit). It also restarts api
+      # itself, but resetting first keeps the gate independent of what ran before.
+      - name: Reset API rate limits before the import gate (restart api)
+        run: bash .github/scripts/restart-api.sh
+
+      # The gate restarts api (in place: same container id, the tap re-follows it with a full
+      # replay). google-fake is tapped too: it mints the fake tokens and codes. Raw logs stay in
+      # $RUNNER_TEMP, scanned below, never uploaded.
+      - name: Start api/worker/google-fake log tap (import gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/import-logs" api worker google-fake
+
+      # Step-10 Google import gate (docs/plans/step-10.md 4.3, e2e/import/gate.ts), keyless, fake
+      # AI + fake Google: connect (consent page in Chromium, installed above), one pre-uploaded
+      # duplicate, a picked batch of 8 => 5 imported / 1 duplicate / 1 skipped video / 1 failed
+      # oversize, photos approved by the requester with capture date and camera but no GPS,
+      # exactly five new originals, the contributor's imports pending approval, cancel / deny /
+      # reconnect / disconnect (token revoked at the fake), a contributor's Apple-sync upsert =>
+      # 403, and its own log probe. Cleans up and restores Maya's seed state; writes
+      # e2e/import-gate/results.json; prints PASS/FAIL per check and exits 1 on any miss.
+      - name: Import gate (step-10 Google import, fake Google + fake AI)
+        timeout-minutes: 15
+        env:
+          IMPORT_GATE_LOG: ${{ runner.temp }}/import-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$IMPORT_GATE_LOG")"
+          rc=0
+          pnpm e2e:import-gate 2>&1 | tee "$IMPORT_GATE_LOG" || rc=$?
+          {
+            echo '### Import gate (fake Google)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$IMPORT_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |checks passed$|^-- ' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Stop api/worker/google-fake log tap (import gate)
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/import-logs"
+
+      # docs/plans/step-10.md 2.3 / 4.3 step 10: nothing api, worker or google-fake printed during
+      # the import gate holds a Google access/refresh token (`ya29.`, `1//`) or authorization code,
+      # a fake token or code (`fake-access-`, `fake-refresh-`, `fake-code-`), a
+      # googleusercontent.com media URL, a Picker session / picker URL, a fake `/media/` path, a
+      # pickerUri/baseUrl field with a value, a JWT, presign part or bearer. Prints file:line +
+      # pattern name only. The three `--require`s make it non-vacuous: the worker finished an
+      # import batch, the api started one, and google-fake's own log was captured.
+      - name: No Google tokens, codes, media or picker URLs in api/worker/google-fake logs
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs
+          --require 'import\.google: batch finished'
+          --require 'google import started'
+          --require 'google-fake listening'
+          "$RUNNER_TEMP/import-logs"
+
+      - name: Upload import gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: import-gate
+          path: |
+            e2e/import-gate/
+            ${{ runner.temp }}/import-gate
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload push gate output
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1060,7 +1197,10 @@ jobs:
   # (CODE_SIGN_IDENTITY="-"): no Apple team, certificate or provisioning profile, and the
   # simulator app still carries its entitlements. Builds whatever Xcode/iOS SDK macos-latest
   # ships (printed first). The iOS gate (`pnpm e2e:native-ios`) needs a booted simulator and a
-  # manual checklist, so it runs locally only (docs/plans/step-9.md 4.5).
+  # manual checklist, so it runs locally only (docs/plans/step-9.md 4.5). The same holds for the
+  # step-10 iOS album sync gate (`pnpm e2e:native-ios-sync`: XCUITests that seed the simulator's
+  # photo library and grant PhotoKit access, the dev stack, and one manual BG-refresh line;
+  # docs/plans/step-10.md 4.4): local only, never run here.
   ios-sim-build:
     name: iOS Simulator build (manual)
     if: github.event_name == 'workflow_dispatch'

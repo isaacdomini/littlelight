@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type BossLike,
   createJobQueue,
+  IMPORT_GOOGLE_SEND_OPTIONS,
   PUSH_DEBOUNCE_DEFAULTS,
   PUSH_SEND_OPTIONS,
   pushSendOptions,
@@ -159,6 +160,70 @@ describe("enqueueDataExport", () => {
   });
 });
 
+const IMPORT_BATCH = "77777777-7777-4777-8777-777777777777";
+const importJob = { batchId: IMPORT_BATCH, babyId: BABY };
+
+describe("enqueueImportGoogle (step 10)", () => {
+  it("sends import.google keyed by the batch id with retryLimit 2, retryDelay 60 and a 2 hour expiry", async () => {
+    const boss = fakeBoss();
+    const q = createJobQueue({ log: log(), createBoss: () => boss, retryDelayMs: 0 });
+    expect(await q.enqueueImportGoogle?.(importJob)).toBe(true);
+    expect(boss.send).toHaveBeenCalledWith(JOBS.importGoogle, importJob, {
+      singletonKey: IMPORT_BATCH,
+      retryLimit: 2,
+      retryDelay: 60,
+      expireInSeconds: 7200,
+    });
+    expect(IMPORT_GOOGLE_SEND_OPTIONS).toEqual({
+      retryLimit: 2,
+      retryDelay: 60,
+      expireInSeconds: 7200,
+    });
+  });
+
+  it("rejects extra keys (a token, a session id, a URL) before anything is sent", async () => {
+    const boss = fakeBoss();
+    const q = createJobQueue({ log: log(), createBoss: () => boss, retryDelayMs: 0 });
+    for (const extra of [
+      { refreshToken: "x" },
+      { sessionId: "s" },
+      { url: "https://x.test" },
+      { tzHint: "UTC" },
+    ])
+      await expect(q.enqueueImportGoogle?.({ ...importJob, ...extra } as never)).rejects.toThrow();
+    await expect(
+      q.enqueueImportGoogle?.({ batchId: "nope", babyId: BABY } as never),
+    ).rejects.toThrow();
+    expect(boss.send).not.toHaveBeenCalled();
+  });
+
+  it("a failed send resolves false after one retry, logging the job name only", async () => {
+    const l = log();
+    const send = vi.fn().mockRejectedValue(new Error("secret-detail ya29.abc"));
+    const q = createJobQueue({ log: l, createBoss: () => fakeBoss({ send }), retryDelayMs: 0 });
+    expect(await q.enqueueImportGoogle?.(importJob)).toBe(false);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(l.warn.mock.calls)).not.toContain("secret-detail");
+    expect(JSON.stringify(l.warn.mock.calls)).not.toContain("ya29");
+  });
+
+  it("withAllSenders adds a validating no-op that resolves false for stubs without it", async () => {
+    const warn = vi.fn();
+    const stub = {
+      enqueueIngest: vi.fn(async () => true),
+      enqueueReindex: vi.fn(async () => true),
+      enqueueShareApply: vi.fn(async () => true),
+      enqueuePush: vi.fn(async () => true),
+      enqueueDataExport: vi.fn(async () => true),
+      close: vi.fn(async () => undefined),
+    };
+    const jobs = withAllSenders(stub as never, { warn } as never);
+    expect(await jobs.enqueueImportGoogle(importJob)).toBe(false);
+    expect(warn).toHaveBeenCalledWith({ job: JOBS.importGoogle }, expect.any(String));
+    await expect(jobs.enqueueImportGoogle({ ...importJob, extra: 1 } as never)).rejects.toThrow();
+  });
+});
+
 describe("withAllSenders (job-queue stubs without a push sender)", () => {
   it("adds a validating no-op enqueuePush that resolves false and logs the job name only", async () => {
     const warn = vi.fn();
@@ -184,6 +249,7 @@ describe("withAllSenders (job-queue stubs without a push sender)", () => {
       enqueueShareApply: vi.fn(),
       enqueuePush: vi.fn(),
       enqueueDataExport: vi.fn(),
+      enqueueImportGoogle: vi.fn(),
       close: vi.fn(),
     };
     expect(withAllSenders(full as never, { warn: vi.fn() } as never)).toBe(full);

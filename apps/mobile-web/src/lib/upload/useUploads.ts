@@ -8,7 +8,8 @@ export function useUploadItems(babyId: string | undefined): {
 } {
   const all = useSyncExternalStore(uploadManager.subscribe, uploadManager.getSnapshot);
   return useMemo(() => {
-    const items = babyId ? all.filter((i) => i.babyId === babyId) : [];
+    // Album-sync items run on their own lane and never appear on the Upload screen.
+    const items = babyId ? all.filter((i) => i.babyId === babyId && i.lane === "user") : [];
     return { items, summary: summarize(items) };
   }, [all, babyId]);
 }

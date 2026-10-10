@@ -16,7 +16,10 @@ import { SHARE_PATH } from "./constants";
 // 3. rewrites every remaining string: JWTs, Bearer/Basic credentials, `X-Amz-*` and other
 //    signature parameters, secret `key=value` pairs, URL user-info, query strings and fragments,
 //    invite/share path segments, emails, coordinates, Postgres row details and token-shaped runs
-//    are replaced; strings are capped at `TELEMETRY_MAX_STRING_CHARS`;
+//    are replaced, and so are (step 10, photo import) Google OAuth tokens and codes, the fake
+//    Picker's token shapes, Google media / Picker URLs, OAuth `code=`/`state=` pairs, native
+//    upload-cache and photo-library paths and PHAsset identifiers; strings are capped at
+//    `TELEMETRY_MAX_STRING_CHARS`;
 // 4. walks at most `TELEMETRY_MAX_DEPTH` levels (deeper values become a marker), caps arrays and
 //    objects, cuts cycles, and copies: the input is never mutated.
 // The output of `scrubTelemetryEvent` is stable under a second pass (idempotent).
@@ -64,8 +67,15 @@ export const SHARE_ROUTE_SEGMENTS: ReadonlySet<string> = new Set([
   "download",
   "manifest.webmanifest",
 ]);
-/** Path segments whose next segment is always a secret: `/invites/<token>`, SPA `/s/<token>`. */
-const SECRET_NEXT_SEGMENT: ReadonlySet<string> = new Set(["invites", SHARE_PATH.slice(1)]);
+/**
+ * Path segments whose next segment is always a secret: `/invites/<token>`, SPA `/s/<token>`, and
+ * a Picker session in a `pickerUri` (`/picker/<session>`, Google's and the fake's; step 10).
+ */
+const SECRET_NEXT_SEGMENT: ReadonlySet<string> = new Set([
+  "invites",
+  SHARE_PATH.slice(1),
+  "picker",
+]);
 
 /** Applies the path rules of `redactUrl` to a path without query string. */
 function redactPathSegments(path: string): string {
@@ -114,6 +124,31 @@ export function redactUrl(url: string): string {
 export const TELEMETRY_SCRUB_PATTERNS = Object.freeze({
   /** A JWT (GoTrue access token, viewer JWT, id token): `eyJ<header>.<payload>.<signature>`. */
   jwt: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
+  /** A Google OAuth access token: `ya29.<base64url>` (photo import, docs/plans/step-10.md 2.3). */
+  googleAccessToken: /\bya29\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/,
+  /** A Google OAuth refresh token: `1//<base64url>`. */
+  googleRefreshToken: /\b1\/\/[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)*/,
+  /** A Google OAuth authorization code: `4/0<base64url>`. */
+  googleAuthCode: /\b4\/[0-9A-Za-z_-]{10,}(?:\.[A-Za-z0-9_-]+)*/,
+  /** The fake Picker server's tokens and codes: `fake-access-…`, `fake-refresh-…`, `fake-code-…`. */
+  fakeGoogleToken: /\bfake-(?:access|refresh|code)-[A-Za-z0-9_-]+/,
+  /**
+   * A Google media URL tail (a Picker `baseUrl`, with or without `=d`/size params): group 1 is
+   * the host (`lh3.googleusercontent.com`), kept; the path is replaced.
+   */
+  googleMediaUrl: /\b((?:[A-Za-z0-9-]+\.)*googleusercontent\.com)\/(?!\[)[^\s"'<>()[\]{}]+/i,
+  /**
+   * A Picker session/media-items URL or a `pickerUri` tail: group 1 is the host and fixed path,
+   * group 2 the separator (`/` or `?`), both kept; the session id / query is replaced.
+   */
+  googlePickerUrl:
+    /\b(photospicker\.googleapis\.com\/v1\/(?:sessions|mediaItems)|photos\.google\.com\/picker)([/?])(?!\[)[^\s"'<>()[\]{}]+/i,
+  /** A file in the native upload cache (`Caches/ll-uploads/<uuid>.heic`): group 1 kept. */
+  nativeUploadPath: /\b(ll-uploads)\/(?!\[)[^\s"'<>()[\]{}]+/,
+  /** A file in the iOS photo library (`/var/mobile/Media/DCIM/…`): group 1 kept. */
+  photoLibraryPath: /(\/var\/mobile\/Media)\/(?!\[)[^\s"'<>()[\]{}]+/,
+  /** A PHAsset local identifier (`<UUID>/L0/001`): never leaves the device (D3). */
+  phAssetId: /\b[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\/L0\/\d{3}\b/i,
   /** `Authorization` credentials written out: `Bearer <token>`, `Basic <base64>`. */
   authCredential: /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/i,
   /** Presigned-URL parameters: `X-Amz-Signature=…`, `X-Amz-Credential=…`, SigV2 `Signature=…`. */
@@ -136,6 +171,8 @@ export const TELEMETRY_SCRUB_PATTERNS = Object.freeze({
    * path; group 1 is the character before it (no lookbehind: iOS 15 WebViews lack it).
    */
   queryOrFragment: /([A-Za-z0-9_.\-\]])([?#])(?!\[redacted\])[^\s"'<>(){}]+/,
+  /** An OAuth `code=…` or `state=…` parameter outside a URL (`code=4/0A… state=eyJ…`). */
+  oauthParam: /\b(code|state)=(?!\[)[^\s"'&,;)}\]]+/,
   /** An email address. */
   email: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}/,
   /** A decimal coordinate pair: `47.6062, -122.3321`. */
@@ -221,6 +258,15 @@ type Replacer = (match: string, ...groups: string[]) => string;
  */
 const STRING_RULES: ReadonlyArray<readonly [RegExp, Replacer]> = [
   [withGlobalFlag(P.jwt), () => "[jwt]"],
+  [withGlobalFlag(P.googleAccessToken), () => REDACTED],
+  [withGlobalFlag(P.googleRefreshToken), () => REDACTED],
+  [withGlobalFlag(P.googleAuthCode), () => REDACTED],
+  [withGlobalFlag(P.fakeGoogleToken), () => REDACTED],
+  [withGlobalFlag(P.googleMediaUrl), (_m, host) => `${host}/${REDACTED}`],
+  [withGlobalFlag(P.googlePickerUrl), (_m, lead, sep) => `${lead}${sep}${REDACTED}`],
+  [withGlobalFlag(P.nativeUploadPath), (_m, dir) => `${dir}/${REDACTED}`],
+  [withGlobalFlag(P.photoLibraryPath), (_m, dir) => `${dir}/${REDACTED}`],
+  [withGlobalFlag(P.phAssetId), () => "[asset-id]"],
   [withGlobalFlag(P.authCredential), (_m, scheme) => `${scheme} ${REDACTED}`],
   [withGlobalFlag(P.amzParam), (_m, name) => `${name}=${REDACTED}`],
   [withGlobalFlag(P.secretPair), (_m, key, sep) => `${key}${sep}${REDACTED}`],
@@ -230,6 +276,7 @@ const STRING_RULES: ReadonlyArray<readonly [RegExp, Replacer]> = [
   [withGlobalFlag(P.labelledCoordinate), (_m, key, sep) => `${key}${sep}${REDACTED}`],
   [withGlobalFlag(P.urlOrPath), (m) => scrubUrlOrPath(m)],
   [withGlobalFlag(P.queryOrFragment), (_m, before, mark) => `${before}${mark}${REDACTED}`],
+  [withGlobalFlag(P.oauthParam), (_m, key) => `${key}=${REDACTED}`],
   [withGlobalFlag(P.email), () => "[email]"],
   [withGlobalFlag(P.tokenRun), (m, before, run) => (isTokenLike(run) ? `${before}${REDACTED}` : m)],
 ];
@@ -306,6 +353,20 @@ const SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   "credential",
   "credentials",
   "signedurl",
+  // Photo import (step 10): Google capabilities and identifiers, device-only identifiers, parent text.
+  "baseurl",
+  "pickeruri",
+  "mediaurl",
+  "downloadurl",
+  "providersessionid",
+  "provideritemid",
+  "refreshtokenenc",
+  "localidentifier",
+  "assetid",
+  "assetids",
+  "albumid",
+  "albumtitle",
+  "devicelabel",
   // Identity and contact data.
   "user",
   "email",

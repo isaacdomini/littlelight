@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import BackgroundTasks
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -10,6 +11,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Before the scene (and so the WebView and its session restore) exists.
         FreshInstall.wipeKeychainIfNeeded(application)
         excludeFromBackup()
+        // Must be registered before launch finishes; the handler only forwards to the plugin.
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: LLPhotoSync.taskIdentifier, using: nil) { task in
+            guard let refresh = task as? BGAppRefreshTask else { task.setTaskCompleted(success: false); return }
+            LLPhotoSync.shared.handle(refresh)
+        }
         return true
     }
 
@@ -23,7 +29,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let webKit = library.appendingPathComponent("WebKit", isDirectory: true)
         try? fm.createDirectory(at: webKit, withIntermediateDirectories: true)
         var targets: [URL] = [webKit]
-        for name in ["ll-uploads", "ll-share"] {
+        // Sync ledger (PHAsset identifiers): never backed up, never leaves the device.
+        if let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let ledger = support.appendingPathComponent("ll-sync", isDirectory: true)
+            try? fm.createDirectory(at: ledger, withIntermediateDirectories: true)
+            targets.append(ledger)
+        }
+        for name in ["ll-uploads", "ll-share", "ll-sync-export"] {
             let dir = caches.appendingPathComponent(name, isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             targets.append(dir)
@@ -51,8 +63,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
-        guard identifier == LLUploadSession.identifier else { completionHandler(); return }
-        LLUploadSession.shared.handleBackgroundEvents(completion: completionHandler)
+        guard let session = LLUploadSession.forIdentifier(identifier) else { completionHandler(); return }
+        session.handleBackgroundEvents(completion: completionHandler)
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

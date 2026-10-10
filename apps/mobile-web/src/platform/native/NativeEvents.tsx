@@ -2,10 +2,11 @@ import type { PushData } from "@littlelight/shared";
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/AuthProvider";
-import { isNative } from "../platform";
+import { isNative, nativePlatform } from "../platform";
 import { toAppPath } from "./deepLinks";
 import { onPushTap, refreshPushRegistration } from "./push";
 import { refreshIfNeeded } from "./session";
+import { syncMayBeOn } from "./syncFlag";
 
 // Native app-level events (docs/plans/step-9.md 2.4, 2.5, 2.8). Renders nothing.
 // - appUrlOpen / launch URL: allow-listed deep links only (`toAppPath`), never logged.
@@ -53,6 +54,12 @@ function firstSightOfLaunchUrl(url: string): boolean {
   return true;
 }
 
+/** Album sync (iOS only; does nothing unless a parent set it up on this phone). */
+function syncNow(trigger: "launch" | "resume") {
+  if (nativePlatform() !== "ios" || !syncMayBeOn()) return;
+  void import("./photoSync").then((m) => m.photoSync.runSync(trigger)).catch(() => undefined);
+}
+
 function useAppEvents(go: Go, goPushTap: (data: PushData) => void) {
   const goRef = useRef(go);
   const tapRef = useRef(goPushTap);
@@ -75,7 +82,12 @@ function useAppEvents(go: Go, goPushTap: (data: PushData) => void) {
         else handles.push(handle);
       };
       await add(App.addListener("appUrlOpen", (e) => route(e.url)));
-      await add(App.addListener("resume", () => void refreshIfNeeded().catch(() => undefined)));
+      await add(
+        App.addListener("resume", () => {
+          void refreshIfNeeded().catch(() => undefined);
+          syncNow("resume");
+        }),
+      );
       await add(
         App.addListener("backButton", ({ canGoBack }) => {
           if (canGoBack) window.history.back();
@@ -109,7 +121,10 @@ export function NativeEvents() {
   );
 
   useEffect(() => {
-    if (signedIn && isNative()) void refreshPushRegistration().catch(() => undefined);
+    if (signedIn && isNative()) {
+      void refreshPushRegistration().catch(() => undefined);
+      syncNow("launch");
+    }
   }, [signedIn]);
 
   return null;

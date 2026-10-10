@@ -3,6 +3,8 @@ import {
   type ApiErrorResponse,
   CHAT_MESSAGES,
   EXPORTS_PER_BABY_PER_DAY,
+  IMPORT_BATCHES_PER_BABY_PER_DAY,
+  IMPORT_SOURCES_PER_BABY_MAX,
   type PasscodeInvalidDetails,
   SHARE_EXPIRED_MESSAGE,
   SHARE_LINKS_PER_BABY_MAX,
@@ -156,6 +158,63 @@ export const exportExpired = (pending = false) =>
 /** 403 `not_requester`: only the admin who requested an export can download it (D3). */
 export const notRequester = () =>
   new ApiError(403, "not_requester", "Only the parent who started this export can download it");
+
+// Step 10 (docs/plans/step-10.md 2.6; packages/db/migrations/1792300000300_photo-import.sql):
+// photo import errors. Thrown by `apps/api/src/imports/**` and mapped from the import triggers
+// below. Messages never name a token, a Google id, an album title or a device label.
+
+/**
+ * 404 `feature_unavailable`: Google import is off on this server (`GOOGLE_IMPORT_PROVIDER=none`).
+ * The UI hides the feature from `GET /me/import/google/connection` (`available: false`).
+ */
+export const featureUnavailable = () =>
+  new ApiError(404, "feature_unavailable", "Google Photos import isn't available on this server");
+
+/** 409 `google_not_connected`: the caller has no Google connection. */
+export const googleNotConnected = () =>
+  new ApiError(409, "google_not_connected", "Connect Google Photos first");
+
+/** 409 `google_reconnect`: Google refused the stored refresh token (revoked or expired). */
+export const googleReconnect = () =>
+  new ApiError(
+    409,
+    "google_reconnect",
+    "Google Photos needs to be connected again. Reconnect and try once more.",
+  );
+
+/** 409 `import_in_progress`: one picking/queued/running Picker batch per album. */
+export const importInProgress = () =>
+  new ApiError(
+    409,
+    "import_in_progress",
+    "An import into this album is already in progress. Wait for it to finish or cancel it.",
+  );
+
+/** 429 `rate_limited`: `IMPORT_BATCHES_PER_BABY_PER_DAY` Picker batches per album per 24 h. */
+export const importRateLimited = () =>
+  new ApiError(
+    429,
+    "rate_limited",
+    `This album can import from Google Photos ${IMPORT_BATCHES_PER_BABY_PER_DAY} times a day. Try again tomorrow.`,
+    undefined,
+    { retryAfterSec: 3600 },
+  );
+
+/** 409 `import_source_exists`: another user's sync row exists for this device and album. */
+export const importSourceExists = () =>
+  new ApiError(
+    409,
+    "import_source_exists",
+    "Someone else already syncs an album from this device into this baby's album",
+  );
+
+/** 409 `import_source_limit`: `IMPORT_SOURCES_PER_BABY_MAX` sync rows per album. */
+export const importSourceLimit = () =>
+  new ApiError(
+    409,
+    "import_source_limit",
+    `This album already syncs from the maximum of ${IMPORT_SOURCES_PER_BABY_MAX} devices`,
+  );
 
 /** A node-postgres `DatabaseError` (has a 5-character SQLSTATE). */
 export interface PgErrorLike {
@@ -428,6 +487,27 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
     "approved_by and approved_at are set by the database",
     () => new ApiError(409, "conflict", "That conflicts with the current state"),
   ],
+  // Step 10 (packages/db/migrations/1792300000300_photo-import.sql; docs/plans/step-10.md 2.6).
+  // Listed before the generic `<table>.<column>` rule: the `google_accounts` shape messages are
+  // server bugs (the API builds every value), never input errors.
+  ["import source limit reached", () => importSourceLimit()],
+  ["cannot sync into a trashed album", () => babyTrashed()],
+  ["cannot import into a trashed album", () => babyTrashed()],
+  ["an import is already in progress for this album", () => importInProgress()],
+  ["import rate limit reached", () => importRateLimited()],
+  [
+    "import batch transition not allowed",
+    () => new ApiError(409, "conflict", "This import has already moved on"),
+  ],
+  [
+    "import_sources counters must be zero or more",
+    () =>
+      new ApiError(400, "validation_failed", "The request is invalid", {
+        fields: ["body"],
+      }),
+  ],
+  ["google_accounts.", () => internalError()],
+  ["import item must belong to an active batch", () => internalError()],
 ];
 
 /**
@@ -474,6 +554,8 @@ const UNIQUE_VIOLATIONS: ReadonlyMap<string, () => ApiError> = new Map([
   ],
   // Backstop of `data_exports_rate_limit` (two concurrent requests; the trigger normally wins).
   ["data_exports_one_active_per_baby", () => exportInProgress()],
+  // Backstop of `import_batches_one_active` (step 10).
+  ["import_batches_one_active_per_baby", () => importInProgress()],
 ]);
 
 /** 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). */

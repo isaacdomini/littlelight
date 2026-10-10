@@ -69,25 +69,25 @@ describe("AI queue definitions (step 6)", () => {
     });
   });
 
-  it("there are exactly fourteen queues, one per job name", () => {
+  it("there are exactly sixteen queues, one per job name", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(Object.values(JOBS).sort());
-    expect(Object.keys(QUEUES)).toHaveLength(14);
+    expect(Object.keys(QUEUES)).toHaveLength(16);
   });
 
-  it("schedules(config) adds the two AI crons and the search reconcile and the share reconcile to the three fixed ones (7 total)", () => {
+  it("schedules(config) adds the two AI crons and the search reconcile and the share reconcile to the four fixed ones (8 total)", () => {
     const all = schedules({
       AI_FLUSH_INTERVAL_CRON: "*/10 * * * *",
       AI_POLL_INTERVAL_CRON: "*/2 * * * *",
       SEARCH_RECONCILE_CRON: "5 * * * *",
     });
-    expect(all).toHaveLength(7);
+    expect(all).toHaveLength(8);
     expect(Object.fromEntries(all)[JOBS.searchReconcile]).toBe("5 * * * *");
     expect(Object.fromEntries(all)).toMatchObject({
       [JOBS.aiFlush]: "*/10 * * * *",
       [JOBS.aiPoll]: "*/2 * * * *",
     });
-    expect(all.slice(0, 3)).toEqual([...SCHEDULES]);
-    expect(SCHEDULES).toHaveLength(3);
+    expect(all.slice(0, 4)).toEqual([...SCHEDULES]);
+    expect(SCHEDULES).toHaveLength(4);
     expect(all.map(([n]) => n)).not.toContain(JOBS.aiBackfill); // on demand only
   });
 });
@@ -216,7 +216,12 @@ describe("startWorkers registers the AI handlers", () => {
       log,
       ingestConcurrency: 1,
     });
-    expect([...registered.keys()].sort()).toEqual(Object.values(JOBS).sort());
+    // import.google has no handler without `importGoogle` deps (jobs wait); import.sweep is always registered.
+    expect([...registered.keys()].sort()).toEqual(
+      Object.values(JOBS)
+        .filter((n) => n !== JOBS.importGoogle)
+        .sort(),
+    );
     await registered.get(JOBS.aiFlush)?.handler([
       { id: "1", data: { force: true } },
       { id: "2", data: {} },

@@ -6,7 +6,8 @@ import { z } from "zod";
 // Step 7 (docs/plans/step-7.md 2.4, D13) adds `plan_required` and `ai_budget_exceeded` so the
 // SPA can key the Plus upsell and the budget notice on a code, not on a message.
 // Step 8 (docs/plans/step-8.md 2.4) adds the share-link viewer codes. The review-fixes batch
-// (docs/plans/review-fixes.md 2.5) adds the data export codes.
+// (docs/plans/review-fixes.md 2.5) adds the data export codes; step 10 (docs/plans/step-10.md
+// 2.6) the photo import codes.
 
 export const apiErrorCodeSchema = z.enum([
   "unauthorized",
@@ -66,6 +67,19 @@ export const apiErrorCodeSchema = z.enum([
   "not_requester",
   /** 409: the album is in the trash and cannot be exported. */
   "baby_trashed",
+  // Photo import (docs/plans/step-10.md 2.6).
+  /** 404: Google import is off on this server (`GOOGLE_IMPORT_PROVIDER=none`); the UI hides it. */
+  "feature_unavailable",
+  /** 409: the caller has not connected Google Photos. */
+  "google_not_connected",
+  /** 409: Google refused the stored refresh token (revoked / expired); connect again. */
+  "google_reconnect",
+  /** 409: a Picker import of this album is already picking, queued or running. */
+  "import_in_progress",
+  /** 409: another user's sync row already exists for this device and album. */
+  "import_source_exists",
+  /** 409: the album has the most sync rows allowed (`IMPORT_SOURCES_PER_BABY_MAX`). */
+  "import_source_limit",
   "internal",
 ]);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;

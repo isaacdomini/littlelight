@@ -65,14 +65,14 @@ export function createSmtpMailer(config: SmtpConfig, log: FastifyBaseLogger): Ma
     async send(msg) {
       const template = msg.template ?? "unnamed";
       try {
-        const info = await transport.sendMail({
+        await transport.sendMail({
           from,
           to: msg.to,
           subject: msg.subject,
           html: msg.html,
           text: msg.text,
         });
-        log.info({ template, messageId: info.messageId }, "mail sent");
+        log.info({ template }, "mail sent");
       } catch (err) {
         const category = mailErrorCategory(err);
         log.warn({ template, category }, "mail delivery failed");

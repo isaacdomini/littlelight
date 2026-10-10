@@ -129,6 +129,9 @@ export function AccountPage() {
             <h2 className="text-xl font-semibold">{t("account.consequencesTitle")}</h2>
             <ul className="list-disc space-y-2 pl-5">
               <li>{t("account.consequence1")}</li>
+              {data?.googlePhotosConnected ? (
+                <li data-testid="account-google">{t("account.googleConnected")}</li>
+              ) : null}
               <li>{t("account.consequence2")}</li>
               {isNative() ? null : <li>{t("account.consequence3")}</li>}
               <li>{t("account.consequence4")}</li>

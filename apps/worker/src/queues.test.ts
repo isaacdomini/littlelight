@@ -144,11 +144,12 @@ describe("queue definitions", () => {
     });
   });
 
-  it("schedules: reconcile every 5 min, purge hourly, sweep twice an hour", () => {
+  it("schedules: reconcile every 5 min, purge hourly, sweep twice an hour, import sweep hourly", () => {
     expect(Object.fromEntries(SCHEDULES)).toEqual({
       [JOBS.ingestReconcile]: "*/5 * * * *",
       [JOBS.purgeTrash]: "7 * * * *",
       [JOBS.uploadsSweep]: "23,53 * * * *",
+      [JOBS.importSweep]: "37 * * * *",
     });
   });
 
@@ -204,7 +205,7 @@ describe("queue definitions", () => {
       AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
       AI_POLL_INTERVAL_CRON: "*/10 * * * *",
     });
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     for (const c of calls) expect(c[3]).toEqual({ tz: "UTC" });
     // Search reconcile falls back to the shared default when the config omits it.
     expect(calls.map((c) => [c[0], c[1]])).toContainEqual([JOBS.searchReconcile, "17 * * * *"]);

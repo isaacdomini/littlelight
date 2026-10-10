@@ -2,6 +2,8 @@ import { UPLOAD_MAX_FILES_PER_SESSION } from "./upload";
 
 /** Display name on the home screen, and the title of every push notification (defined in constants). */
 export { APP_NAME } from "./constants";
+/** `BGAppRefreshTask` id of Apple album sync (docs/plans/step-10.md 2.4); defined in `imports.ts`. */
+export { SYNC_BG_TASK_ID } from "./imports";
 
 // Native app identity and deep-link contracts (docs/plans/step-9.md 2.2, 2.3, 2.4, 2.10; PRD
 // "Mobile and Capacitor", "Invites": "The link opens the app if installed (Universal Links / App
@@ -54,3 +56,16 @@ export const NATIVE_ORIGINS_DEFAULT = ["capacitor://localhost", "https://localho
 
 /** Most photos one native pick may return (= `UPLOAD_MAX_FILES_PER_SESSION`, FR-2.1). */
 export const NATIVE_UPLOAD_PICK_MAX: number = UPLOAD_MAX_FILES_PER_SESSION;
+
+/**
+ * Secure-store entry (Keychain / Android Keystore) holding this install's id: a random UUID
+ * created on demand, sent as `import_sources.device_id` (docs/plans/step-10.md 2.5). The
+ * fresh-install Keychain wipe makes a reinstall a new device, by design (R8).
+ */
+export const INSTALL_ID_KEY = "ll.install.v1";
+
+/**
+ * Secure-store entry holding the device's album-sync config `{ sourceId, babyId, albumId,
+ * albumTitle, wifiOnly, paused }`. The album's PHAsset collection id stays on the device (D3).
+ */
+export const SYNC_CONFIG_KEY = "ll.sync.v1";

@@ -2,7 +2,10 @@ import {
   type DataExportJob,
   dataExportJobSchema,
   dataExportSingletonKey,
+  type ImportGoogleJob,
   type IngestJob,
+  importGoogleJobSchema,
+  importGoogleSingletonKey,
   ingestJobSchema,
   JOBS,
   PUSH_NOTIFY_JOB,
@@ -60,6 +63,14 @@ import { errorCategory } from "../routes/healthz";
 // location flag: the worker re-reads the row). `singletonKey = exportId` on the worker's
 // `exclusive` queue; 1 retry after 60 s; 4-hour expiry. A failed send is NOT repaired by a
 // reconcile: the route marks the row `failed/internal` and answers 503, so the admin can retry.
+//
+// Step 10 (docs/plans/step-10.md 2.3, 2.6) adds `import.google {batchId, babyId}`
+// (`enqueueImportGoogle`): sent by `GET /imports/:batchId` after the batch turned `queued`
+// (commit first, outside `runAs`). The strict `importGoogleJobSchema` carries the two ids only
+// (never a token, a Google session or item id, a URL or a time zone: the worker re-reads the
+// batch as `pipeline`). `singletonKey = batchId` on the worker's `exclusive` queue, 2 retries
+// 60 s apart, 2-hour expiry. A failed send leaves the batch `queued`; `import.sweep` re-sends
+// batches queued for more than 10 minutes.
 
 /** Per-photo ingest options (plan 2.5): one queued copy per photo, 3 retries with backoff. */
 export const INGEST_SEND_OPTIONS = Object.freeze({
@@ -108,6 +119,16 @@ export const DATA_EXPORT_SEND_OPTIONS = Object.freeze({
   retryLimit: 1,
   retryDelay: 60,
   expireInSeconds: 14_400,
+}) satisfies SendOptions;
+
+/**
+ * `import.google` options (step-10 plan 2.3): `exclusive` queue with `singletonKey = batchId`,
+ * 2 retries 60 s apart (storage/network failures only), 2-hour expiry (500 originals).
+ */
+export const IMPORT_GOOGLE_SEND_OPTIONS = Object.freeze({
+  retryLimit: 2,
+  retryDelay: 60,
+  expireInSeconds: 7200,
 }) satisfies SendOptions;
 
 /** Debounce per push kind, in seconds (`PUSH_PHOTOS_DEBOUNCE_SEC` / `PUSH_SHARE_DEBOUNCE_SEC`). */
@@ -184,6 +205,17 @@ export interface JobQueue {
    * type-check; `createJobQueue` always implements it and `app.jobs` always has it.
    */
   enqueueDataExport?(job: DataExportJob): Promise<boolean>;
+  /**
+   * Validate and enqueue `import.google` (singletonKey = batchId, `IMPORT_GOOGLE_SEND_OPTIONS`).
+   * Same contract: `true` when accepted (or an identical job is already queued), `false` after a
+   * failed retry (logged by category and job name only), never throws for transport errors;
+   * throws only for an invalid payload. Call only after the batch turned `queued` and committed,
+   * outside `runAs`. On `false` the batch stays `queued` and `import.sweep` re-sends it.
+   *
+   * Optional in this interface only so job-queue stubs written before step 10 still type-check;
+   * `createJobQueue` always implements it and `app.jobs` always has it.
+   */
+  enqueueImportGoogle?(job: ImportGoogleJob): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -326,6 +358,16 @@ export function createJobQueue(opts: JobQueueOptions): AppJobQueue {
         "data export enqueue failed; the export is marked failed",
       );
     },
+    async enqueueImportGoogle(input) {
+      const job = importGoogleJobSchema.parse(input);
+      return sendWithRetry(
+        JOBS.importGoogle,
+        job,
+        importGoogleSingletonKey(job),
+        IMPORT_GOOGLE_SEND_OPTIONS,
+        "import enqueue failed; import.sweep will re-send",
+      );
+    },
     async close() {
       closed = true;
       const b = boss ?? (starting ? await starting.catch(() => null) : null);
@@ -359,17 +401,23 @@ export async function enqueueReindexAll(
 
 /**
  * `jobs` with every sender present. A stub without `enqueueShareApply` / `enqueuePush` /
- * `enqueueDataExport` gets one
+ * `enqueueDataExport` / `enqueueImportGoogle` gets one
  * that validates the payload (a bad payload still throws, as in production), logs by job name
  * only and resolves `false` (the "not accepted" result). Exported for tests.
  */
 export function withAllSenders(jobs: JobQueue, log: Pick<FastifyBaseLogger, "warn">): AppJobQueue {
-  if (jobs.enqueueShareApply && jobs.enqueuePush && jobs.enqueueDataExport) {
+  if (
+    jobs.enqueueShareApply &&
+    jobs.enqueuePush &&
+    jobs.enqueueDataExport &&
+    jobs.enqueueImportGoogle
+  ) {
     return jobs as AppJobQueue;
   }
   const shareApply = jobs.enqueueShareApply?.bind(jobs);
   const push = jobs.enqueuePush?.bind(jobs);
   const dataExport = jobs.enqueueDataExport?.bind(jobs);
+  const importGoogle = jobs.enqueueImportGoogle?.bind(jobs);
   return {
     enqueueIngest: (job) => jobs.enqueueIngest(job),
     enqueueReindex: (job) => jobs.enqueueReindex(job),
@@ -392,6 +440,13 @@ export function withAllSenders(jobs: JobQueue, log: Pick<FastifyBaseLogger, "war
       (async (input) => {
         dataExportJobSchema.parse(input);
         log.warn({ job: JOBS.dataExport }, "job queue has no data.export sender; not enqueued");
+        return false;
+      }),
+    enqueueImportGoogle:
+      importGoogle ??
+      (async (input) => {
+        importGoogleJobSchema.parse(input);
+        log.warn({ job: JOBS.importGoogle }, "job queue has no import.google sender; not enqueued");
         return false;
       }),
     close: () => jobs.close(),

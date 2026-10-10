@@ -36,6 +36,7 @@ import { WelcomePage } from "./pages/auth/WelcomePage";
 import { ChatPage } from "./pages/ChatPage";
 import { FamilyPage } from "./pages/FamilyPage";
 import { InvitePage } from "./pages/InvitePage";
+import { GoogleConnectedPage, isGoogleConnectedPath } from "./pages/import/GoogleConnectedPage";
 import { LegalPage } from "./pages/LegalPage";
 import { MilestonesPage } from "./pages/MilestonesPage";
 import { BabyPage } from "./pages/onboarding/BabyPage";
@@ -48,6 +49,7 @@ import { ShareLinkPhotosPage } from "./pages/ShareLinkPhotosPage";
 import { AccountPage } from "./pages/settings/AccountPage";
 import { DevicesPage } from "./pages/settings/DevicesPage";
 import { ExportPage } from "./pages/settings/ExportPage";
+import { ImportPage } from "./pages/settings/ImportPage";
 import { NotificationsPage } from "./pages/settings/NotificationsPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 import { SharedAlbumPage } from "./pages/share/SharedAlbumPage";
@@ -168,6 +170,10 @@ function ParentApp() {
                     element={app("/settings/export", <ExportPage />, true)}
                   />
                   <Route
+                    path="/settings/import"
+                    element={app("/settings/import", <ImportPage />, true)}
+                  />
+                  <Route
                     path="/settings/notifications"
                     element={app("/settings/notifications", <NotificationsPage />, true)}
                   />
@@ -207,6 +213,13 @@ const SHARE_PATH_RE = /^\/s\/([A-Za-z0-9_-]{22,64})\/?$/;
 
 export function App() {
   const m = SHARE_PATH_RE.exec(window.location.pathname);
+  if (isGoogleConnectedPath(window.location.pathname)) {
+    return (
+      <IonApp>
+        <GoogleConnectedPage />
+      </IonApp>
+    );
+  }
   if (window.location.pathname.startsWith("/s/")) {
     return m?.[1] ? <ViewerApp token={m[1]} /> : <ViewerExpired />;
   }

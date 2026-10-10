@@ -35,8 +35,32 @@ if (!isDeepStrictEqual(debug, expected)) {
       errors.push(`Info-Debug.plist differs at ${k}`);
   }
 }
+// Album sync (step 10): both plists must carry the background-refresh keys and the photo string.
+const SYNC_TASK_ID = "com.tesarsoft.littlelight.sync";
+for (const [name, plist] of [
+  ["Info.plist", release],
+  ["Info-Debug.plist", debug],
+] as const) {
+  const modes = plist.UIBackgroundModes;
+  if (!Array.isArray(modes) || !modes.includes("fetch"))
+    errors.push(`${name} UIBackgroundModes must include fetch`);
+  if (Array.isArray(modes) && modes.some((m) => m !== "fetch"))
+    errors.push(`${name} UIBackgroundModes must be exactly [fetch]`);
+  const ids = plist.BGTaskSchedulerPermittedIdentifiers;
+  if (!Array.isArray(ids) || ids.length !== 1 || ids[0] !== SYNC_TASK_ID)
+    errors.push(`${name} BGTaskSchedulerPermittedIdentifiers must be [${SYNC_TASK_ID}]`);
+  if (plist.PHPhotoLibraryPreventAutomaticLimitedAccessAlert !== true)
+    errors.push(`${name} PHPhotoLibraryPreventAutomaticLimitedAccessAlert must be true`);
+  const photo = plist.NSPhotoLibraryUsageDescription;
+  if (typeof photo !== "string" || !/album sync/i.test(photo))
+    errors.push(`${name} NSPhotoLibraryUsageDescription must mention album sync`);
+  if (typeof plist.NSPhotoLibraryAddUsageDescription !== "string")
+    errors.push(`${name} NSPhotoLibraryAddUsageDescription is missing`);
+}
 if (errors.length) {
   for (const e of errors) console.error(`error: ${e}`);
   process.exit(1);
 }
-console.log("ios plists ok: Info-Debug.plist = Info.plist + debug-only keys");
+console.log(
+  "ios plists ok: Info-Debug.plist = Info.plist + debug-only keys; sync keys present in both",
+);

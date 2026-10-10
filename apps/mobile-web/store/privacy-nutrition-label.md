@@ -12,7 +12,16 @@ Functionality** only (no analytics, no advertising, no personalisation, no devel
 | User Content > Other User Content | Yes | Notes, milestones, measurements, chat messages, baby name and birth date |
 | Search History > Search History | Yes | Search and chat queries, to return results |
 | Identifiers > User ID | Yes | Account id |
+| Identifiers > User ID (Google connection) | Yes | Only if a parent connects Google Photos: the server stores an encrypted Google refresh token and the Google account id against the user, to download the photos chosen in Google's picker. Covered by the existing User ID row; no new type. |
 | Location > Precise Location | Yes | GPS embedded in photo metadata (iPhone keeps it). The app never asks for device location. Stored encrypted; shown to the parent only as a coarse place name. |
+
+Photo import (step 10): Apple Photos album sync (full library access, one chosen album read, originals
+with EXIF and GPS) and Google Photos import both collect **Photos or Videos** and, for iPhone originals,
+**Precise Location** from metadata, for **App Functionality** only. These are the same data types as
+above, so the label does not change. Google removes location from its downloads, so Google imports add
+none. Photos are read only after a parent turns the feature on, and the app never reads the library
+for any other purpose. `PrivacyInfo.xcprivacy` is unchanged for the same reason; the Photos
+permission text lives in `Info.plist`.
 
 Not collected: Coarse Location, Contacts, Health and Fitness, Financial Info, Browsing History,
 Purchases, Usage Data, Diagnostics, Sensitive Info, Device ID, Advertising Data. No face data.

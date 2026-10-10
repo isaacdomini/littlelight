@@ -1,4 +1,5 @@
 import {
+  SYNC_LANE_CONCURRENCY,
   UPLOAD_CONCURRENCY,
   UPLOAD_MAX_FILES_PER_REQUEST,
   UPLOAD_MAX_FILES_PER_SESSION,
@@ -55,8 +56,17 @@ export type ItemErrorCode =
   | "network"
   | "unknown";
 
+/**
+ * `user` = something the person just picked (shown on the Upload screen, goes first);
+ * `sync` = background album sync (hidden from the Upload list, at most `SYNC_LANE_CONCURRENCY`
+ * uploads at once, never delays a user item).
+ */
+export type UploadLane = "user" | "sync";
+
 export interface UploadItem {
   clientId: string;
+  /** Defaults to `user`. */
+  lane: UploadLane;
   babyId: string;
   name: string;
   size: number;
@@ -94,6 +104,9 @@ interface Runtime {
   sha256: string | null;
   hint: { takenAt?: string; tzOffsetMinutes?: number };
   prepared: boolean;
+  lane: UploadLane;
+  /** Sync lane: send over Wi-Fi only (native background session). */
+  wifiOnly: boolean;
   sessionId: string | null;
   fileId: string | null;
   partSize: number;
@@ -197,6 +210,7 @@ export class UploadManager {
   private readonly sessionCreation = new Map<string, Promise<SessionInfo>>();
   private readonly uploadQueue: string[] = [];
   private activeUploads = 0;
+  private activeSync = 0;
   private prepRunning = false;
   private registerTimer: ReturnType<typeof setTimeout> | null = null;
   private registering = false;
@@ -248,7 +262,8 @@ export class UploadManager {
   private releaseNative(clientId: string) {
     const r = this.rt.get(clientId);
     if (r?.nativeRef) {
-      releaseNativeCopy(r.nativeRef);
+      // Sync exports live outside ll-uploads; the sync manager discards them natively.
+      if (r.lane !== "sync") releaseNativeCopy(r.nativeRef);
       r.nativeRef = undefined;
       r.file = null;
     }
@@ -259,6 +274,9 @@ export class UploadManager {
   }
 
   private fail(clientId: string, code: ItemErrorCode, retryable: boolean) {
+    // Sync items are never retried in place: the sync run records the failure in its ledger and
+    // the asset is offered again by a later run (up to the attempt limit).
+    if (this.item(clientId)?.lane === "sync") retryable = false;
     this.patch(clientId, { state: "failed", error: code, retryable, progress: 0 });
     const r = this.rt.get(clientId);
     if (r) r.abort = null;
@@ -271,35 +289,57 @@ export class UploadManager {
    * Native: queue picked/captured photos by reference. Bytes are read one file at a time for the
    * SHA-256 + EXIF hint and then released; the PUT streams from disk in the background.
    */
-  addNative(babyId: string, refs: NativeFileRef[], details?: UploadDetails): void {
+  addNative(
+    babyId: string,
+    refs: NativeFileRef[],
+    details?: UploadDetails,
+    opts: { lane?: UploadLane; wifiOnly?: boolean } = {},
+  ): string[] {
+    const lane = opts.lane ?? "user";
     const detailsKey = JSON.stringify(details ?? {});
     const added: UploadItem[] = [];
+    const ids: string[] = [];
+    let needsRegister = false;
     for (const ref of refs) {
       const clientId = `${++this.counter}-${sanitizeName(ref.name)}`;
+      ids.push(clientId);
       const reason = validateFile({ name: ref.name, size: ref.size, type: ref.mime });
+      // The platform already hashed it (album sync): skip our own SHA-256 + EXIF read.
+      const known = !reason && ref.sha256 ? ref.sha256 : null;
       added.push({
         clientId,
+        lane,
         babyId,
         name: ref.name,
         size: ref.size,
-        state: reason ? "failed" : "queued",
+        state: reason ? "failed" : known ? "registering" : "queued",
         progress: 0,
         error: reason,
         retryable: false,
       });
       if (reason) {
-        releaseNativeCopy(ref);
+        if (lane !== "sync") releaseNativeCopy(ref);
       } else {
         const r = this.newRuntime(null, detailsKey, details);
         r.nativeRef = ref;
         r.size = ref.size;
         r.mime = ref.mime;
+        r.lane = lane;
+        r.wifiOnly = opts.wifiOnly === true;
+        if (known) {
+          r.sha256 = known;
+          r.hint = ref.takenAt ? { takenAt: ref.takenAt } : {};
+          r.prepared = true;
+          needsRegister = true;
+        }
         this.rt.set(clientId, r);
       }
     }
     this.snapshot = [...this.snapshot, ...added];
     for (const l of this.listeners) l();
+    if (needsRegister) this.scheduleRegister();
     this.kickPrep();
+    return ids;
   }
 
   /** Queue files for a baby. Rejected files appear as failed and are never sent to the API. */
@@ -311,6 +351,7 @@ export class UploadManager {
       const reason = validateFile(file);
       const item: UploadItem = {
         clientId,
+        lane: "user",
         babyId,
         name: file.name,
         size: file.size,
@@ -344,6 +385,8 @@ export class UploadManager {
       sha256: null,
       hint: {},
       prepared: false,
+      lane: "user",
+      wifiOnly: false,
       sessionId: null,
       fileId: null,
       partSize: 0,
@@ -422,6 +465,7 @@ export class UploadManager {
       const state: ItemState = sf.state === "registered" ? "queued" : (sf.state as ItemState);
       added.push({
         clientId,
+        lane: "user",
         babyId,
         name: file.name,
         size: file.size,
@@ -448,9 +492,10 @@ export class UploadManager {
     void (async () => {
       try {
         for (;;) {
-          const next = this.snapshot.find(
+          const waiting = this.snapshot.filter(
             (i) => i.state === "queued" && this.rt.get(i.clientId)?.prepared === false,
           );
+          const next = waiting.find((i) => i.lane === "user") ?? waiting[0];
           if (!next) break;
           const r = this.rt.get(next.clientId);
           if (!r) break;
@@ -651,17 +696,30 @@ export class UploadManager {
 
   private pumpUploads() {
     while (this.activeUploads < UPLOAD_CONCURRENCY) {
-      const id = this.uploadQueue.shift();
+      const id = this.dequeueUpload();
       if (!id) return;
       const it = this.item(id);
       const r = this.rt.get(id);
       if (!it || !r || r.cancelled || it.state === "aborted") continue;
+      const sync = it.lane === "sync";
       this.activeUploads++;
+      if (sync) this.activeSync++;
       void this.uploadOne(id).finally(() => {
         this.activeUploads--;
+        if (sync) this.activeSync--;
         this.pumpUploads();
       });
     }
+  }
+
+  /** User items first; a sync item only while fewer than `SYNC_LANE_CONCURRENCY` sync ones run. */
+  private dequeueUpload(): string | undefined {
+    const laneOf = (id: string) => this.rt.get(id)?.lane ?? "user";
+    let at = this.uploadQueue.findIndex((id) => laneOf(id) === "user");
+    if (at < 0 && this.activeSync < SYNC_LANE_CONCURRENCY)
+      at = this.uploadQueue.length > 0 ? 0 : -1;
+    if (at < 0) return undefined;
+    return this.uploadQueue.splice(at, 1)[0];
   }
 
   private async uploadOne(clientId: string): Promise<void> {
@@ -700,7 +758,10 @@ export class UploadManager {
           const put =
             ref && up.putFile && urls.size === 1 && size <= r.partSize
               ? (url: string, o: PutPartOptions) =>
-                  (up.putFile as NonNullable<Uploader["putFile"]>)(url, ref, o)
+                  (up.putFile as NonNullable<Uploader["putFile"]>)(url, ref, {
+                    ...o,
+                    ...(r.wifiOnly ? { wifiOnly: true } : {}),
+                  })
               : async (url: string, o: PutPartOptions) => {
                   r.file ??= ref ? await readNativeFile(ref) : null;
                   if (!r.file) throw new ApiError(0, "unknown", "missing file");
@@ -851,7 +912,13 @@ export class UploadManager {
     const files: ResumeRecord["files"] = [];
     for (const i of this.snapshot) {
       const r = this.rt.get(i.clientId);
-      if (i.babyId === babyId && r?.sessionId === sid && r.fileId && r.sha256) {
+      if (
+        i.lane === "user" &&
+        i.babyId === babyId &&
+        r?.sessionId === sid &&
+        r.fileId &&
+        r.sha256
+      ) {
         files.push({ sha256: r.sha256, size: r.size, fileId: r.fileId });
       }
     }
@@ -925,11 +992,47 @@ export class UploadManager {
     }
   }
 
-  /** Drop finished rows (uploaded, duplicate, cancelled, rejected) from the list. */
-  clearFinished(babyId: string): void {
+  /**
+   * Resolves when every listed item is done with: `ingested`, `duplicate`, `failed`, `aborted`,
+   * or `completed` (uploaded, waiting for the worker to ingest it). Used by album sync. When
+   * `signal` aborts, resolves early with whatever state each item has reached.
+   */
+  waitForTerminal(clientIds: string[], signal?: AbortSignal): Promise<Map<string, ItemState>> {
+    const settled = (s: ItemState) => TERMINAL.has(s) || s === "completed";
+    const read = () => {
+      const out = new Map<string, ItemState>();
+      for (const id of clientIds) out.set(id, this.item(id)?.state ?? "aborted");
+      return out;
+    };
+    return new Promise((resolve) => {
+      let off = () => {};
+      const finish = () => {
+        off();
+        signal?.removeEventListener("abort", finish);
+        resolve(read());
+      };
+      const check = () => {
+        if ([...read().values()].every(settled)) finish();
+      };
+      off = this.subscribe(check);
+      signal?.addEventListener("abort", finish, { once: true });
+      if (signal?.aborted) finish();
+      else check();
+    });
+  }
+
+  /** The error code of a failed item (`null` when it has none or is unknown). */
+  errorOf(clientId: string): ItemErrorCode | null {
+    return this.item(clientId)?.error ?? null;
+  }
+
+  /** Drop finished rows of one lane (default `user`: uploaded, duplicate, cancelled, rejected). */
+  clearFinished(babyId: string, lane: UploadLane = "user"): void {
     const keep = this.snapshot.filter(
       (i) =>
-        i.babyId !== babyId || !(TERMINAL.has(i.state) && !(i.state === "failed" && i.retryable)),
+        i.babyId !== babyId ||
+        i.lane !== lane ||
+        !(TERMINAL.has(i.state) && !(i.state === "failed" && i.retryable)),
     );
     for (const i of this.snapshot) if (!keep.includes(i)) this.rt.delete(i.clientId);
     this.snapshot = keep;
@@ -937,18 +1040,19 @@ export class UploadManager {
   }
 }
 
-export function summarize(items: readonly UploadItem[]): UploadSummaryCounts {
+export function summarize(items: readonly UploadItem[], lane?: UploadLane): UploadSummaryCounts {
   let uploaded = 0;
   let failed = 0;
   let duplicates = 0;
   let active = 0;
-  for (const i of items) {
+  const list = lane ? items.filter((i) => i.lane === lane) : items;
+  for (const i of list) {
     if (i.state === "completed" || i.state === "ingested") uploaded++;
     else if (i.state === "failed") failed++;
     else if (i.state === "duplicate") duplicates++;
     if (!TERMINAL.has(i.state) && i.state !== "completed") active++;
   }
-  return { uploaded, failed, duplicates, total: items.length, active };
+  return { uploaded, failed, duplicates, total: list.length, active };
 }
 
 export const uploadManager = new UploadManager();

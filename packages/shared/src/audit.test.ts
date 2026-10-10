@@ -114,3 +114,41 @@ describe("audit additions (review fixes: data export)", () => {
     }
   });
 });
+
+describe("audit events and metadata (step 10, photo import)", () => {
+  it("lists the import events", () => {
+    for (const e of [
+      "import.source_created",
+      "import.source_deleted",
+      "import.google_connected",
+      "import.google_disconnected",
+      "import.batch_created",
+      "import.batch_finished",
+      "import.batch_cancelled",
+      "import.batch_failed",
+    ])
+      expect(auditEventSchema.safeParse(e).success, e).toBe(true);
+    expect(new Set(AUDIT_EVENTS).size).toBe(AUDIT_EVENTS.length);
+  });
+
+  it("accepts ids and counts and refuses tokens, session ids, URLs and labels", () => {
+    expect(
+      auditMetadataSchema.parse({
+        source_id: UUID,
+        batch_id: UUID,
+        count: 5,
+        duplicates: 1,
+        failed: 0,
+      }),
+    ).toMatchObject({ batch_id: UUID });
+    for (const extra of [
+      { refresh_token: "x" },
+      { session_id_google: "x" },
+      { provider_session_id: "x" },
+      { url: "https://x.test" },
+      { album_title: "Maya" },
+      { device_label: "Mom's iPhone" },
+    ])
+      expect(auditMetadataSchema.safeParse({ batch_id: UUID, ...extra }).success).toBe(false);
+  });
+});

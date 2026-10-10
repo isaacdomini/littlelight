@@ -7,6 +7,9 @@ import {
   databaseEnvSchema,
   EMBED_DIMS,
   encryptionEnvSchema,
+  GOOGLE_IMPORT_DEFAULTS,
+  type GoogleImportEnv,
+  googleImportEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
   mailEnvSchema,
@@ -57,6 +60,10 @@ import { z } from "zod";
 // Review fixes (docs/plans/review-fixes.md 2.6, D8) add error telemetry (`sentryEnvSchema`):
 // `SENTRY_DSN` unset/empty ⇒ off (dev); a value that is not a Sentry DSN fails boot naming the
 // field only; `SENTRY_ENVIRONMENT` defaults to `NODE_ENV`. `plugins/telemetry.ts` reads them.
+// Step 10 (docs/plans/step-10.md 2.3, 2.6, D7) adds photo import (`googleImportEnvSchema`):
+// `GOOGLE_IMPORT_PROVIDER` none (default) | fake (refused in production) | live (needs
+// `GOOGLE_IMPORT_CLIENT_ID` + `GOOGLE_IMPORT_CLIENT_SECRET`), the fake's internal and public base
+// URLs. Read through `googleImportSettings`; the client secret is never logged or serialized.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -120,7 +127,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   ReviewAccountEnv &
   // Optional in the type: `SENTRY_DSN` absent ⇒ telemetry off; `SENTRY_ENVIRONMENT` is always
   // set by `loadConfig` (default `NODE_ENV`).
-  Partial<SentryEnv>;
+  Partial<SentryEnv> &
+  // Optional in the type (always set by `loadConfig`); read through `googleImportSettings`.
+  Partial<Omit<GoogleImportEnv, "NODE_ENV">>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -166,6 +175,7 @@ export function loadConfig(
     pushApiEnvSchema,
     reviewAccountEnvSchema,
     sentryEnvSchema,
+    googleImportEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];
@@ -238,5 +248,30 @@ export function nativeSettings(config: Partial<NativeCorsEnv> & Partial<PushApiE
     NATIVE_APP_ORIGINS: config.NATIVE_APP_ORIGINS ?? [...NATIVE_ORIGINS_DEFAULT],
     PUSH_PHOTOS_DEBOUNCE_SEC: config.PUSH_PHOTOS_DEBOUNCE_SEC ?? PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
     PUSH_SHARE_DEBOUNCE_SEC: config.PUSH_SHARE_DEBOUNCE_SEC ?? PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
+  };
+}
+
+/** Photo import settings the API reads, with the shared defaults filled in (step-10 plan 2.3). */
+export type GoogleImportSettings = Pick<
+  GoogleImportEnv,
+  | "GOOGLE_IMPORT_PROVIDER"
+  | "GOOGLE_IMPORT_CLIENT_ID"
+  | "GOOGLE_IMPORT_CLIENT_SECRET"
+  | "GOOGLE_IMPORT_FAKE_URL"
+  | "GOOGLE_IMPORT_FAKE_PUBLIC_URL"
+>;
+
+export function googleImportSettings(
+  config: Partial<Omit<GoogleImportEnv, "NODE_ENV">>,
+): GoogleImportSettings {
+  return {
+    GOOGLE_IMPORT_PROVIDER:
+      config.GOOGLE_IMPORT_PROVIDER ?? GOOGLE_IMPORT_DEFAULTS.GOOGLE_IMPORT_PROVIDER,
+    GOOGLE_IMPORT_CLIENT_ID: config.GOOGLE_IMPORT_CLIENT_ID,
+    GOOGLE_IMPORT_CLIENT_SECRET: config.GOOGLE_IMPORT_CLIENT_SECRET,
+    GOOGLE_IMPORT_FAKE_URL:
+      config.GOOGLE_IMPORT_FAKE_URL ?? GOOGLE_IMPORT_DEFAULTS.GOOGLE_IMPORT_FAKE_URL,
+    GOOGLE_IMPORT_FAKE_PUBLIC_URL:
+      config.GOOGLE_IMPORT_FAKE_PUBLIC_URL ?? GOOGLE_IMPORT_DEFAULTS.GOOGLE_IMPORT_FAKE_PUBLIC_URL,
   };
 }

@@ -22,14 +22,16 @@
 # incl. object versions). The worker also mounts dev-s3 read-only at /storage for the disk alert.
 # Host-side tests may still use the root key against localhost:9000.
 # Ports: the app (8080) and MinIO S3 (9000) listen on all interfaces so a phone on the LAN can
-# reach them; everything else (db, api, auth, MinIO console, Mailpit) is bound to 127.0.0.1.
-# Every published HOST port comes from a variable whose default is the port above, so nothing
-# needs setting when they are free:
+# reach them; everything else (db, api, auth, MinIO console, Mailpit, google-fake) is bound to
+# 127.0.0.1. Every published HOST port comes from a variable whose default is the port below, so
+# nothing needs setting when they are free:
 #   WEB_PORT 8080, STORAGE_PORT 9000, STORAGE_CONSOLE_PORT 9001, DB_PORT 5432, AUTH_PORT 9999,
-#   API_PORT 3000, MAILPIT_PORT 8025
+#   API_PORT 3000, MAILPIT_PORT 8025, GOOGLE_FAKE_PORT 18099 (container port 8099; the host
+#   default is not 8099 because that port is often taken by other local tools)
 # Container-internal ports never change. Values that embed a public port follow the same
 # variables: PUBLIC_URL / GoTrue site URL, issuer and redirect URIs (http://localhost:$WEB_PORT)
-# and S3_PUBLIC_ENDPOINT (http://localhost:$STORAGE_PORT, the host in presigned URLs).
+# and S3_PUBLIC_ENDPOINT (http://localhost:$STORAGE_PORT, the host in presigned URLs), and the
+# fake Google's public URL (http://localhost:$GOOGLE_FAKE_PORT, see "Photo import" below).
 # These are Compose INTERPOLATION variables: set them in the shell or in a git-ignored `.env`
 # next to this file (Compose reads it automatically), e.g. `WEB_PORT=18080 STORAGE_PORT=19000
 # docker compose -f docker-compose.dev.yml up`. `.env.local` (an env_file) cannot change them.
@@ -75,6 +77,25 @@
 # failed" mail to Mailpit with the api's SMTP values. Sentry is off (no DSN anywhere; see
 # x-dev-no-sentry). The Content-Security-Policy header is production nginx only: the Vite dev
 # server sends none (D9), so check it against the prod web image (.env.example, "Web Content-Security-Policy").
+# Photo import (docs/plans/step-10.md 2.9, 2.10): Google Photos import is FAKE in dev. The
+# `google-fake` service (worker dev image, `pnpm --filter @littlelight/worker google-fake`;
+# in-memory OAuth + Picker fake, no secrets, no DB/S3 access) always starts; api and worker wait
+# for it. api and worker reach it at http://google-fake:8099; the browser / iOS Simulator open its
+# consent and picker pages at GOOGLE_FAKE_PUBLIC_URL (default http://localhost:$GOOGLE_FAKE_PORT,
+# i.e. http://localhost:18099; Android emulator: `adb reverse tcp:18099 tcp:18099`). The fake's
+# own GOOGLE_FAKE_PUBLIC_URL and the api's GOOGLE_IMPORT_FAKE_PUBLIC_URL come from one anchor, so
+# they cannot drift. Restarting google-fake loses its state (connected accounts must reconnect).
+# Compose INTERPOLATION variables (shell or the git-ignored project `.env`):
+#   GOOGLE_IMPORT_PROVIDER   api + worker: fake (default) | none | live
+#   GOOGLE_FAKE_PORT         host port of google-fake (default 18099)
+#   GOOGLE_FAKE_BIND         host interface (default 127.0.0.1; 0.0.0.0 for a phone on the LAN,
+#                            together with GOOGLE_FAKE_PUBLIC_URL=http://<laptop-lan-ip>:<port>)
+#   GOOGLE_FAKE_PUBLIC_URL   overrides the derived public URL
+#   IMPORT_CONCURRENCY       worker: downloads in flight per import job (default 2, 1..4)
+# Real Google from a laptop: GOOGLE_IMPORT_CLIENT_ID / GOOGLE_IMPORT_CLIENT_SECRET in .env.local
+# (they reach api + worker only; blanked on migrate and web), register
+# http://localhost:${WEB_PORT:-8080}/api/import/google/callback on the OAuth client, then
+#   GOOGLE_IMPORT_PROVIDER=live docker compose -f docker-compose.dev.yml up -d --no-deps api worker
 name: littlelight-dev
 
 x-dev: &dev
@@ -125,6 +146,10 @@ x-dev-shared:
   # feeds GoTrue (GOTRUE_EXTERNAL_*_ENABLED) and the API (AUTH_*_ENABLED, shows the button).
   apple-enabled: &dev-apple-enabled ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
   google-enabled: &dev-google-enabled ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
+  # Fake Google (photo import; see the header). Internal URL = service name + container port
+  # (fixed); public URL = what the browser / simulator opens, follows GOOGLE_FAKE_PORT.
+  google-fake-internal-url: &dev-google-fake-internal-url http://google-fake:8099
+  google-fake-public-url: &dev-google-fake-public-url ${GOOGLE_FAKE_PUBLIC_URL:-http://localhost:${GOOGLE_FAKE_PORT:-18099}}
 
 # Everything the bootstrap needs (db-init, migrate).
 x-dev-bootstrap-env: &dev-bootstrap-env
@@ -192,6 +217,26 @@ x-dev-no-sentry: &dev-no-sentry
   SENTRY_DSN: ""
   SENTRY_ENVIRONMENT: ""
 
+# Google photo import (docs/plans/step-10.md 2.10): api + worker only. The OAuth client of a real
+# dev run lives in .env.local; blanked on migrate and web. google-fake has no env_file at all.
+x-dev-no-google-import-keys: &dev-no-google-import-keys
+  GOOGLE_IMPORT_CLIENT_ID: ""
+  GOOGLE_IMPORT_CLIENT_SECRET: ""
+
+# api and worker: provider switch + where the fake lives (used only when the provider is fake).
+x-dev-google-import-env: &dev-google-import-env
+  GOOGLE_IMPORT_PROVIDER: ${GOOGLE_IMPORT_PROVIDER:-fake}
+  GOOGLE_IMPORT_FAKE_URL: *dev-google-fake-internal-url
+  GOOGLE_IMPORT_FAKE_PUBLIC_URL: *dev-google-fake-public-url
+
+# worker and google-fake run the same dev image (apps/worker/Dockerfile, target dev), built once.
+x-dev-worker-image: &dev-worker-image
+  image: littlelight-dev-worker
+  build:
+    context: .
+    dockerfile: apps/worker/Dockerfile
+    target: dev
+
 services:
   db:
     image: pgvector/pgvector:0.8.7-pg17
@@ -235,7 +280,7 @@ services:
     <<: [*dev, *dev-db-tools]
     command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
     environment:
-      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry]
+      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys]
       DATA_ENCRYPTION_KEY: *dev-data-encryption-key
     volumes:
       - ./packages/db/src:/repo/packages/db/src:ro
@@ -414,7 +459,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/api", "dev"]
     init: true
     environment:
-      <<: [*dev-app-env, *dev-no-anthropic-key, *dev-no-push-keys]
+      <<: [*dev-app-env, *dev-no-anthropic-key, *dev-no-push-keys, *dev-google-import-env]
       DATABASE_URL: *dev-api-db-url
       # Bucket-scoped MinIO user (no delete, no versions, no admin); see storage-init.
       S3_ACCESS_KEY: *dev-s3-api-access-key
@@ -456,6 +501,9 @@ services:
       # account (REVIEW_ACCOUNT_EMAIL + REVIEW_ACCOUNT_CODE_HASH, off unless both set) is read
       # from .env.local by this service only.
       PUSH_SHARE_DEBOUNCE_SEC: ${PUSH_SHARE_DEBOUNCE_SEC:-60}
+      # Photo import (docs/plans/step-10.md 2.10): GOOGLE_IMPORT_PROVIDER (fake by default),
+      # GOOGLE_IMPORT_FAKE_URL and GOOGLE_IMPORT_FAKE_PUBLIC_URL come from *dev-google-import-env
+      # (see the header); GOOGLE_IMPORT_CLIENT_ID / _SECRET for a live run from .env.local.
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -466,6 +514,8 @@ services:
         condition: service_completed_successfully
       storage-init:
         condition: service_completed_successfully
+      google-fake:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${API_PORT:-3000}:3000"
     healthcheck:
@@ -477,15 +527,11 @@ services:
       start_interval: 2s
 
   worker:
-    <<: *dev
-    build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
-      target: dev
+    <<: [*dev, *dev-worker-image]
     command: ["pnpm", "--filter", "@littlelight/worker", "dev"]
     init: true
     environment:
-      <<: [*dev-app-env, *dev-no-review-account]
+      <<: [*dev-app-env, *dev-no-review-account, *dev-google-import-env]
       DATABASE_URL: *dev-worker-db-url
       # Bucket-scoped MinIO user (api's rights + delete incl. object versions; no admin).
       S3_ACCESS_KEY: *dev-s3-worker-access-key
@@ -544,6 +590,10 @@ services:
       SMTP_SECURE: "false"
       MAIL_FROM: *dev-mail-from
       EXPORT_MAX_BYTES: ${EXPORT_MAX_BYTES:-}
+      # Photo import (docs/plans/step-10.md 2.7, 2.10): Picker downloads in flight per
+      # import.google job (1..4); each streams to /tmp (<= 100 MiB). Provider + fake URLs come
+      # from *dev-google-import-env; GOOGLE_IMPORT_CLIENT_ID / _SECRET from .env.local.
+      IMPORT_CONCURRENCY: ${IMPORT_CONCURRENCY:-2}
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -562,6 +612,8 @@ services:
         condition: service_completed_successfully
       storage-init:
         condition: service_completed_successfully
+      google-fake:
+        condition: service_healthy
     healthcheck:
       # Own heartbeat row fresh within HEARTBEAT_STALE_MS (only advanced while storage is reachable).
       test: ["CMD", "pnpm", "--silent", "--filter", "@littlelight/worker", "healthcheck"]
@@ -570,6 +622,37 @@ services:
       retries: 2
       start_period: 90s
       start_interval: 3s
+
+  # Fake Google OAuth + Photos Picker (apps/worker/src/import/google/fake-server.ts; dev/test
+  # only, refuses NODE_ENV=production). In-memory state, synthetic GPS-free photos. No env_file:
+  # it gets no database, S3, JWT or provider credential. Test hooks live under /__fake/*.
+  #   curl -s http://localhost:${GOOGLE_FAKE_PORT:-18099}/healthz      -> {"status":"ok"}
+  google-fake:
+    <<: *dev-worker-image
+    command: ["pnpm", "--filter", "@littlelight/worker", "google-fake"]
+    init: true
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: info
+      # Listen address inside the container (fixed); the host port is GOOGLE_FAKE_PORT below.
+      GOOGLE_FAKE_HOST: 0.0.0.0
+      GOOGLE_FAKE_PORT: "8099"
+      GOOGLE_FAKE_INTERNAL_URL: *dev-google-fake-internal-url
+      GOOGLE_FAKE_PUBLIC_URL: *dev-google-fake-public-url
+      # FAKE_GOOGLE_FIXTURES_DIR / GOOGLE_FAKE_TOKEN_SEED deliberately unset (built-in catalogue,
+      # random token seed per start).
+    volumes:
+      - ./apps/worker/src:/repo/apps/worker/src:ro
+      - ./packages/shared/src:/repo/packages/shared/src:ro
+    ports:
+      - "${GOOGLE_FAKE_BIND:-127.0.0.1}:${GOOGLE_FAKE_PORT:-18099}:8099"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8099/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
 
   web:
     <<: *dev
@@ -580,7 +663,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
     init: true
     environment:
-      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry]
+      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys]
     volumes:
       - ./apps/mobile-web/src:/repo/apps/mobile-web/src
       - ./packages/shared/src:/repo/packages/shared/src

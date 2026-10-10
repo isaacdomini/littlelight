@@ -64,6 +64,17 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
         "labelledCoordinate",
         "pgRowDetail",
         "tokenRun",
+        // step 10 (photo import)
+        "googleAccessToken",
+        "googleRefreshToken",
+        "googleAuthCode",
+        "fakeGoogleToken",
+        "googleMediaUrl",
+        "googlePickerUrl",
+        "nativeUploadPath",
+        "photoLibraryPath",
+        "phAssetId",
+        "oauthParam",
       ].sort(),
     );
     for (const re of Object.values(TELEMETRY_SCRUB_PATTERNS)) expect(re.flags).not.toContain("g");
@@ -90,8 +101,99 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
     ["tokenRun", " " + SHARE_TOKEN],
     ["urlOrPath", "https://x.test/a/b?c=d"],
     ["queryOrFragment", "callback?code=123"],
+    ["googleAccessToken", "ya29.a0AfH6SMBx-_abc123"],
+    ["googleRefreshToken", "1//0gAbCdEfGhIjKlMn-op"],
+    ["googleAuthCode", "4/0AfJohXkAbCdEfGhIj_k"],
+    ["fakeGoogleToken", "fake-access-abc123"],
+    ["fakeGoogleToken", "fake-refresh-abc123"],
+    ["fakeGoogleToken", "fake-code-abc123"],
+    ["googleMediaUrl", "https://lh3.googleusercontent.com/pw/AP1Gcz=d"],
+    ["googlePickerUrl", "photospicker.googleapis.com/v1/sessions/abc123"],
+    ["nativeUploadPath", "/Library/Caches/ll-uploads/1234.heic"],
+    ["photoLibraryPath", "/var/mobile/Media/DCIM/100APPLE/IMG_0001.HEIC"],
+    ["phAssetId", "ABCDEF01-2345-6789-ABCD-EF0123456789/L0/001"],
+    ["oauthParam", "callback code=abc&state=def"],
   ] as [keyof typeof TELEMETRY_SCRUB_PATTERNS, string][])("%s matches %j", (name, sample) => {
     expect(TELEMETRY_SCRUB_PATTERNS[name].test(sample)).toBe(true);
+  });
+});
+
+describe("scrubTelemetryString: photo import (step 10)", () => {
+  const FAKE_TOKENS = ["fake-access-9f8e7d6c", "fake-refresh-9f8e7d6c", "fake-code-9f8e7d6c"];
+  const REAL_TOKENS = [
+    "ya29.a0AfH6SMBx-_abc123",
+    "1//0gAbCdEfGhIjKlMn-op",
+    "4/0AfJohXkAbCdEfGhIj_k",
+  ];
+
+  it.each([...FAKE_TOKENS, ...REAL_TOKENS])("scrubs the token %s", (tok) => {
+    const out = scrubTelemetryString(`exchange failed for ${tok} at upstream`);
+    expect(out).not.toContain(tok);
+    expect(out).toContain(REDACTED);
+    expect(out).toContain("upstream");
+  });
+
+  it("scrubs googleusercontent URLs, keeping only the host", () => {
+    const out = scrubTelemetryString("GET https://lh3.googleusercontent.com/pw/AP1GczSECRET=d 403");
+    expect(out).not.toContain("AP1GczSECRET");
+    expect(out).not.toContain("/pw/");
+    expect(out).toContain("lh3.googleusercontent.com");
+  });
+
+  it("scrubs picker session URLs", () => {
+    const out = scrubTelemetryString(
+      "DELETE https://photospicker.googleapis.com/v1/sessions/SESS-123 404",
+    );
+    expect(out).not.toContain("SESS-123");
+  });
+
+  it("scrubs the native upload cache path and photo-library paths", () => {
+    const out = scrubTelemetryString(
+      "open /var/mobile/Containers/Data/Caches/ll-uploads/AAAA-1.heic and /var/mobile/Media/DCIM/100APPLE/IMG_0001.HEIC",
+    );
+    expect(out).not.toContain("AAAA-1.heic");
+    expect(out).not.toContain("IMG_0001");
+    expect(out).toContain("ll-uploads/");
+  });
+
+  it("scrubs PHAsset local identifiers", () => {
+    const out = scrubTelemetryString("asset ABCDEF01-2345-6789-ABCD-EF0123456789/L0/001 failed");
+    expect(out).not.toContain("ABCDEF01");
+    expect(out).toContain("[asset-id]");
+  });
+
+  it("scrubs OAuth callback code/state pairs", () => {
+    const out = scrubTelemetryString("callback code=xyz789secret state=st4te123");
+    expect(out).not.toContain("xyz789secret");
+    expect(out).not.toContain("st4te123");
+  });
+
+  it("is idempotent on all of the above", () => {
+    const once = scrubTelemetryString(
+      `${FAKE_TOKENS.join(" ")} ${REAL_TOKENS.join(" ")} https://lh3.googleusercontent.com/pw/AAA=d ll-uploads/x.heic`,
+    );
+    expect(scrubTelemetryString(once)).toBe(once);
+  });
+
+  it("drops the values of keys that carry Google capabilities and device-only ids", () => {
+    const out = JSON.stringify(
+      scrubTelemetryEvent({
+        exception: { values: [{ type: "Error", value: "x" }] },
+        extra: {},
+        contexts: {
+          trace: { trace_id: "0123456789abcdef0123456789abcdef", span_id: "0123456789abcdef" },
+        },
+        tags: {
+          baseUrl: "https://lh3.googleusercontent.com/SECRETBASE",
+          pickerUri: "https://photos.google.com/picker/SECRETPICKER",
+          albumTitle: "Mia first year",
+          deviceLabel: "Dad iPhone",
+          localIdentifier: "SECRETLOCAL",
+        },
+      }),
+    );
+    for (const s of ["SECRETBASE", "SECRETPICKER", "Mia first year", "Dad iPhone", "SECRETLOCAL"])
+      expect(out, s).not.toContain(s);
   });
 });
 

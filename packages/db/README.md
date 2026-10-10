@@ -37,8 +37,8 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). Reads only its **own** `profiles` row; co-members' names come from the `member_profiles` view (see "Review hardening and data exports"). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link (no parent user ids), the allow-listed columns of `photos`, `photo_derivatives` (thumb/display, and never those of a hidden sensitive photo), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Its only writes go through `viewer_session_check()`. Nothing else, and nothing once the link is expired/revoked or the baby is deleted (see "Sharing (step 8)"). |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables; for the FR-10.1 export: `data_exports` progress/result/purge columns, the `babies` profile columns (no billing), `baby_members (baby_id, user_id, role, joined_at)` read-only, EXECUTE on `export_requester_is_admin` / `export_requester_email`). Never invites, tokens, chat, removal requests or `invited_by`, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
-| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables; for the FR-10.1 export: `data_exports` progress/result/purge columns, the `babies` profile columns (no billing), `baby_members (baby_id, user_id, role, joined_at)` read-only, EXECUTE on `export_requester_is_admin` / `export_requester_email`; for step-10 Google imports: `import_batches` read + progress/result columns, `import_items` insert/read/progress columns and 30-day retention delete, EXECUTE on `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo`, and no grant on `import_sources` or `google_accounts`). Never invites, tokens, chat, removal requests or `invited_by`, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
+| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes, Google connections (`google_accounts`, `encrypt_secret`/`decrypt_secret`). Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
 Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" and "Native push" for
@@ -914,6 +914,134 @@ joined_at)` with `baby_members_pipeline_select USING (true)`. Everything else it
 | Export ZIPs | MinIO `babies/<id>/exports/` | until `expires_at` (7 days), or earlier on admin expiry, requester removal/deletion or a failed export; removed by `purge.trash` (all versions), which sets `purged_at` |
 | `data_exports` rows | Postgres | deleted by `purge.trash` 30 days after `purged_at`; immediately with the baby |
 
+## Photo import (step 10)
+
+Migration `1792300000300_photo-import.sql` (docs/plans/step-10.md 2.2, decisions D1, D3, D6, D8,
+D10; PRD FR-2.1–2.7, FR-4, "Roles and permissions", "Privacy and child safety"). Four tables, all
+ENABLE + FORCE RLS, none granted to `viewer`.
+
+**Secrets at rest.** `encrypt_secret(text) → bytea` / `decrypt_secret(bytea) → text`: pgcrypto
+(`aes256`) under `app.data_key`, exactly like `encrypt_coord` (SECURITY INVOKER, STRICT, raise
+`data key not set for this transaction` without the key). EXECUTE to **`service_role` only**: the
+API connects / disconnects Google under `service_role` with the data-key GUC bound; the worker
+never encrypts and decrypts only through `import_google_refresh_token()`. Never log either side.
+
+**`import_sources`** (Apple Photos album sync status; one row per `(device_id, baby_id, kind)`).
+Counters, last run, last trigger, last error, `wifi_only`, `paused`, `device_label`, `album_title`.
+**Never** PHAsset identifiers, hashes of them, file names or paths (D3). `kind` is
+`apple_photos` only.
+
+| Role | Read | Write |
+| --- | --- | --- |
+| `authenticated` | admins of the baby: every row; others: their own rows | INSERT `(baby_id, user_id, kind, device_id, device_label, album_title, wifi_only)` with `user_id = auth_uid()`, member, and **admin for `apple_photos` (D1)**; UPDATE status columns of own rows (an `apple_photos` row only while still admin); DELETE own rows or any row of a baby they admin |
+| `pipeline`, `viewer` | – | – |
+| `service_role` | ALL | ALL |
+
+- The owner must stay a member: composite FK `(baby_id, user_id) → baby_members` ON DELETE
+  CASCADE (leaving, removal and account deletion drop the row). Demotion from admin deletes the
+  user's `apple_photos` rows of that baby (`baby_members_drop_apple_sync`, AFTER UPDATE OF role).
+  The client must treat a 404 on `PATCH /import-sources/:id` as "sync turned off".
+- Upserts: `INSERT … ON CONFLICT (device_id, baby_id, kind) DO UPDATE SET … WHERE
+  import_sources.user_id = auth_uid() RETURNING id` returns **0 rows** when another user owns that
+  device row (map to 409 `import_source_exists`); without the `WHERE` it raises `new row violates
+  row-level security policy (USING expression)`.
+- Triggers (23514, fixed messages): `import_sources_shape` (`device_label` 1–60, `album_title`
+  1–120, trimmed, no control characters; counters ≥ 0; all parent text, so no non-enum CHECK),
+  `import_sources_insert_guard` (`cannot sync into a trashed album`; `import source limit reached`
+  at 10 per baby, not counting the row an upsert would update), `set_updated_at`.
+
+**`google_accounts`** (one Google Photos Picker connection per user).
+
+| Role | Read | Write |
+| --- | --- | --- |
+| `authenticated` | own row, columns `user_id, connected_at, last_used_at, needs_reconnect` only | – |
+| `pipeline`, `viewer` | – (no table grant) | – |
+| `service_role` | ALL | ALL (connect upsert with `encrypt_secret`, disconnect delete) |
+
+`refresh_token_enc` is never granted to a user role or to `pipeline`. `google_accounts_shape`
+(trigger, not CHECKs: the only writer bypasses RLS, so a failing CHECK would log the row) raises
+fixed messages for a NULL/oversized ciphertext (e.g. `encrypt_secret(NULL)`), an empty scope or a
+negative `refresh_failures`. FK `user_id → profiles` ON DELETE CASCADE.
+
+**`import_batches`** (one Google Picker session per batch). `status`: `picking → queued → running →
+done | failed`; `picking → cancelled | expired`; `queued | running → cancelled` once
+`cancel_requested_at` is set (the worker finishes it). `error`: `google_denied`,
+`google_reconnect`, `session_expired`, `storage_error`, `requester_not_member`, `baby_trashed`,
+`too_many_items`, `internal`.
+
+| Role | Read | Write |
+| --- | --- | --- |
+| `authenticated` | admins: every batch of the baby; others: their own while a member. Every column **except `provider_session_id`** (`SELECT *` / `RETURNING *` fail: name columns) | INSERT `(baby_id, requested_by, kind, tz_hint, provider_session_id)` with `requested_by = auth_uid()`, member (**contributors too**, D1), `status = 'picking'`; UPDATE `(status, provider_session_id, poll_interval_sec, picker_expires_at, last_polled_at, cancel_requested_at, finished_at, updated_at)` of own batches, per the transition matrix |
+| `pipeline` | all rows, all columns | UPDATE `(status, error, started_at, finished_at, items_total, items_imported, items_duplicate, items_failed, items_skipped, updated_at)` |
+| `viewer` | – | – |
+| `service_role` | ALL | ALL |
+
+- `import_batches_user_transitions` (BEFORE UPDATE, `authenticated` only, 23514 `import batch
+  transition not allowed`): `picking → picking | queued | cancelled | expired`;
+  `provider_session_id` is set once; `queued` requires it; `finished_at` only when leaving to
+  `cancelled`/`expired`. `queued | running`: only `cancel_requested_at` may change, and only from
+  NULL. Terminal statuses: nothing. Counters, `items_total` and `error` are not granted to users.
+- `import_batches_one_active` (BEFORE INSERT, every role; locks the baby row `FOR NO KEY
+  UPDATE`): `cannot import into a trashed album`; then any `picking` batch of the baby past
+  `picker_expires_at` (or 30 min old without one) is set `expired` so an abandoned picker does not
+  block the album; then `an import is already in progress for this album` (one
+  picking/queued/running batch per baby; partial unique index `import_batches_one_active_per_baby`
+  is the backstop) and `import rate limit reached: 20 per album per day`.
+- FKs: `baby_id` ON DELETE CASCADE; `requested_by` ON DELETE SET NULL (the worker's next
+  `import_book_photo` returns `not_member`).
+- `poll_interval_sec` CHECK 1..60: the API clamps Google's `pollInterval` to
+  `[IMPORT_PICKER_POLL_MIN_SEC, 60]`.
+
+**`import_items`** (one picked media item; `id` becomes `photos.id`; `storage_key` generated
+`babies/<baby_id>/originals/<id>`; `photo_id` CHECK `= id`).
+
+| Role | Read | Write |
+| --- | --- | --- |
+| `authenticated` | `(id, batch_id, baby_id, status, error, photo_id, created_at)` of visible batches (`import_batch_visible`, SECURITY INVOKER); never `provider_item_id` | – |
+| `pipeline` | all | INSERT; UPDATE `(bytes, sha256, status, error, photo_id, mime_hint, width, height, taken_at_hint, updated_at)`; DELETE when not `downloaded`, last changed > 30 days ago, and terminal or of a finished batch |
+| `viewer` | – | – |
+
+`import_items_batch_guard` (BEFORE INSERT): the item's batch must be `queued`/`running` and of the
+same baby (`import item must belong to an active batch of the same album`), so an object key and
+the photo it becomes can never land in another album.
+
+**Worker functions** (SECURITY DEFINER, pinned `search_path`, EXECUTE to `pipeline` only):
+
+| Function | Returns |
+| --- | --- |
+| `import_batch_requester_state(p_batch_id uuid) RETURNS text` | `ok`, `not_active` (missing or not queued/running), `not_member` (requester NULL, profile deleted or not a member), `baby_trashed`, `not_connected`, `reconnect`. No secret; lets the worker choose the batch error |
+| `import_google_refresh_token(p_batch_id uuid) RETURNS text` | the requester's decrypted refresh token only while the batch is `queued`/`running`, the requester is a live member of the live baby and `needs_reconnect = false`; else NULL. Needs `app.data_key` (`runAsPipeline(pool, { dataKey })`), raises `data key not set for this transaction` without it. **Never log the result** |
+| `import_mark_reconnect(p_batch_id uuid) RETURNS void` | sets `needs_reconnect = true`, `refresh_failures + 1` for the requester of an active batch (after `invalid_grant`) |
+| `import_book_photo(p_item_id uuid) RETURNS text` | `booked` / `duplicate` / `free_tier_limit` / `not_member` / `baby_trashed` (D10, below) |
+
+`import_book_photo` reads only the item and its batch (nothing from the caller but the id), takes
+the requester's `baby_members` row `FOR SHARE` (role at run time; profile must be live), checks the
+baby is live, then inserts `photos (id = item.id, baby_id, uploaded_by = requester,
+storage_key_original = item.storage_key, mime = mime_hint, bytes, sha256, taken_at = taken_at_hint,
+taken_at_estimated = true)` with **admin ⇒ `approved`, `approved_by = requester`, `approved_at =
+now()`; contributor ⇒ `pending`, `approved_by` NULL**, the same shape `photos_authenticated_insert`
+allows. `photos_free_tier_cap` fires (⇒ `free_tier_limit`); a `photos_baby_id_sha256_key`
+violation ⇒ `duplicate`. On `booked` the item becomes `booked` with `photo_id = id`; every other
+result leaves it `downloaded` for the worker to mark (and delete the object). Raises (fixed
+messages): `import item not found` (P0002), `import item is not ready to book` (23514: not
+`downloaded`, or bytes/sha256/mime_hint missing; also a second call on a booked item),
+`import batch is not running` (23514), `import item could not be booked` (23505/23514, any other
+constraint). Ingest then re-hashes and sets the same `sha256`, and its `upload_files` updates
+match no row.
+
+Worker read grants: nothing new was needed (`photos (id, baby_id, sha256, deleted_at, status)`
+and `babies (id, deleted_at)` were already readable by `pipeline`).
+
+**Retention.**
+
+| Data | Retention |
+| --- | --- |
+| `google_accounts` | until disconnect or account deletion (the API revokes at Google first) |
+| `import_sources` | until the owner turns sync off, leaves / is removed / is demoted (admin) or deletes the account; with the baby |
+| `import_batches` | kept (ids, counts, status; no Google ids readable by users); with the baby |
+| `import_items` | 30 days after the last change once terminal / the batch finished (`import.sweep`); with the batch or the baby |
+
+
 ## Store-review family (`src/review-family.ts`)
 
 `pnpm db:review-family --email <address> [--confirm-production]` (one transaction;
@@ -995,7 +1123,7 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 
 Programmatic use: `import { runMigrations, bootstrap, seed, ensureAuthSchemaStub, appRoleUrl } from "@littlelight/db"`;
 row types from `@littlelight/db/types` (`PhotosRow`, `PhotosInsert`, `TABLE_NAMES`, …; `text`
-columns with `CHECK (col IN (...))` are string-literal unions).
+columns with `CHECK (col IN (...))` are string-literal unions, including the single-value form Postgres stores as `CHECK ((col = 'x'::text))`).
 
 ### Tests and CI without GoTrue
 
@@ -1114,3 +1242,4 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1792200000200_photo-ai-tripwire-detach.sql` | `photo_ai_paid_tier_tripwire` exempts exactly one UPDATE shape: `batch_id` becomes NULL and every other column except `updated_at` is unchanged (whole-row jsonb compare), so deleting an `ai_batches` row (FK `ON DELETE SET NULL`) works when the batch holds photos of a free/lapsed/trashed baby; every other INSERT/UPDATE for such a baby is still refused (23514, same fixed message) | restore the step-2 tripwire body verbatim |
 | `1792300000100_review-hardening.sql` | FR-1.5 in `baby_members_authenticated_update` / `_delete` (an admin row only by its owner); `profiles_authenticated_select` self-only + `member_profiles` view (security_barrier, 3 columns, live profiles, `authenticated` only); `photos_user_write_guard` + `photos_user_update_guard` trigger (contributors cannot touch approval/sensitivity columns; admin approval pins `approved_by`/`approved_at`; approved INSERT without approver gets the actor); `photos_authenticated_insert` requires `approved_by = auth_uid()` for approved rows and NULL otherwise | restore the step-2/4 policies verbatim; drop trigger, function and view |
 | `1792300000200_data-exports.sql` | guard (`auth.users`); `data_exports` (ENABLE+FORCE RLS, generated `storage_key` not granted to `authenticated`, 5 indexes incl. `data_exports_one_active_per_baby`); `data_exports_baby_live`, `data_exports_rate_limit`, `data_exports_user_update_guard` triggers; `export_requester_is_admin`, `export_requester_email` (pipeline only); pipeline read grants on `babies` profile columns and `baby_members (baby_id, user_id, role, joined_at)` + `baby_members_pipeline_select` | drop the policy and revoke the two grants; drop functions, table, trigger functions |
+| `1792300000300_photo-import.sql` | guard (`auth.users`); `encrypt_secret` / `decrypt_secret` (service_role only); `import_sources` (+ `import_sources_shape`, `import_sources_insert_guard`, composite FK to `baby_members`), `baby_members_drop_apple_sync` trigger; `google_accounts` (+ `google_accounts_shape`); `import_batches` (+ `import_batches_one_active`, `import_batches_user_transitions`, `import_batches_one_active_per_baby`); `import_items` (+ `import_items_batch_guard`), `import_batch_visible`; `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo` (pipeline only); all four tables ENABLE+FORCE RLS | drop the four functions, the `baby_members` trigger + function, the four tables and their trigger functions, `import_batch_visible`, `decrypt_secret`, `encrypt_secret` |

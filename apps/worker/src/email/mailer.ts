@@ -150,14 +150,14 @@ export function createExportMailer(config: WorkerSmtpConfig, log: WorkerLog): Ex
 
   async function send(to: string, template: string, content: MailContent): Promise<void> {
     try {
-      const info = await transport.sendMail({
+      await transport.sendMail({
         from: config.MAIL_FROM,
         to,
         subject: content.subject,
         text: content.text,
         html: content.html,
       });
-      log.info({ template, messageId: info.messageId }, "mail sent");
+      log.info({ template }, "mail sent");
     } catch (err) {
       const category = mailErrorCategory(err);
       log.warn({ template, category }, "mail delivery failed");
