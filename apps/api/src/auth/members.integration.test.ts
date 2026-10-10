@@ -57,6 +57,55 @@ describe.skipIf(!databaseUrl)("members", () => {
       expect((await h.inject(null, "GET", `/babies/${babyId}/members`)).statusCode).toBe(401);
     });
 
+    it("names and relationship labels come through member_profiles for every role (profiles itself is self-only)", async () => {
+      const { a, b, c, babyId } = await album({ coAdmin: true, contributor: true });
+      await h.admin.query(
+        "UPDATE public.profiles SET relationship_label = 'grandma' WHERE user_id = $1",
+        [c?.id],
+      );
+      for (const viewer of [a, b as TestUser, c as TestUser]) {
+        const res = await members(viewer, babyId);
+        expect(res.statusCode).toBe(200);
+        const list = membersListResponseSchema.parse(res.json()).members;
+        expect(list.map((m) => m.displayName).sort()).toEqual(["Alice", "Bob", "Carol"]);
+        expect(list.find((m) => m.displayName === "Carol")?.relationshipLabel).toBe("grandma");
+      }
+    });
+
+    it("a member whose profile is mid-deletion is still listed, with an empty name and no label", async () => {
+      const { a, c, babyId } = await album({ contributor: true });
+      await h.admin.query(
+        "UPDATE public.profiles SET deleted_at = now(), relationship_label = 'secret' WHERE user_id = $1",
+        [c?.id],
+      );
+      const res = await members(a, babyId);
+      expect(res.statusCode).toBe(200);
+      const list = membersListResponseSchema.parse(res.json()).members;
+      expect(list).toHaveLength(2);
+      const gone = list.find((m) => m.userId === c?.id);
+      expect(gone).toMatchObject({ displayName: "", relationshipLabel: null, role: "contributor" });
+      expect(JSON.stringify(res.json())).not.toContain("secret");
+    });
+
+    it("never exposes another album's members, nor profile fields beyond name and label", async () => {
+      const one = await album({ contributor: true });
+      const two = await album();
+      const res = await members(one.a, one.babyId);
+      const body = JSON.stringify(res.json());
+      expect(body).not.toContain(two.a.id);
+      expect(body).not.toContain(one.a.email);
+      expect(Object.keys(res.json().members[0]).sort()).toEqual([
+        "displayName",
+        "joinedAt",
+        "relationshipLabel",
+        "removalRequestedAt",
+        "removalRequestedBy",
+        "role",
+        "userId",
+      ]);
+      expect((await members(two.a, one.babyId)).statusCode).toBe(404);
+    });
+
     it("pending invites are visible to admins only; accepted and revoked ones are never listed", async () => {
       const { a, c, babyId } = await album({ contributor: true });
       const pending = await h.inject(a, "POST", `/babies/${babyId}/invites`, {

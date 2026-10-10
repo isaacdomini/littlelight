@@ -268,7 +268,8 @@ export async function loadViewerAlbum(client: Tx, session: ViewerSession): Promi
 
 export interface ViewerPhotoRow {
   id: string;
-  taken_at: Date | null;
+  /** UTC calendar date `YYYY-MM-DD` (review-fixes D19): viewers get no time of day. */
+  taken_at: string | null;
   taken_at_estimated: boolean;
   age_days: number | null;
   width: number | null;
@@ -294,7 +295,8 @@ export async function listViewerPhotoRows(
 ): Promise<ViewerPhotoRow[]> {
   const keyset = keysetClause(cursor, 4);
   const { rows } = await client.query<ViewerPhotoRow>(
-    `SELECT p.id, p.taken_at, p.taken_at_estimated, p.age_days, p.width, p.height,
+    `SELECT p.id, to_char(p.taken_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS taken_at,
+            p.taken_at_estimated, p.age_days, p.width, p.height,
             ${SHARE_SORT_KEY_SQL} AS sort_key,
             (${HIDDEN_SQL}) AS hidden,
             pd.milestone_id, m.name AS milestone_name,
@@ -379,7 +381,7 @@ export async function toViewerPhoto(
       : null;
   return {
     id: r.id,
-    takenAt: r.taken_at?.toISOString() ?? null,
+    takenAt: r.taken_at,
     takenAtEstimated: r.taken_at_estimated,
     ageDays: r.age_days,
     width: r.width,

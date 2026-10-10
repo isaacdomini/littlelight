@@ -15,7 +15,7 @@ Also set the same email/code in `metadata/review_information/demo_user.txt` and
 
 Facts the notes rely on (re-check before submitting):
 
-- Review account is on the Plus plan so Search and Chat can be demonstrated; it holds 24 illustrated
+- Review account has AI features enabled so Search and Chat can be demonstrated; it holds 24 illustrated
   photos from `demo:media --review-baby` (no real children).
 - Native builds hide purchase prompts, so the notes say there is no purchase in the app.
 - Sign in with Apple / Google are not in this build (email code only). If a later build adds Google

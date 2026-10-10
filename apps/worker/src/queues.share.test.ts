@@ -139,13 +139,14 @@ describe("share handlers", () => {
       } as never,
       purge: {} as never,
       sweep: {} as never,
+      dataExport: {} as never,
       ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
       indexer: { reindex: vi.fn(), reconcile: vi.fn(), backfill: vi.fn() } as never,
       autoSharer: autoSharer as never,
       log: recordingLog(),
       ingestConcurrency: 1,
     });
-    expect(registered.size).toBe(13);
+    expect(registered.size).toBe(14);
     await registered.get(JOBS.shareApply)?.([
       job({ shareLinkId: LINK, reason: "rule_changed" }),
       job({ bad: true }),

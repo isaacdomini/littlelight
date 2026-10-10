@@ -10,7 +10,7 @@ The account is preloaded with one sample baby album ("Maya") with 24 photos. All
 WHAT TO LOOK AT
 - Timeline: photos grouped by the baby's age; tap one for the full-screen viewer and details.
 - Upload: the Upload tab, "Choose photos", opens the system photo picker or the camera. Photos you pick are uploaded to the album.
-- Search and Chat (the AI features) are available on this account. They describe and search the sample photos using AI from our model provider. Free accounts are never analysed and no photo from a free account is sent to any AI model. Photos are never used to train models.
+- Search and Chat (the AI features) are available on this account. They describe and search the sample photos using AI from our model provider. Photos are only analysed in albums where AI features are turned on. Photos are never used to train models.
 - Family: "Share" creates a private link that expires after 24 hours by default. People opening the link see only the photos the parent chose, without an account.
 - Notifications: not requested at launch. Settings > Notifications turns them on. Notification text is generic ("12 new photos are ready to search.") and never contains names or photo content.
 - Account deletion: Settings > Account > Delete account (requires re-entering the email code; for the review account use the static code above).

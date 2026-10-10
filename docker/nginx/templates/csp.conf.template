@@ -1,0 +1,16 @@
+# Content-Security-Policy for the web app (docs/plans/review-fixes.md 2.11, D9). The ONLY nginx
+# file that is a template: the official nginx image's entrypoint (20-envsubst-on-templates.sh)
+# renders it at container start into /etc/nginx/snippets/csp.conf (NGINX_ENVSUBST_OUTPUT_DIR,
+# set in apps/mobile-web/Dockerfile), substituting only the three variables named in
+# NGINX_ENVSUBST_FILTER; docker/nginx/default.conf includes the result in `server` and `/s/`.
+# Defaults (Dockerfile ENV, overridden by the `web` service environment in docker-compose.yml):
+#   WEB_CSP_HEADER         Content-Security-Policy-Report-Only (violations only reach the
+#                          browser console); set Content-Security-Policy to enforce after a
+#                          week of clean production consoles
+#   S3_PUBLIC_ENDPOINT     origin of presigned photo GETs and multipart part PUTs (MinIO)
+#   WEB_CSP_CONNECT_EXTRA  extra connect-src origins, space-separated, e.g. the Sentry ingest
+#                          origin when SENTRY_WEB_DSN is set (https://o123.ingest.us.sentry.io)
+# https://challenges.cloudflare.com: the Turnstile script + iframe the sign-in form loads after
+# repeated code requests (apps/mobile-web/src/components/Turnstile.tsx).
+# Native apps load from capacitor://localhost / https://localhost and never see these headers.
+add_header ${WEB_CSP_HEADER} "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: ${S3_PUBLIC_ENDPOINT}; connect-src 'self' ${S3_PUBLIC_ENDPOINT} ${WEB_CSP_CONNECT_EXTRA}; font-src 'self' data:; manifest-src 'self'; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;

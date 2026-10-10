@@ -1,6 +1,7 @@
 import { IonContent, IonIcon, IonPage } from "@ionic/react";
 import { chevronForward } from "ionicons/icons";
 import { useNavigate } from "react-router-dom";
+import { useCurrentBaby } from "../../auth/AuthProvider";
 import { useSignOut } from "../../auth/useSignOut";
 import { AppHeader } from "../../components/AppHeader";
 import { Button } from "../../components/ui";
@@ -13,9 +14,14 @@ export function SettingsPage() {
   const signOut = useSignOut();
   const native = isNative();
   const kinds = usePushKinds();
+  const { baby } = useCurrentBaby();
   const rows: (readonly [string, string, string])[] = [
     ...(native && (kinds.shareViewed || kinds.photosAnalyzed)
       ? ([["settings-notifications", "/settings/notifications", t("push.settings.row")]] as const)
+      : []),
+    // Data export is admin-only (the API enforces it too).
+    ...(baby?.role === "admin"
+      ? ([["settings-export", "/settings/export", t("settings.export")]] as const)
       : []),
     ["settings-devices", "/settings/devices", t("settings.devices")],
     // Account deletion must be easy to find in the app (App Store 5.1.1(v)).

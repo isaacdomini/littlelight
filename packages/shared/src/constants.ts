@@ -334,3 +334,25 @@ export const SHARE_DOWNLOAD_URL_TTL_SEC = 60;
  * metadata-free), never the original (D9).
  */
 export const SHARE_VIEWER_MEDIA_KINDS = ["thumb", "display"] as const;
+
+// ---------------------------------------------------------------------------------------------
+// Data export (docs/plans/review-fixes.md 2.2, 2.3, 2.5; PRD FR-10.1 "Export all originals + a
+// JSON/CSV of metadata as a ZIP", "Roles and permissions": export data is Admin only). Several
+// are mirrored by the `data_exports` table defaults and triggers (`expires_at` default,
+// `data_exports_rate_limit`): change both together.
+// ---------------------------------------------------------------------------------------------
+
+/** A finished export stays downloadable this many days (`data_exports.expires_at` default, D5). */
+export const EXPORT_TTL_DAYS = 7;
+/** Export requests per baby per rolling 24 hours (`data_exports_rate_limit` trigger ⇒ 429). */
+export const EXPORTS_PER_BABY_PER_DAY = 3;
+/** Lifetime of an export download URL (presigned GET of the ZIP, requester only). */
+export const EXPORT_URL_TTL_SEC = 600;
+/** Exports listed by `GET /babies/:id/exports` (newest first). */
+export const EXPORT_LIST_LIMIT = 10;
+/** `formatVersion` of the ZIP layout (`album.json`, `README.txt`). */
+export const EXPORT_FORMAT_VERSION = "1";
+/** Default of `EXPORT_MAX_BYTES` (100 GiB): larger albums fail with `too_large`. */
+export const EXPORT_MAX_BYTES_DEFAULT = 107_374_182_400;
+/** The worker updates `data_exports.photos_done` every this many photos. */
+export const EXPORT_PROGRESS_EVERY = 50;

@@ -48,10 +48,14 @@ interface MemberRow {
   removal_requested_at: Date | null;
 }
 
-const MEMBER_SELECT = `SELECT m.user_id, p.display_name, p.relationship_label, m.role, m.joined_at,
+// Co-member names come from `member_profiles` (review-fixes D12): `profiles` is self-only for
+// `authenticated`. LEFT JOIN so a member whose profile is mid-deletion (`deleted_at` set, hidden
+// by the view) still appears, with an empty name, until GoTrue's cascade removes the row.
+const MEMBER_SELECT = `SELECT m.user_id, COALESCE(p.display_name, '') AS display_name,
+         p.relationship_label, m.role, m.joined_at,
          m.removal_requested_by, m.removal_requested_at
     FROM public.baby_members m
-    JOIN public.profiles p ON p.user_id = m.user_id
+    LEFT JOIN public.member_profiles p ON p.user_id = m.user_id
    WHERE m.baby_id = $1`;
 
 /** A removal request is live for 7 days; older ones are reported (and treated) as absent. */
@@ -92,6 +96,21 @@ function requireActorAdmin(rows: MemberRow[], uid: string): MemberRow {
   const actor = memberOf(rows, uid);
   if (actor?.role !== "admin") throw forbidden("Only an admin can do that");
   return actor;
+}
+
+const OTHER_ADMIN_DENIED = () =>
+  forbidden(
+    "An admin can't be demoted by someone else; ask them to step down or request their removal",
+  );
+
+/**
+ * A role change or removal the `baby_members` policies refused (0 rows affected). The checks
+ * above normally answer first; this covers a race (the target became an admin, or the actor
+ * stopped being one) with the same 403 messages, never a 500 or a silent success.
+ */
+function policyDenied(target: MemberRow, actorUid: string): ApiError {
+  if (target.role === "admin" && target.user_id !== actorUid) return OTHER_ADMIN_DENIED();
+  return forbidden("Only an admin can do that");
 }
 
 export function memberRoutes(app: FastifyInstance, _runtime: AuthRuntime): void {
@@ -146,20 +165,20 @@ export function memberRoutes(app: FastifyInstance, _runtime: AuthRuntime): void 
 
         if (role !== "admin") {
           // Demotion: self only (see header). Losing admin is destructive -> fresh sign-in.
-          if (userId !== ctx.uid) {
-            throw forbidden(
-              "An admin can't be demoted by someone else; ask them to step down or request their removal",
-            );
-          }
+          if (userId !== ctx.uid) throw OTHER_ADMIN_DENIED();
           requireFreshSignIn(ctx);
         }
 
         // Triggers: max two admins -> 409 admins_full; last admin -> 409 last_admin; the paying
         // admin stepping down -> plan_owner_user_id cleared, plan back to free.
-        await client.query(
+        const updatedRole = await client.query(
           "UPDATE public.baby_members SET role = $3 WHERE baby_id = $1 AND user_id = $2",
           [babyId, userId, role],
         );
+        // The `baby_members_authenticated_update` policy (FR-1.5 at the database) makes a denied
+        // UPDATE affect 0 rows instead of raising: surface it as the same 403, never a silent
+        // success (review-fixes R4).
+        if (updatedRole.rowCount !== 1) throw policyDenied(target, ctx.uid);
         await audit(client, "member.role_changed", {
           babyId,
           actorUserId: ctx.uid,
@@ -199,10 +218,12 @@ export function memberRoutes(app: FastifyInstance, _runtime: AuthRuntime): void 
             metadata: { target_user_id: userId, role: target.role },
           });
           // Trigger: the last admin of a live baby cannot leave -> 409 last_admin.
-          await client.query(
+          const left = await client.query(
             "DELETE FROM public.baby_members WHERE baby_id = $1 AND user_id = $2",
             [babyId, userId],
           );
+          // A member may always delete their own row; 0 rows means it is already gone.
+          if (left.rowCount !== 1) throw notFound("No such member");
           return "removed" as const;
         }
 
@@ -215,10 +236,13 @@ export function memberRoutes(app: FastifyInstance, _runtime: AuthRuntime): void 
             actorUserId: ctx.uid,
             metadata: { target_user_id: userId, role: target.role },
           });
-          await client.query(
+          const removed = await client.query(
             "DELETE FROM public.baby_members WHERE baby_id = $1 AND user_id = $2",
             [babyId, userId],
           );
+          // Policy: an admin may delete contributor rows only (0 rows if the target became an
+          // admin meanwhile, or the actor lost admin): 403, never a silent success.
+          if (removed.rowCount !== 1) throw policyDenied(target, ctx.uid);
           return "removed" as const;
         }
 
@@ -273,10 +297,11 @@ export function memberRoutes(app: FastifyInstance, _runtime: AuthRuntime): void 
           metadata: { target_user_id: userId, role: me.role },
         });
         // Still subject to the last-admin trigger (409 last_admin if the requester left since).
-        await client.query("DELETE FROM public.baby_members WHERE baby_id = $1 AND user_id = $2", [
-          babyId,
-          userId,
-        ]);
+        const confirmed = await client.query(
+          "DELETE FROM public.baby_members WHERE baby_id = $1 AND user_id = $2",
+          [babyId, userId],
+        );
+        if (confirmed.rowCount !== 1) throw notFound("No such member");
       });
       return reply.code(204).send();
     },

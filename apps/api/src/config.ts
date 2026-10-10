@@ -20,10 +20,12 @@ import {
   reviewAccountEnvSchema,
   SEARCH_DEFAULTS,
   type SearchEnv,
+  type SentryEnv,
   SHARE_DEFAULTS,
   type ShareEnv,
   s3EnvSchema,
   searchEnvSchema,
+  sentryEnvSchema,
   shareEnvSchema,
 } from "@littlelight/shared";
 import { z } from "zod";
@@ -52,6 +54,9 @@ import { z } from "zod";
 // off unless BOTH `REVIEW_ACCOUNT_EMAIL` and `REVIEW_ACCOUNT_CODE_HASH` are set (empty counts as
 // unset); one without the other, a malformed email or a hash that is not `scrypt$1$…` fails boot
 // naming the field only. `auth/review.ts` (`loadReviewAccount`) reads the parsed values from here.
+// Review fixes (docs/plans/review-fixes.md 2.6, D8) add error telemetry (`sentryEnvSchema`):
+// `SENTRY_DSN` unset/empty ⇒ off (dev); a value that is not a Sentry DSN fails boot naming the
+// field only; `SENTRY_ENVIRONMENT` defaults to `NODE_ENV`. `plugins/telemetry.ts` reads them.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -112,7 +117,10 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   Partial<NativeCorsEnv> &
   Partial<PushApiEnv> &
   // Both optional: absent ⇒ the review sign-in is off (`reviewAccountEnabled`).
-  ReviewAccountEnv;
+  ReviewAccountEnv &
+  // Optional in the type: `SENTRY_DSN` absent ⇒ telemetry off; `SENTRY_ENVIRONMENT` is always
+  // set by `loadConfig` (default `NODE_ENV`).
+  Partial<SentryEnv>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -157,6 +165,7 @@ export function loadConfig(
     nativeCorsEnvSchema,
     pushApiEnvSchema,
     reviewAccountEnvSchema,
+    sentryEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];

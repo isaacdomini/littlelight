@@ -3,9 +3,12 @@ import {
   AI_PIPELINE_DEFAULTS,
   aiPipelineEnvSchema,
   databaseEnvSchema,
+  exportEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
   s3EnvSchema,
+  sentryDsnSchema,
+  sentryEnvSchema,
 } from "./env";
 
 const SECRET = "dev-only-jwt-secret-at-least-32-characters";
@@ -150,5 +153,64 @@ describe("aiPipelineEnvSchema (step 6)", () => {
         AI_FLUSH_INTERVAL_CRON: "*/1 * * * *",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("exportEnvSchema", () => {
+  it("defaults EXPORT_MAX_BYTES to 100 GiB and treats blank as unset", () => {
+    expect(exportEnvSchema.parse({}).EXPORT_MAX_BYTES).toBe(107_374_182_400);
+    expect(exportEnvSchema.parse({ EXPORT_MAX_BYTES: "" }).EXPORT_MAX_BYTES).toBe(107_374_182_400);
+  });
+
+  it("accepts 1 GiB and more, rejects less and non-numbers", () => {
+    expect(exportEnvSchema.parse({ EXPORT_MAX_BYTES: "1073741824" }).EXPORT_MAX_BYTES).toBe(
+      1_073_741_824,
+    );
+    expect(exportEnvSchema.safeParse({ EXPORT_MAX_BYTES: "1073741823" }).success).toBe(false);
+    expect(exportEnvSchema.safeParse({ EXPORT_MAX_BYTES: "lots" }).success).toBe(false);
+    expect(exportEnvSchema.safeParse({ EXPORT_MAX_BYTES: "1.5e9" }).success).toBe(true);
+  });
+});
+
+describe("sentry env", () => {
+  it.each([
+    "https://abc123@o1.ingest.sentry.io/42",
+    "http://k@localhost:9009/1",
+    "https://k@sentry.example.test/prefix/7/",
+  ])("accepts the DSN %s", (dsn) => {
+    expect(sentryDsnSchema.safeParse(dsn).success).toBe(true);
+  });
+
+  it.each([
+    "not a url",
+    "https://sentry.io/42",
+    "https://k@sentry.io/",
+    "https://k@sentry.io/project",
+    "ftp://k@sentry.io/1",
+  ])("rejects the DSN %s", (dsn) => {
+    expect(sentryDsnSchema.safeParse(dsn).success).toBe(false);
+  });
+
+  it("unset or blank DSN means off; the environment defaults to NODE_ENV", () => {
+    expect(sentryEnvSchema.parse({ NODE_ENV: "production" })).toEqual({
+      SENTRY_DSN: undefined,
+      SENTRY_ENVIRONMENT: "production",
+    });
+    expect(sentryEnvSchema.parse({ SENTRY_DSN: "", SENTRY_ENVIRONMENT: "" }).SENTRY_DSN).toBe(
+      undefined,
+    );
+  });
+
+  it("takes an explicit environment and rejects odd characters", () => {
+    expect(sentryEnvSchema.parse({ SENTRY_ENVIRONMENT: "staging" }).SENTRY_ENVIRONMENT).toBe(
+      "staging",
+    );
+    expect(sentryEnvSchema.safeParse({ SENTRY_ENVIRONMENT: "my env!" }).success).toBe(false);
+  });
+
+  it("a bad DSN fails and the error never echoes the value", () => {
+    const r = sentryEnvSchema.safeParse({ SENTRY_DSN: "https://secretkey@bad" });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).not.toContain("secretkey");
   });
 });

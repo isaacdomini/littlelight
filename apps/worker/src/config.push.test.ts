@@ -12,6 +12,13 @@ const env = {
   DATA_ENCRYPTION_KEY: "dev-only-data-encryption-key-32-chars-min",
 };
 
+const prodEnv = {
+  ...env,
+  NODE_ENV: "production",
+  SMTP_HOST: "smtp.example.test",
+  MAIL_FROM: "hi@example.test",
+};
+
 describe("worker loadConfig: step 9 push settings (pushEnvSchema)", () => {
   it("defaults to provider none, sandbox APNs, the app bundle id and the 600/60/60 timings", () => {
     const c = loadConfig(env);
@@ -55,24 +62,31 @@ describe("worker loadConfig: step 9 push settings (pushEnvSchema)", () => {
 
   it("the fake provider fails boot in production, naming the field", () => {
     try {
-      loadConfig({ ...env, NODE_ENV: "production", PUSH_PROVIDER: "fake" });
+      loadConfig({ ...prodEnv, PUSH_PROVIDER: "fake" });
       expect.unreachable();
     } catch (e) {
       expect(e).toBeInstanceOf(ConfigError);
       expect((e as ConfigError).fields.join(" ")).toContain("PUSH_PROVIDER");
     }
-    expect(() =>
-      loadConfig({ ...env, NODE_ENV: "production", PUSH_PROVIDER: "none" }),
-    ).not.toThrow();
+    expect(() => loadConfig({ ...prodEnv, PUSH_PROVIDER: "none" })).not.toThrow();
+  });
+
+  it("production without SMTP settings fails boot, naming SMTP_HOST", () => {
+    try {
+      loadConfig({ ...env, NODE_ENV: "production" });
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ConfigError);
+      expect((e as ConfigError).fields.join(" ")).toContain("SMTP_HOST");
+    }
   });
 
   it("an http URL override fails boot in production", () => {
-    expect(() =>
-      loadConfig({ ...env, NODE_ENV: "production", PUSH_FCM_BASE_URL: "http://127.0.0.1:9" }),
-    ).toThrow(ConfigError);
+    expect(() => loadConfig({ ...prodEnv, PUSH_FCM_BASE_URL: "http://127.0.0.1:9" })).toThrow(
+      ConfigError,
+    );
     expect(
-      loadConfig({ ...env, NODE_ENV: "production", PUSH_FCM_BASE_URL: "https://fcm.example.test/" })
-        .PUSH_FCM_BASE_URL,
+      loadConfig({ ...prodEnv, PUSH_FCM_BASE_URL: "https://fcm.example.test/" }).PUSH_FCM_BASE_URL,
     ).toBe("https://fcm.example.test");
   });
 

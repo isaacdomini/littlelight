@@ -28,8 +28,11 @@
 # Configuration: .env (from .env.example) is used ONLY for ${VAR} interpolation in this file. No
 # service gets the whole file (no env_file): each one receives exactly the variables listed in
 # its `environment:` block, so e.g. api/worker never see POSTGRES_PASSWORD, the other services'
-# role passwords or tunnel credentials. SMTP goes to auth (sign-in codes) and api (invites,
-# new-device alerts) only; the worker gets none, and auth gets no API secrets. AI provider keys:
+# role passwords or tunnel credentials. SMTP goes to auth (sign-in codes), api (invites,
+# new-device alerts) and worker (export ready/failed emails, docs/plans/review-fixes.md 2.4);
+# auth gets no API secrets. Sentry (docs/plans/review-fixes.md 2.6): SENTRY_DSN and
+# SENTRY_ENVIRONMENT reach api and worker only (x-app-env); the web DSN (SENTRY_WEB_DSN) is a
+# build arg baked into the web bundle, never a runtime variable. AI provider keys:
 # OPENAI_API_KEY goes to the worker (vision batches, document embeddings) and the api (chat,
 # query embeddings, docs/plans/step-7.md 2.11); ANTHROPIC_API_KEY to the worker only; never
 # to web, migrate, db-init or the backup job. Native apps (docs/plans/step-9.md 2.3, 2.5, 2.8):
@@ -132,7 +135,11 @@ x-app-env: &app-env
   AI_BUDGET_ALERT_PCT: ${AI_BUDGET_ALERT_PCT:-80}
   AI_QUEUE_AGE_ALERT_MINUTES: ${AI_QUEUE_AGE_ALERT_MINUTES:-120}
   AI_MAX_ATTEMPTS: ${AI_MAX_ATTEMPTS:-2}
+  # Error reporting (docs/plans/review-fixes.md 2.6, D8), api + worker only: errors, scrubbed,
+  # no traces. Empty DSN => Sentry is never initialised (no network). SENTRY_ENVIRONMENT empty
+  # => NODE_ENV (production).
   SENTRY_DSN: ${SENTRY_DSN:-}
+  SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
 
 # Node services: non-root image user, no capabilities, read-only root filesystem.
 x-hardened: &hardened
@@ -367,7 +374,7 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       # App emails (invites, new-device alerts) over the same SMTP account as GoTrue. The worker
-      # gets none of these.
+      # gets the same block (export emails).
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:?Set SMTP_USER in .env}
@@ -459,6 +466,17 @@ services:
       PUSH_PHOTOS_DEBOUNCE_SEC: ${PUSH_PHOTOS_DEBOUNCE_SEC:-600}
       PUSH_SHARE_DEBOUNCE_SEC: ${PUSH_SHARE_DEBOUNCE_SEC:-60}
       PUSH_MIN_GAP_MIN: ${PUSH_MIN_GAP_MIN:-60}
+      # Data export (docs/plans/review-fixes.md 2.3, 2.4, D5), worker only. EXPORT_MAX_BYTES caps
+      # the summed size of one export's originals (empty => 100 GiB; at least 1 GiB); an export
+      # temporarily doubles the album's footprint on STORAGE_PATH until it expires (7 days).
+      EXPORT_MAX_BYTES: ${EXPORT_MAX_BYTES:-}
+      # "Your export is ready/failed" emails (no link in them) over the api's SMTP account.
+      SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:?Set SMTP_USER in .env}
+      SMTP_PASS: ${SMTP_PASS:?Set SMTP_PASS in .env}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      MAIL_FROM: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}}
     volumes:
       # MinIO's data folder, read-only, only for statfs (objects are read through S3).
       - type: bind
@@ -480,15 +498,29 @@ services:
       start_period: 60s
       start_interval: 3s
 
-  # nginx: SPA + /api/ and /auth/ proxies (docker/nginx/default.conf). Needs no app secrets,
-  # so it gets no environment. Published for the host-run cloudflared only (see the header).
+  # nginx: SPA + /api/ and /auth/ proxies (docker/nginx/default.conf). Needs no app secrets;
+  # its environment only fills the Content-Security-Policy snippet
+  # (docker/nginx/templates/csp.conf.template, rendered at start; docs/plans/review-fixes.md
+  # 2.11, D9). Published for the host-run cloudflared only (see the header).
   web:
     build:
       context: .
       dockerfile: apps/mobile-web/Dockerfile
       target: prod
+      args:
+        # Browser error reporting on the web origin only (empty => no Sentry code is loaded).
+        # Baked in at build time: rebuild the image after changing it, and put the DSN's ingest
+        # origin in WEB_CSP_CONNECT_EXTRA. Native builds never get it.
+        VITE_SENTRY_DSN: ${SENTRY_WEB_DSN:-}
     restart: unless-stopped
     logging: *logging
+    environment:
+      # Content-Security-Policy-Report-Only (default) | Content-Security-Policy (enforce).
+      WEB_CSP_HEADER: ${WEB_CSP_HEADER:-Content-Security-Policy-Report-Only}
+      # Presigned photo GETs and upload part PUTs go to this origin (img-src, connect-src).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://files.littlelight.tesarsoft.com}
+      # Extra connect-src origins (space-separated), e.g. the Sentry ingest origin.
+      WEB_CSP_CONNECT_EXTRA: ${WEB_CSP_CONNECT_EXTRA:-}
     ports:
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
     depends_on:

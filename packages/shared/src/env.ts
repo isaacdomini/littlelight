@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { emailSchema } from "./auth";
+import { EXPORT_MAX_BYTES_DEFAULT } from "./constants";
 import { APP_ID, NATIVE_ORIGINS_DEFAULT } from "./native";
 import {
   PUSH_MIN_GAP_MIN_DEFAULT,
@@ -522,3 +523,69 @@ export function reviewAccountEnabled(
 ): env is ReviewAccountEnv & { REVIEW_ACCOUNT_EMAIL: string; REVIEW_ACCOUNT_CODE_HASH: string } {
   return env.REVIEW_ACCOUNT_EMAIL !== undefined && env.REVIEW_ACCOUNT_CODE_HASH !== undefined;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Data export (docs/plans/review-fixes.md 2.2, 2.3, D5). Worker only.
+// ---------------------------------------------------------------------------------------------
+
+const GIB = 1024 * 1024 * 1024;
+
+/**
+ * Worker export settings: `EXPORT_MAX_BYTES` caps the summed size of the originals one export
+ * may stream (default 100 GiB, at least 1 GiB); a larger album fails with `too_large`. An export
+ * temporarily doubles the album's storage footprint until it expires.
+ */
+export const exportEnvSchema = z.object({
+  EXPORT_MAX_BYTES: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(GIB).default(EXPORT_MAX_BYTES_DEFAULT),
+  ),
+});
+export type ExportEnv = z.infer<typeof exportEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Sentry (docs/plans/review-fixes.md 2.6, D8; PRD "Observability", "Environment variables":
+// `SENTRY_DSN`). Errors only, scrubbed by `scrubTelemetryEvent`; off unless a DSN is set (dev
+// sets none). api and worker read `SENTRY_DSN`; the web build reads `VITE_SENTRY_DSN` (from
+// `SENTRY_WEB_DSN`) and may validate it with `sentryDsnSchema`. The DSN is not a secret in the
+// usual sense, but config errors still name the field only.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A Sentry DSN: `http(s)://<public key>@<host>[/<path>]/<numeric project id>`. Empty or unset means "off" (the
+ * callers' `emptyAsUndefined`); anything else that is not such a URL fails boot.
+ */
+export const sentryDsnSchema = z.url({ protocol: /^https?$/ }).refine((u) => {
+  try {
+    const url = new URL(u);
+    return url.username !== "" && /^(\/[0-9A-Za-z._-]+)*\/[0-9]+\/?$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}, "must be a Sentry DSN (scheme://key@host/project)");
+
+/** `SENTRY_ENVIRONMENT` value: a short tag (`production`, `staging`, …). */
+const sentryEnvironmentSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(32)
+  .regex(/^[A-Za-z0-9._-]+$/, "letters, digits, '.', '_' or '-' only");
+
+/**
+ * api and worker Sentry settings. `SENTRY_DSN` unset/empty ⇒ Sentry is never initialised (no
+ * network). `SENTRY_ENVIRONMENT` defaults to `NODE_ENV` (read here, same default as
+ * `logEnvSchema`); the parsed output carries `SENTRY_DSN` (or undefined) and the resolved
+ * `SENTRY_ENVIRONMENT` only.
+ */
+export const sentryEnvSchema = z
+  .object({
+    SENTRY_DSN: z.preprocess(emptyAsUndefined, sentryDsnSchema.optional()),
+    SENTRY_ENVIRONMENT: z.preprocess(emptyAsUndefined, sentryEnvironmentSchema.optional()),
+    NODE_ENV: logEnvSchema.shape.NODE_ENV,
+  })
+  .transform((env) => ({
+    SENTRY_DSN: env.SENTRY_DSN,
+    SENTRY_ENVIRONMENT: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV,
+  }));
+export type SentryEnv = z.output<typeof sentryEnvSchema>;

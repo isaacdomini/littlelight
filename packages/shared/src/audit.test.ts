@@ -82,3 +82,35 @@ describe("audit additions (step 6)", () => {
     expect(auditMetadataSchema.safeParse(md).success).toBe(false);
   });
 });
+
+describe("audit additions (review fixes: data export)", () => {
+  it("lists the export events", () => {
+    for (const e of [
+      "export.requested",
+      "export.ready",
+      "export.failed",
+      "export.downloaded",
+      "export.expired",
+      "export.purged",
+    ]) {
+      expect(auditEventSchema.safeParse(e).success, e).toBe(true);
+    }
+  });
+
+  it("accepts export_id and include_location, nothing that could carry data", () => {
+    expect(auditMetadataSchema.parse({ export_id: UUID, include_location: true })).toEqual({
+      export_id: UUID,
+      include_location: true,
+    });
+    for (const md of [
+      { export_id: "e1" },
+      { export_id: UUID, storage_key: `babies/x/exports/${UUID}.zip` },
+      { export_id: UUID, url: "https://x.test/a.zip" },
+      { export_id: UUID, bytes: 10 },
+      { export_id: UUID, email: "a@b.co" },
+      { include_location: "yes" },
+    ]) {
+      expect(auditMetadataSchema.safeParse(md).success, JSON.stringify(md)).toBe(false);
+    }
+  });
+});

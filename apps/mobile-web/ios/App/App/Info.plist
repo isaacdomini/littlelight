@@ -57,28 +57,12 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Littlelight lets you choose photos of your baby to add to your private album. Only the photos you pick are uploaded.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Littlelight saves photos you download from your album to your photo library.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Littlelight uses the camera so you can take a photo of your baby and add it straight to your private album.</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.tesarsoft.littlelight.debug-scheme</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>littlelight</string>
-			</array>
-		</dict>
-	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 </dict>

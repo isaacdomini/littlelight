@@ -63,6 +63,12 @@ export const JOBS = {
    * (`share_viewed`), with a per-kind debounce as `startAfter`.
    */
   pushNotify: "push.notify",
+  /**
+   * On demand (`dataExportJobSchema`, singleton key `exportId`): builds one album export ZIP
+   * (FR-10.1; docs/plans/review-fixes.md 2.3). Sent by the api after the request committed;
+   * `exclusive`, `retryLimit 1`, `retryDelay 60`, `expireInSeconds 14400`. No model call.
+   */
+  dataExport: "data.export",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -253,4 +259,27 @@ export function pushNotifySingletonKey(job: PushNotifyJob): string {
   return job.kind === "photos_analyzed"
     ? `${job.kind}:${job.babyId}`
     : `${job.kind}:${job.shareLinkId}`;
+}
+
+/**
+ * Queue name of the data export (docs/plans/review-fixes.md 2.2, 2.3; PRD FR-10.1): an alias of
+ * `JOBS.dataExport`. Queue policy `exclusive`, `singletonKey = exportId`
+ * (`dataExportSingletonKey`), `retryLimit 1`, `retryDelay 60`, `expireInSeconds 14400`.
+ */
+export const DATA_EXPORT_JOB = JOBS.dataExport;
+
+/**
+ * `data.export` payload: ids only (strict). The worker re-reads the `data_exports` row (status,
+ * `include_location`, requester) and every photo at run time as `pipeline`; the payload never
+ * carries a storage key, a URL, an email, a flag that widens the export or any parent text.
+ */
+export const dataExportJobSchema = z.strictObject({
+  exportId: z.uuid(),
+  babyId: z.uuid(),
+});
+export type DataExportJob = z.infer<typeof dataExportJobSchema>;
+
+/** pg-boss `singletonKey` of a `data.export` job: the export id (one queued/active job per export). */
+export function dataExportSingletonKey(job: DataExportJob): string {
+  return job.exportId;
 }

@@ -87,3 +87,38 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
+
+/**
+ * Streams a large signed download (an export ZIP) to `Caches/ll-share/` with the native
+ * downloader, opens the share sheet ("Save to Files", AirDrop, another app), then deletes the
+ * file. Unlike `downloadAndShare` it never loads the bytes into the WebView (that path builds a
+ * Blob plus a base64 copy, which cannot hold a multi-GB ZIP). The URL and path are never logged.
+ */
+export async function downloadLargeAndShare(signedUrl: string, fileName: string): Promise<boolean> {
+  const { Filesystem, Directory } = await import("@capacitor/filesystem");
+  const { Share } = await import("@capacitor/share");
+  const path = `${SHARE_DIR}/${Date.now().toString(36)}-${safeName(fileName)}`;
+  try {
+    await Filesystem.mkdir({ path: SHARE_DIR, directory: Directory.Cache, recursive: true }).catch(
+      () => undefined,
+    );
+    const done = await Filesystem.downloadFile({
+      url: signedUrl,
+      path,
+      directory: Directory.Cache,
+    });
+    if (!done.path) return false;
+    try {
+      await Share.share({
+        files: [done.path.startsWith("file:") ? done.path : `file://${done.path}`],
+      });
+    } catch {
+      // dismissed
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await Filesystem.deleteFile({ path, directory: Directory.Cache }).catch(() => undefined);
+  }
+}

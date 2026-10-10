@@ -1,3 +1,4 @@
+import { PassThrough, Readable } from "node:stream";
 import {
   AbortMultipartUploadCommand,
   DeleteObjectsCommand,
@@ -8,6 +9,7 @@ import {
   PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import { UPLOAD_MAX_FILE_BYTES } from "@littlelight/shared";
 
 // Worker object storage (docs/plans/step-4.md 2.7, 2.8, D6). The worker uses its bucket-scoped
@@ -60,6 +62,45 @@ export interface ObjectStorage {
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;
 }
 
+/** Options of `putObjectStream` (docs/plans/review-fixes.md 2.3, R1). */
+export interface PutStreamOptions {
+  /** Multipart part size in bytes (min 5 MiB; default 16 MiB). Memory ≈ `partSize × queueSize`. */
+  partSize?: number;
+  /** Parts uploaded concurrently (default 2). */
+  queueSize?: number;
+  /** Aborting stops the upload and aborts the multipart upload (no parts are left behind). */
+  signal?: AbortSignal;
+}
+
+/**
+ * Streaming access (data export, docs/plans/review-fixes.md 2.3). Separate from `ObjectStorage`
+ * so the existing in-memory test doubles keep satisfying the buffered interface.
+ */
+export interface StreamingStorage {
+  /**
+   * The object's body as a Node stream (never buffered). Resolves once the response headers
+   * arrived; `StorageError('NoSuchKey')` etc. when the object cannot be read.
+   */
+  getObjectStream(key: string): Promise<Readable>;
+  /**
+   * Upload `body` to `key` with a multipart upload (`@aws-sdk/lib-storage`), streaming: at most
+   * `partSize × queueSize` bytes are buffered. Resolves with the bytes written. On failure or
+   * abort the multipart upload is aborted (`leavePartsOnError: false`) and a `StorageError` is
+   * thrown.
+   */
+  putObjectStream(
+    key: string,
+    body: Readable | NodeJS.ReadableStream,
+    contentType: string,
+    opts?: PutStreamOptions,
+  ): Promise<number>;
+}
+
+export type WorkerStorage = ObjectStorage & StreamingStorage;
+
+export const STREAM_PART_BYTES = 16 * 1024 * 1024;
+export const STREAM_QUEUE_SIZE = 2;
+
 /** Hard cap on version-listing pages per call (1000 keys each) so a bug cannot loop forever. */
 const MAX_PAGES = 10_000;
 
@@ -67,8 +108,70 @@ export function createStorage(
   s3: Pick<S3Client, "send">,
   bucket: string,
   maxObjectBytes = UPLOAD_MAX_FILE_BYTES,
-): ObjectStorage {
+): WorkerStorage {
   return {
+    async getObjectStream(key) {
+      try {
+        const out = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        const body = out.Body;
+        if (!body) throw new StorageError("EmptyBody");
+        if (body instanceof Readable) return body;
+        // Non-Node runtimes hand back a web stream; the worker always runs on Node.
+        const web = (body as { transformToWebStream?: () => unknown }).transformToWebStream;
+        if (typeof web === "function") {
+          return Readable.fromWeb(web.call(body) as Parameters<typeof Readable.fromWeb>[0]);
+        }
+        throw new StorageError("UnsupportedBody");
+      } catch (err) {
+        throw toStorageError(err);
+      }
+    },
+
+    async putObjectStream(key, body, contentType, opts = {}) {
+      // lib-storage needs the full client (config: endpoint, checksums), not just `send`.
+      // lib-storage only streams a core `stream.Readable` (`instanceof`); userland streams such
+      // as archiver's (readable-stream) are piped through a core PassThrough (backpressure kept).
+      const source = body instanceof Readable ? body : body.pipe(new PassThrough());
+      const upload = new Upload({
+        client: s3 as S3Client,
+        params: { Bucket: bucket, Key: key, Body: source, ContentType: contentType },
+        partSize: Math.max(opts.partSize ?? STREAM_PART_BYTES, 5 * 1024 * 1024),
+        queueSize: opts.queueSize ?? STREAM_QUEUE_SIZE,
+        leavePartsOnError: false,
+      });
+      let written = 0;
+      upload.on("httpUploadProgress", (p) => {
+        if (typeof p.loaded === "number") written = p.loaded;
+      });
+      const onAbort = () => {
+        void upload.abort().catch(() => undefined);
+        if (source !== body) source.destroy();
+      };
+      if (opts.signal?.aborted) onAbort();
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        await upload.done();
+        return written;
+      } catch (err) {
+        // lib-storage's own cleanup sends AbortMultipartUpload with the (already aborted) signal,
+        // so after an abort the upload would stay open on the server: abort it here, unsignalled.
+        if (upload.uploadId) {
+          await s3
+            .send(
+              new AbortMultipartUploadCommand({
+                Bucket: bucket,
+                Key: key,
+                UploadId: upload.uploadId,
+              }),
+            )
+            .catch(() => undefined);
+        }
+        throw opts.signal?.aborted ? new StorageError("Aborted") : toStorageError(err);
+      } finally {
+        opts.signal?.removeEventListener("abort", onAbort);
+      }
+    },
+
     async getObject(key) {
       try {
         const out = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));

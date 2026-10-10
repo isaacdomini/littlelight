@@ -21,12 +21,14 @@ interface Display {
 
 const CHROME_HIDE_MS = 2000;
 
-function takenText(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? null
-    : new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(d);
+/** `takenAt` is a UTC calendar date (`YYYY-MM-DD`): format it as that date in any zone. */
+function takenText(day: string | null): string | null {
+  if (!day) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(day);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(d);
 }
 
 /**

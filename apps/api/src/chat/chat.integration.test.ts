@@ -169,12 +169,11 @@ describe.skipIf(!databaseUrl)("chat routes (api + db)", () => {
   });
 
   describe("access: every chat route", () => {
-    it("a contributor, a free admin and a stranger are refused on all three routes, before any model call", async () => {
+    it("a contributor and a stranger are refused on all three routes, before any model call", async () => {
       useChat();
       modelCalls.mockClear();
       const cases: [TestUser, string, number, string][] = [
         [nanny, baby, 403, "forbidden"],
-        [freeAdmin, freeBaby, 403, "plan_required"],
         [stranger, baby, 404, "not_found"],
       ];
       for (const [u, b, status, code] of cases) {
@@ -186,7 +185,62 @@ describe.skipIf(!databaseUrl)("chat routes (api + db)", () => {
       expect(modelCalls).not.toHaveBeenCalled();
     });
 
-    it("an expired entitlement is plan_required", async () => {
+    it("a free-tier admin can send nothing (plan_required) but can read and clear their history", async () => {
+      useChat();
+      modelCalls.mockClear();
+      const post403 = await post(freeAdmin, freeBaby, "hello");
+      expect(post403.statusCode).toBe(403);
+      expect(apiErrorSchema.parse(post403.json()).error).toBe("plan_required");
+      expect(modelCalls).not.toHaveBeenCalled();
+
+      // History left over from when the album was on Plus.
+      const t = await h.admin.query(
+        "INSERT INTO public.chat_threads (baby_id, user_id) VALUES ($1, $2) RETURNING id",
+        [freeBaby, freeAdmin.id],
+      );
+      await h.admin.query(
+        "INSERT INTO public.chat_messages (thread_id, baby_id, user_id, role, content) VALUES ($1, $2, $3, 'user', 'old question')",
+        [t.rows[0].id, freeBaby, freeAdmin.id],
+      );
+      const read = await thread(freeAdmin, freeBaby);
+      expect(read.statusCode).toBe(200);
+      expect(chatThreadResponseSchema.parse(read.json()).messages).toHaveLength(1);
+      const del = await clear(freeAdmin, freeBaby);
+      expect(del.statusCode).toBe(204);
+      const gone = await h.admin.query(
+        "SELECT count(*)::int AS n FROM public.chat_messages WHERE baby_id = $1",
+        [freeBaby],
+      );
+      expect(gone.rows[0].n).toBe(0);
+      expect(modelCalls).not.toHaveBeenCalled();
+    });
+
+    it("another user's history is never readable or clearable, even by an admin of the same album", async () => {
+      useChat();
+      const t = await h.admin.query(
+        "INSERT INTO public.chat_threads (baby_id, user_id) VALUES ($1, $2) RETURNING id",
+        [freeBaby, freeAdmin.id],
+      );
+      await h.admin.query(
+        "INSERT INTO public.chat_messages (thread_id, baby_id, user_id, role, content) VALUES ($1, $2, $3, 'user', 'private')",
+        [t.rows[0].id, freeBaby, freeAdmin.id],
+      );
+      const co = await h.user();
+      await h.member(freeBaby, co, "admin");
+      const read = await thread(co, freeBaby);
+      expect(read.statusCode).toBe(200);
+      expect(chatThreadResponseSchema.parse(read.json()).messages).toEqual([]);
+      expect(read.body).not.toContain("private");
+      expect((await clear(co, freeBaby)).statusCode).toBe(204);
+      const still = await h.admin.query(
+        "SELECT count(*)::int AS n FROM public.chat_messages WHERE baby_id = $1",
+        [freeBaby],
+      );
+      expect(still.rows[0].n).toBe(1);
+      await h.admin.query("DELETE FROM public.chat_threads WHERE baby_id = $1", [freeBaby]);
+    });
+
+    it("an expired entitlement is plan_required for sending, while history stays readable and clearable", async () => {
       const lapsed = await h.baby(mom, "Lapsed");
       await h.admin.query(
         "UPDATE public.babies SET plan = 'plus', entitlement_expires_at = now() + interval '1 day' WHERE id = $1",
@@ -197,10 +251,18 @@ describe.skipIf(!databaseUrl)("chat routes (api + db)", () => {
         "UPDATE public.babies SET entitlement_expires_at = now() - interval '1 hour' WHERE id = $1",
         [lapsed],
       );
+      modelCalls.mockClear();
       const res = await post(mom, lapsed, "hi");
       expect(res.statusCode).toBe(403);
       expect(res.json().error).toBe("plan_required");
-      expect((await thread(mom, lapsed)).json().error).toBe("plan_required");
+      expect(modelCalls).not.toHaveBeenCalled();
+      const read = await thread(mom, lapsed);
+      expect(read.statusCode).toBe(200);
+      expect(chatThreadResponseSchema.parse(read.json()).messages.length).toBeGreaterThan(0);
+      expect((await clear(mom, lapsed)).statusCode).toBe(204);
+      expect(chatThreadResponseSchema.parse((await thread(mom, lapsed)).json()).messages).toEqual(
+        [],
+      );
     });
 
     it("requires sign-in; a share-link viewer token cannot reach any chat route", async () => {

@@ -42,9 +42,9 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
   const babyId = baby?.id;
   const isAdmin = baby?.role === "admin";
   const paid = baby?.plan !== undefined && baby.plan !== "free";
-  const canChat = FEATURES.chat && isAdmin && paid;
 
-  const thread = useChatThread(babyId, canChat);
+  const thread = useChatThread(babyId, FEATURES.chat && isAdmin);
+  // A downgraded admin can still read and clear history (server: requireChatHistoryAccess).
   const chat = useSendChat(babyId);
   const clear = useClearChat(babyId ?? "none");
   const [text, setText] = useState("");
@@ -91,6 +91,44 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
     </section>
   );
 
+  async function doClear() {
+    setClearError(null);
+    try {
+      await clear.mutateAsync();
+      chat.reset();
+    } catch (e) {
+      setClearError(errorMessage(e));
+    }
+  }
+
+  const clearAlert = (
+    <IonAlert
+      isOpen={confirmClear}
+      header={t("chat.clearConfirm")}
+      message={t("chat.clearBody", { name: babyName })}
+      onDidDismiss={() => setConfirmClear(false)}
+      buttons={[
+        { text: t("common.cancel"), role: "cancel" },
+        { text: t("chat.clear"), role: "destructive", handler: () => void doClear() },
+      ]}
+    />
+  );
+  const showFreeClear = !paid && messages.length > 0;
+  const freeClear = showFreeClear ? (
+    <>
+      <Button
+        variant="secondary"
+        className="w-fit"
+        data-testid="chat-clear-free"
+        onClick={() => setConfirmClear(true)}
+      >
+        {t("chat.clearHistory")}
+      </Button>
+      {clearError ? <Message>{clearError}</Message> : null}
+      {clearAlert}
+    </>
+  ) : null;
+
   if (!baby)
     return shell(
       <EmptyState
@@ -117,21 +155,31 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
   if (!paid && isNative()) {
     // Purchases happen on the web only: no upsell, price or link to one in the app.
     return shell(
-      <div className="ll-card" data-testid="chat-unavailable">
-        <p className="text-muted">{t("native.chat.unavailable")}</p>
-      </div>,
+      <>
+        <div className="ll-card" data-testid="chat-unavailable">
+          <p className="text-muted">{t("native.chat.unavailable")}</p>
+        </div>
+        {freeClear}
+      </>,
       "chat-gated",
     );
   }
   if (!paid) {
     return shell(
-      <div className="ll-card flex flex-col items-start gap-3" data-testid="chat-upsell">
-        <p className="text-lg font-semibold">{t("chat.upsellTitle")}</p>
-        <p className="text-muted">{t("chat.upsellBody")}</p>
-        <Link to="/settings" className="ll-btn ll-btn-primary w-fit" data-testid="chat-upsell-link">
-          {t("chat.upsellCta")}
-        </Link>
-      </div>,
+      <>
+        <div className="ll-card flex flex-col items-start gap-3" data-testid="chat-upsell">
+          <p className="text-lg font-semibold">{t("chat.upsellTitle")}</p>
+          <p className="text-muted">{t("chat.upsellBody")}</p>
+          <Link
+            to="/settings"
+            className="ll-btn ll-btn-primary w-fit"
+            data-testid="chat-upsell-link"
+          >
+            {t("chat.upsellCta")}
+          </Link>
+        </div>
+        {freeClear}
+      </>,
       "chat-gated",
     );
   }
@@ -156,16 +204,6 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       if (canSend) submit(text);
-    }
-  }
-
-  async function doClear() {
-    setClearError(null);
-    try {
-      await clear.mutateAsync();
-      chat.reset();
-    } catch (e) {
-      setClearError(errorMessage(e));
     }
   }
 
@@ -324,16 +362,7 @@ export function ChatPanel({ variant }: { variant: "page" | "pane" }) {
         </p>
       </form>
 
-      <IonAlert
-        isOpen={confirmClear}
-        header={t("chat.clearConfirm")}
-        message={t("chat.clearBody", { name: babyName })}
-        onDidDismiss={() => setConfirmClear(false)}
-        buttons={[
-          { text: t("common.cancel"), role: "cancel" },
-          { text: t("chat.clear"), role: "destructive", handler: () => void doClear() },
-        ]}
-      />
+      {clearAlert}
 
       {variant === "page" && viewer.photoId && viewerSet.length > 0 ? (
         <PhotoViewer

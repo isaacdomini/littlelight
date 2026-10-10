@@ -3,7 +3,7 @@ import {
   deleteAccountRequestSchema,
   deletionPreviewResponseSchema,
 } from "@littlelight/shared";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { ApiError, safeErrorLog } from "../lib/errors";
 import { audit, requireFreshSignIn, type Tx, withClaims, withServiceRole } from "./context";
@@ -24,6 +24,11 @@ import { clearSessionCookies } from "./session";
 // Sole-admin rule: a live baby whose only admin is this user blocks deletion (409 `sole_admin`);
 // the user deletes that album or promotes a co-admin first. The same rule is enforced one level
 // down by the `baby_members_keep_last_admin` trigger, which would make GoTrue's cascade fail.
+//
+// Ordering (docs/plans/review-fixes.md 2.8, D14): `profiles.deleted_at` is set before the GoTrue
+// call and cleared again if it fails, so it is only left set by a deletion that happened;
+// `account.deleted` is written only after GoTrue succeeded (`account.deletion_requested` records
+// every attempt).
 
 interface BabyRef {
   id: string;
@@ -48,11 +53,17 @@ async function blockingBabies(client: Tx, uid: string): Promise<BabyRef[]> {
 
 /** Live babies that stay with another admin after the caller is gone. */
 async function keptBabies(client: Tx, uid: string): Promise<DeletionPreviewResponse["babiesKept"]> {
-  const { rows } = await client.query<{ id: string; name: string; other_admin_name: string }>(
+  // The co-admin's name comes from `member_profiles` (`profiles` is self-only for
+  // `authenticated`, review-fixes D12); NULL when their own profile is mid-deletion.
+  const { rows } = await client.query<{
+    id: string;
+    name: string;
+    other_admin_name: string | null;
+  }>(
     `SELECT b.id, b.name,
             (SELECT p.display_name
                FROM public.baby_members o
-               JOIN public.profiles p ON p.user_id = o.user_id
+               JOIN public.member_profiles p ON p.user_id = o.user_id
               WHERE o.baby_id = b.id AND o.role = 'admin' AND o.user_id <> me.user_id
               ORDER BY o.joined_at, o.user_id
               LIMIT 1) AS other_admin_name
@@ -68,8 +79,39 @@ async function keptBabies(client: Tx, uid: string): Promise<DeletionPreviewRespo
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
-    otherAdminName: r.other_admin_name.trim() || "the other admin",
+    otherAdminName: r.other_admin_name?.trim() || "the other admin",
   }));
+}
+
+/**
+ * D14 step 5: clear the pre-mark after a failed GoTrue delete. "gone" when no profile row exists
+ * any more (the cascade ran, so the deletion actually happened); "failed" when the compensation
+ * itself errored (logged; the profile stays marked until a later attempt either succeeds or
+ * compensates).
+ */
+async function compensate(
+  request: FastifyRequest,
+  uid: string,
+): Promise<"cleared" | "gone" | "failed"> {
+  try {
+    return await withServiceRole(
+      request.server,
+      "account deletion compensation",
+      async (client) => {
+        const { rowCount } = await client.query(
+          "UPDATE public.profiles SET deleted_at = NULL WHERE user_id = $1",
+          [uid],
+        );
+        return rowCount === 1 ? "cleared" : "gone";
+      },
+    );
+  } catch (err) {
+    request.log.error(
+      { err: safeErrorLog(err) },
+      "account deletion compensation failed; profile stays marked deleted",
+    );
+    return "failed";
+  }
 }
 
 function soleAdmin(babies: BabyRef[]): ApiError {
@@ -104,7 +146,7 @@ export function accountRoutes(app: FastifyInstance, runtime: AuthRuntime): void 
       if (!auth) throw new ApiError(401, "unauthorized", "Sign in to continue");
       const uid = auth.uid;
 
-      // 1-2. Under the user's own claims: liveness, fresh sign-in, the sole-admin rule.
+      // 1. Under the user's own claims: liveness, fresh sign-in, the sole-admin rule.
       await withClaims(request, async (client, ctx) => {
         requireFreshSignIn(ctx);
         const blocking = await blockingBabies(client, ctx.uid);
@@ -115,22 +157,28 @@ export function accountRoutes(app: FastifyInstance, runtime: AuthRuntime): void 
         });
       });
 
-      // 3-5. One service_role transaction: re-check (a co-admin may have left meanwhile), the
-      // final audit row (actor becomes NULL after the cascade), mark the profile, commit.
-      await withServiceRole(request.server, "account deletion", async (client) => {
-        const blocking = await blockingBabies(client, uid);
-        if (blocking.length > 0) throw soleAdmin(blocking);
-        await audit(client, "account.deleted", {
-          actorUserId: uid,
-          metadata: { client: auth.clientKind },
-        });
-        await client.query(
-          "UPDATE public.profiles SET deleted_at = now() WHERE user_id = $1 AND deleted_at IS NULL",
-          [uid],
-        );
-      });
+      // 2. service_role: re-check (a co-admin may have left meanwhile) and pre-mark the profile,
+      // so pushes and co-member visibility stop at once while GoTrue works (review-fixes D14).
+      // Idempotent: a retry after a failed attempt keeps the existing mark. Returns whether the
+      // profile row exists (every signed-in user has one; verify creates it): step 5 may only
+      // infer "already deleted" from a missing row if it was here at this point.
+      const hadProfile = await withServiceRole(
+        request.server,
+        "account deletion",
+        async (client) => {
+          const blocking = await blockingBabies(client, uid);
+          if (blocking.length > 0) throw soleAdmin(blocking);
+          const { rows } = await client.query<{ user_id: string }>(
+            `UPDATE public.profiles SET deleted_at = COALESCE(deleted_at, now())
+              WHERE user_id = $1
+              RETURNING user_id`,
+            [uid],
+          );
+          return rows.length === 1;
+        },
+      );
 
-      // 6. GoTrue hard delete: cascades sessions, identities, profile, memberships.
+      // 3. GoTrue hard delete: cascades sessions, identities, profile, memberships.
       try {
         await runtime.gotrue.adminDeleteUser(uid);
       } catch (err) {
@@ -139,16 +187,41 @@ export function accountRoutes(app: FastifyInstance, runtime: AuthRuntime): void 
         } else {
           request.log.error({ err: safeErrorLog(err) }, "gotrue user delete failed");
         }
-        // The session is still live (nothing cascaded); the user can retry within the fresh
-        // sign-in window. The profile's deleted_at stays set as a record of the attempt.
-        throw new ApiError(
-          503,
-          "internal",
-          "Account deletion is temporarily unavailable, try again",
-        );
+        // 5. Compensation: nothing cascaded and the account is still live, so it must not stay
+        // marked deleted (no pushes, hidden from co-members). If this fails too, the 503 still
+        // stands and the next attempt's step 2 is idempotent.
+        const outcome = await compensate(request, uid);
+        if (outcome !== "gone" || !hadProfile) {
+          // The session is still live; the user can retry within the fresh sign-in window. The
+          // attempt stays recorded by step 1's `account.deletion_requested`.
+          throw new ApiError(
+            503,
+            "internal",
+            "Account deletion is temporarily unavailable, try again",
+          );
+        }
+        // The profile row existed at step 2 and is gone now, which only GoTrue's `auth.users`
+        // cascade does (nothing else deletes profiles): the delete went through despite the
+        // error (a timeout, or a retry answered 404). Treat it as the success it was.
+        request.log.warn("gotrue reported a failure but the user is deleted; treating as success");
       }
 
-      // 7. This browser's cookies are now dead tokens: drop them.
+      // 4. Only now is the deletion real: record it. The profile is gone (actor NULL), so the
+      // target goes in metadata. The account no longer exists whatever happens here, so a failed
+      // audit write is logged and the request still succeeds (a 5xx would invite a retry that
+      // can only fail with 401).
+      try {
+        await withServiceRole(request.server, "account deletion audit", async (client) => {
+          await audit(client, "account.deleted", {
+            actorUserId: null,
+            metadata: { client: auth.clientKind, target_user_id: uid },
+          });
+        });
+      } catch (auditErr) {
+        request.log.error({ err: safeErrorLog(auditErr) }, "account.deleted audit write failed");
+      }
+
+      // 6. This browser's cookies are now dead tokens: drop them.
       if (auth.transport === "cookie") clearSessionCookies(reply, runtime.config);
       return reply.code(204).send();
     },

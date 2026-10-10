@@ -1,5 +1,6 @@
 import { buildApp } from "./app";
 import { ConfigError, loadConfig } from "./config";
+import { initTelemetry } from "./plugins/telemetry";
 
 function readConfig() {
   try {
@@ -15,6 +16,9 @@ function readConfig() {
 }
 
 const config = readConfig();
+// Error telemetry first, so a failure while building the app is captured too (off without
+// SENTRY_DSN: nothing is initialised, nothing is logged). docs/plans/review-fixes.md 2.6.
+initTelemetry(config);
 const app = await buildApp({ config });
 
 let closing = false;

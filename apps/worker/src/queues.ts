@@ -4,6 +4,9 @@ import {
   aiBackfillJobSchema,
   aiFlushJobSchema,
   aiPollJobSchema,
+  type DataExportJob,
+  dataExportJobSchema,
+  dataExportSingletonKey,
   type IngestJob,
   ingestJobSchema,
   JOBS,
@@ -24,10 +27,11 @@ import {
   shareApplyJobSchema,
   shareReconcileJobSchema,
 } from "@littlelight/shared";
-import type { JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
+import type { Job, JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
 import type { AiPipeline, FlushResult, PollResult } from "./ai";
 import { errorCategory } from "./clients";
 import type { WorkerConfig } from "./config";
+import { type DataExportDeps, handleDataExportJob } from "./export";
 import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
@@ -41,6 +45,7 @@ import {
 import { reconcileIngest } from "./reconcile";
 import { handleReindexJobs, type ReconcileResult, type SearchIndexer } from "./reindex";
 import { type AutoShareResult, type AutoSharer, createAutoSharer } from "./sharing/autoshare";
+import { wrapHandler } from "./telemetry";
 import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 
 // pg-boss queues, schedules and handlers (docs/plans/step-4.md 2.5, R1). The worker owns queue
@@ -78,7 +83,13 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // of reindex batches or viewer exchanges coalesces into one notification while the debounce
 // (`startAfter`) runs, and a running job can re-send itself for the min-gap rule. Sent by the
 // reindex hook (`photos_analyzed`) and the api (`share_viewed`), `retryLimit 2`, 5-minute expiry.
-// Thirteen queues in total.
+//
+// Review fixes (docs/plans/review-fixes.md 2.2, 2.3): `data.export` is sent by the api after an
+// admin's export request committed, `singletonKey = exportId` (one queued/active job per export),
+// `retryLimit 1`, `retryDelay 60` (a storage/internal error re-queues the row once), 4-hour
+// expiry. One export at a time per worker process (`batchSize 1`, `localConcurrency 1`).
+// Fourteen queues in total. Every handler is wrapped by `wrapHandler` (Sentry capture with tags
+// `{service: "worker", queue}`, then rethrow: pg-boss semantics unchanged).
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -128,6 +139,12 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     retryLimit: 2,
     retryDelay: 30,
     expireInSeconds: 300,
+  },
+  [JOBS.dataExport]: {
+    policy: "exclusive",
+    retryLimit: 1,
+    retryDelay: 60,
+    expireInSeconds: 14_400,
   },
 });
 
@@ -323,6 +340,25 @@ export async function sendPushNotify(
   return boss.send(JOBS.pushNotify, data, pushNotifySendOptions(data, startAfterSec));
 }
 
+/** Same options as the api's `DATA_EXPORT_SEND_OPTIONS`, keyed by the export id. */
+export function dataExportSendOptions(job: DataExportJob): SendOptions {
+  return {
+    singletonKey: dataExportSingletonKey(job),
+    retryLimit: 1,
+    retryDelay: 60,
+    expireInSeconds: 14_400,
+  };
+}
+
+/** Validate and enqueue one `data.export` (run-job `--enqueue`). Null when already queued. */
+export async function sendDataExport(
+  boss: Pick<PgBoss, "send">,
+  job: DataExportJob,
+): Promise<string | null> {
+  const data = dataExportJobSchema.parse(job);
+  return boss.send(JOBS.dataExport, data, dataExportSendOptions(data));
+}
+
 /** Push settings of the worker (`pushEnvSchema`): the sender, the gap and the photos debounce. */
 export interface PushQueueDeps {
   sender: PushSender;
@@ -355,6 +391,11 @@ export interface QueueDeps {
    * (every delivery `unconfigured`) and the default gap/debounce.
    */
   push?: PushQueueDeps;
+  /**
+   * Data export (docs/plans/review-fixes.md 2.3). `main.ts` always passes it; when omitted (unit
+   * tests written before the review fixes) the `data.export` queue gets no handler and jobs wait.
+   */
+  dataExport?: DataExportDeps;
   log: WorkerLog;
   ingestConcurrency: number;
 }
@@ -653,23 +694,35 @@ export async function startWorkers(
       pollingIntervalSeconds: 0.5,
       notifyPollingIntervalSeconds: 0.5,
     },
-    async (jobs) => {
+    wrapHandler(JOBS.ingest, async (jobs: JobWithMetadata<unknown>[]) => {
       for (const job of jobs) await handleIngestJob(deps.ingest, job);
-    },
+    }),
   );
-  await boss.work(JOBS.ingestReconcile, { pollingIntervalSeconds: 10 }, async () => {
-    await reconcileIngest({
-      pool: deps.ingest.pool,
-      log: deps.log,
-      send: (job) => sendIngest(boss, job),
-    });
-  });
-  await boss.work(JOBS.purgeTrash, { pollingIntervalSeconds: 10 }, async () => {
-    await purgeTrash(deps.purge);
-  });
-  await boss.work(JOBS.uploadsSweep, { pollingIntervalSeconds: 10 }, async () => {
-    await sweepUploads(deps.sweep);
-  });
+  await boss.work(
+    JOBS.ingestReconcile,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.ingestReconcile, async () => {
+      await reconcileIngest({
+        pool: deps.ingest.pool,
+        log: deps.log,
+        send: (job) => sendIngest(boss, job),
+      });
+    }),
+  );
+  await boss.work(
+    JOBS.purgeTrash,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.purgeTrash, async () => {
+      await purgeTrash(deps.purge);
+    }),
+  );
+  await boss.work(
+    JOBS.uploadsSweep,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.uploadsSweep, async () => {
+      await sweepUploads(deps.sweep);
+    }),
+  );
   // Step 7 (plan 2.7): one indexer run per pg-boss batch of up to 25 jobs, so a burst of edits
   // costs one embedding request. The exclusive policy keeps one queued job per photo.
   await boss.work(
@@ -679,7 +732,7 @@ export async function startWorkers(
       batchSize: REINDEX_BATCH_SIZE,
       pollingIntervalSeconds: 2,
     },
-    async (jobs) => {
+    wrapHandler(JOBS.reindex, async (jobs: Job<unknown>[]) => {
       await handleReindexJobs(
         {
           indexer: deps.indexer,
@@ -692,51 +745,91 @@ export async function startWorkers(
         },
         jobs,
       );
-    },
+    }),
   );
   // Step 6 AI batch pipeline (docs/plans/step-6.md 2.6, 2.7). One job at a time per process;
   // the exclusive policy makes flush/poll cluster-wide singletons, and the pipeline itself
   // claims batches with SKIP LOCKED, so `--scale worker=3` stays safe.
-  await boss.work(JOBS.aiFlush, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleAiFlushJob(deps, job);
-  });
-  await boss.work(JOBS.aiPoll, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleAiPollJob(deps, job);
-  });
+  await boss.work(
+    JOBS.aiFlush,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.aiFlush, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleAiFlushJob(deps, job);
+    }),
+  );
+  await boss.work(
+    JOBS.aiPoll,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.aiPoll, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleAiPollJob(deps, job);
+    }),
+  );
   const aiBackfillDeps: AiHandlerDeps = {
     ai: deps.ai,
     log: deps.log,
     sendSearchBackfill: (job) => sendSearchBackfill(boss, job),
   };
-  await boss.work(JOBS.aiBackfill, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleAiBackfillJob(aiBackfillDeps, job);
-  });
+  await boss.work(
+    JOBS.aiBackfill,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.aiBackfill, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleAiBackfillJob(aiBackfillDeps, job);
+    }),
+  );
   // Step 7 search jobs (plan 2.6, 2.7): the reconcile is a cron singleton, the backfill one per
   // baby (or global). Both upsert idempotently, so `--scale worker=3` only risks a duplicate
   // embedding call, never a wrong row.
-  await boss.work(JOBS.searchReconcile, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleSearchReconcileJob(deps, job);
-  });
-  await boss.work(JOBS.searchBackfill, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleSearchBackfillJob(deps, job);
-  });
+  await boss.work(
+    JOBS.searchReconcile,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.searchReconcile, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleSearchReconcileJob(deps, job);
+    }),
+  );
+  await boss.work(
+    JOBS.searchBackfill,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.searchBackfill, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleSearchBackfillJob(deps, job);
+    }),
+  );
   // Step 8 auto-share (docs/plans/step-8.md 2.7, 2.8): one full link sync per job (singleton per
   // link), the reconcile a cron singleton. Inserts are ON CONFLICT DO NOTHING and the gate
   // re-checks every row, so `--scale worker=3` can only duplicate work, never a wrong row.
-  await boss.work(JOBS.shareApply, { pollingIntervalSeconds: 5 }, async (jobs) => {
-    for (const job of jobs) await handleShareApplyJob(shareDeps, job);
-  });
-  await boss.work(JOBS.shareReconcile, { pollingIntervalSeconds: 10 }, async (jobs) => {
-    for (const job of jobs) await handleShareReconcileJob(shareDeps, job);
-  });
+  await boss.work(
+    JOBS.shareApply,
+    { pollingIntervalSeconds: 5 },
+    wrapHandler(JOBS.shareApply, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleShareApplyJob(shareDeps, job);
+    }),
+  );
+  await boss.work(
+    JOBS.shareReconcile,
+    { pollingIntervalSeconds: 10 },
+    wrapHandler(JOBS.shareReconcile, async (jobs: Job<unknown>[]) => {
+      for (const job of jobs) await handleShareReconcileJob(shareDeps, job);
+    }),
+  );
   // Step 9 push (docs/plans/step-9.md 2.8): one job at a time per process; `createdOn` (metadata)
   // is the event time the share_viewed "already covered" rule compares with.
   const pushJobDeps = { pool: deps.ingest.pool, push, log: deps.log };
   await boss.work(
     JOBS.pushNotify,
     { pollingIntervalSeconds: 5, batchSize: 1, includeMetadata: true },
-    async (jobs) => {
+    wrapHandler(JOBS.pushNotify, async (jobs: JobWithMetadata<unknown>[]) => {
       for (const job of jobs) await handlePushJob(pushJobDeps, boss, job);
-    },
+    }),
   );
+  // Review fixes (docs/plans/review-fixes.md 2.3): one export at a time per process; metadata for
+  // the retry count (a retry may find the row a dead attempt left `running`).
+  const exportDeps = deps.dataExport;
+  if (exportDeps) {
+    await boss.work(
+      JOBS.dataExport,
+      { pollingIntervalSeconds: 5, batchSize: 1, localConcurrency: 1, includeMetadata: true },
+      wrapHandler(JOBS.dataExport, async (jobs: JobWithMetadata<unknown>[]) => {
+        for (const job of jobs) await handleDataExportJob(exportDeps, job);
+      }),
+    );
+  }
 }

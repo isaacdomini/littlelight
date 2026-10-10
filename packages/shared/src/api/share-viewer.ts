@@ -10,7 +10,7 @@ import {
   SHARE_VIEWER_PAGE_SIZE,
   SHARE_VIEWER_URLS_MAX,
 } from "../constants";
-import { isoDateTimeSchema } from "./common";
+import { isoDateSchema, isoDateTimeSchema } from "./common";
 
 // Share-link viewer contracts (`/api/share/*`; PRD "FR-9 Sharing", "Accounts and authentication →
 // Share-link viewers (no account)", "Privacy and child safety"; docs/plans/step-8.md 2.4, 2.6).
@@ -142,7 +142,12 @@ export type ShareSessionResponse = z.infer<typeof shareSessionResponseSchema>;
 export const viewerPhotoSchema = z
   .strictObject({
     id: z.uuid(),
-    takenAt: isoDateTimeSchema.nullable(),
+    /**
+     * Capture date only, `YYYY-MM-DD` in UTC (docs/plans/review-fixes.md 2.11, D19): no time of
+     * day reaches a viewer. The viewer role cannot read the EXIF offset, so a late-evening photo
+     * east of UTC can show the next day. Render as a calendar date (no `Date` time-zone shift).
+     */
+    takenAt: isoDateSchema.nullable(),
     takenAtEstimated: z.boolean(),
     ageDays: z.number().int().nullable(),
     width: z.number().int().positive().nullable(),

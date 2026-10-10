@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# Capture dev-stack service logs across container recreations (CI dev-stack-smoke job, step-9
-# push gate; docs/plans/step-9.md 9.16).
+# Capture dev-stack service logs across container recreations and restarts (CI dev-stack-smoke
+# job: step-9 push gate, docs/plans/step-9.md 9.16; data-export gate, docs/plans/review-fixes.md
+# 2.14).
 #
 # `docker compose logs` only shows the current containers, and the push gate recreates api and
 # worker twice (with no push debounce, then back to the stack default in its `finally`), so a
 # scan after the gate would only see the restored containers' start-up output. This follows every
-# container of the given services that exists while the tap runs, polling once a second, and
-# appends each one's full log (`docker logs -f --timestamps`) to <dir>/<service>-<id>.log, so the
-# scan sees everything the gate made the services print.
+# container of the given services that runs while the tap is on, polling once a second, and writes
+# each one's full log (`docker logs -f --timestamps`) to <dir>/<service>-<id>.log, so the scan
+# sees everything the gate made the services print.
+#
+# Restarts: `docker compose restart api` (restart-api.sh, which the export gate calls) keeps the
+# container id, and `docker logs -f` exits when its container stops. A container whose follower
+# has ended is therefore followed again once it is running, rewriting its file with a full replay
+# (the daemon keeps a container's log across restarts, so nothing from before or after the
+# restart is lost and nothing is duplicated).
 #
 #   bash .github/scripts/log-tap.sh start <dir> [service...]   (default services: api worker)
 #   ... run the gate ...
@@ -63,11 +70,18 @@ case "$cmd" in
       # container's log is replayed from its start, so attaching a second late loses nothing.
       ids="$("${DC[@]}" ps -q --status running "$@" 2>/dev/null || true)"
       for id in $ids; do
-        grep -qxF "$id" "$dir/seen" && continue
+        pf="$dir/follow-${id:0:12}.pid"
+        # Already followed and the follower is alive: nothing to do.
+        if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
+          continue
+        fi
+        # New container, or a restarted one whose follower ended: (re)write its file with the
+        # full log so far and keep following.
         svc="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id" 2>/dev/null || echo unknown)"
-        docker logs -f --timestamps "$id" >>"$dir/$svc-${id:0:12}.log" 2>&1 &
+        docker logs -f --timestamps "$id" >"$dir/$svc-${id:0:12}.log" 2>&1 &
+        echo $! >"$pf"
         echo $! >>"$dir/pids"
-        echo "$id" >>"$dir/seen"
+        grep -qxF "$id" "$dir/seen" || echo "$id" >>"$dir/seen"
       done
       sleep 1
     done

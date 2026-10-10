@@ -8,3 +8,10 @@ engineStrict: false
 # Only these dependencies may run install scripts (esbuild fetches its native binary).
 allowBuilds:
   esbuild: true
+
+# @sentry/node 11 lists its bundler plugins (Sentry CLI, rollup, oxc-parser) as a hard
+# dependency, but only its `./vite|rollup|webpack|esbuild` subpath exports import them; the
+# runtime entry (`@sentry/node`) never does. We use the runtime SDK only, so drop the subtree
+# (~25 MB per api/worker image). Remove this override if a build ever imports those subpaths.
+overrides:
+  "@sentry/node>@sentry/bundler-plugins": "-"

@@ -2,6 +2,7 @@ import {
   type ApiErrorCode,
   type ApiErrorResponse,
   CHAT_MESSAGES,
+  EXPORTS_PER_BABY_PER_DAY,
   type PasscodeInvalidDetails,
   SHARE_EXPIRED_MESSAGE,
   SHARE_LINKS_PER_BABY_MAX,
@@ -113,6 +114,48 @@ export const shareLinkLimit = () =>
     "conflict",
     `This album already has the maximum of ${SHARE_LINKS_PER_BABY_MAX} share links`,
   );
+
+// Review fixes (docs/plans/review-fixes.md 2.5; PRD FR-10.1): data export errors. Thrown by
+// `apps/api/src/exports/**` and mapped from the `data_exports` triggers below.
+
+/** 409 `export_in_progress`: one queued/running export per album (`data_exports_rate_limit`). */
+export const exportInProgress = () =>
+  new ApiError(
+    409,
+    "export_in_progress",
+    "An export of this album is already being prepared. You'll get an email when it's ready.",
+  );
+
+/** 429 `rate_limited`: `EXPORTS_PER_BABY_PER_DAY` exports per album per rolling 24 h. */
+export const exportRateLimited = () =>
+  new ApiError(
+    429,
+    "rate_limited",
+    `This album can be exported ${EXPORTS_PER_BABY_PER_DAY} times a day. Try again tomorrow.`,
+    undefined,
+    { retryAfterSec: 3600 },
+  );
+
+/** 409 `baby_trashed`: the album is in the trash (`data_exports_baby_live`). */
+export const babyTrashed = () =>
+  new ApiError(409, "baby_trashed", "This album is in the trash. Restore it first.");
+
+/**
+ * 410 `export_expired`: not downloadable — still being prepared (`pending`), or failed, past its
+ * expiry or its ZIP was removed. One code for the client; the message says which.
+ */
+export const exportExpired = (pending = false) =>
+  new ApiError(
+    410,
+    "export_expired",
+    pending
+      ? "This export is still being prepared. You'll get an email when it's ready."
+      : "This export is no longer available. Start a new one.",
+  );
+
+/** 403 `not_requester`: only the admin who requested an export can download it (D3). */
+export const notRequester = () =>
+  new ApiError(403, "not_requester", "Only the parent who started this export can download it");
 
 /** A node-postgres `DatabaseError` (has a 5-character SQLSTATE). */
 export interface PgErrorLike {
@@ -364,6 +407,27 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
         fields: ["body.appVersion"],
       }),
   ],
+  // Review fixes (packages/db/migrations/1792300000200_data-exports.sql; docs/plans/
+  // review-fixes.md 2.5). The export request's own outcomes: in progress, rate limit, trashed.
+  ["an export is already in progress for this album", () => exportInProgress()],
+  ["export rate limit reached", () => exportRateLimited()],
+  ["cannot export a trashed album", () => babyTrashed()],
+  // `data_exports_user_update_guard`: the API only shortens expiry (`LEAST`) and moves the
+  // counter forward, so these are tripwires.
+  [
+    "an export cannot be extended",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
+  [
+    "export download history cannot be rewritten",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
+  // `photos_user_write_guard` (1792300000100_review-hardening.sql, D13): the database pins the
+  // approver; the API never writes another one, so this is a tripwire.
+  [
+    "approved_by and approved_at are set by the database",
+    () => new ApiError(409, "conflict", "That conflicts with the current state"),
+  ],
 ];
 
 /**
@@ -381,6 +445,12 @@ const PRIVILEGE_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
   [
     "push registration needs a profile",
     () => new ApiError(403, "consent_required", "Accept the Terms and Privacy Policy to continue"),
+  ],
+  // `photos_user_write_guard` (D13): a contributor tried to change a photo's sensitivity or
+  // approval (the routes check the role first; this is the database's answer to a race or bug).
+  [
+    "contributors may only trash their own pending uploads",
+    () => forbidden("Only an admin of this album can do that"),
   ],
 ];
 
@@ -402,6 +472,8 @@ const UNIQUE_VIOLATIONS: ReadonlyMap<string, () => ApiError> = new Map([
     "milestones_baby_id_lower_name_key",
     () => new ApiError(409, "conflict", "A milestone with that name already exists"),
   ],
+  // Backstop of `data_exports_rate_limit` (two concurrent requests; the trigger normally wins).
+  ["data_exports_one_active_per_baby", () => exportInProgress()],
 ]);
 
 /** 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). */

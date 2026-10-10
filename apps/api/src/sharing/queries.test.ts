@@ -102,7 +102,7 @@ describe("signViewerKey", () => {
 describe("toViewerPhoto", () => {
   const row = (over: Partial<ViewerPhotoRow> = {}): ViewerPhotoRow => ({
     id: P1,
-    taken_at: new Date("2026-06-14T10:00:00Z"),
+    taken_at: "2026-06-14",
     taken_at_estimated: false,
     age_days: 105,
     width: 800,

@@ -1,3 +1,4 @@
+import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import {
   clientCountry,
@@ -6,6 +7,8 @@ import {
   clientKind,
   clientKindHeader,
   clientUserAgent,
+  isProxyPeerAddress,
+  trustProxyHop,
   upstreamClientHeaders,
 } from "./request";
 
@@ -61,5 +64,61 @@ describe("request facts", () => {
       "x-forwarded-for": "10.0.0.1",
       "cf-connecting-ip": "10.0.0.1",
     });
+  });
+});
+
+describe("trustProxyHop (docs/plans/review-fixes.md D10: trust exactly one hop)", () => {
+  it.each([
+    ["127.0.0.1", true],
+    ["::1", true],
+    ["::ffff:127.0.0.1", true],
+    ["10.1.2.3", true],
+    ["172.16.0.5", true],
+    ["172.31.255.255", true],
+    ["192.168.1.1", true],
+    ["fd00::1", true],
+    ["172.32.0.1", false],
+    ["8.8.8.8", false],
+    ["203.0.113.9", false],
+    ["2001:db8::1", false],
+    ["not-an-ip", false],
+    ["", false],
+  ])("isProxyPeerAddress(%j) is %s", (addr, expected) => {
+    expect(isProxyPeerAddress(addr)).toBe(expected);
+  });
+
+  it("trusts hop 0 only, and only a private peer", () => {
+    expect(trustProxyHop("172.18.0.5", 0)).toBe(true);
+    expect(trustProxyHop("172.18.0.5", 1)).toBe(false);
+    expect(trustProxyHop("172.18.0.5", 2)).toBe(false);
+    expect(trustProxyHop("203.0.113.9", 0)).toBe(false);
+  });
+
+  async function ipSeenBy(remoteAddress: string, xff?: string) {
+    const app = Fastify({ trustProxy: trustProxyHop });
+    app.get("/ip", async (req) => ({ ip: req.ip }));
+    const res = await app.inject({
+      method: "GET",
+      url: "/ip",
+      remoteAddress,
+      headers: xff ? { "x-forwarded-for": xff } : {},
+    });
+    await app.close();
+    return (res.json() as { ip: string }).ip;
+  }
+
+  it("a client-prepended X-Forwarded-For entry cannot choose request.ip", async () => {
+    // nginx appends the real peer (198.51.100.20) to whatever the client sent.
+    expect(await ipSeenBy("172.18.0.5", "6.6.6.6, 198.51.100.20")).toBe("198.51.100.20");
+    expect(await ipSeenBy("172.18.0.5", "6.6.6.6, 7.7.7.7, 198.51.100.20")).toBe("198.51.100.20");
+    expect(await ipSeenBy("172.18.0.5", "198.51.100.20")).toBe("198.51.100.20");
+  });
+
+  it("a direct client (not a proxy) cannot spoof X-Forwarded-For at all", async () => {
+    expect(await ipSeenBy("203.0.113.9", "6.6.6.6")).toBe("203.0.113.9");
+  });
+
+  it("without a header the peer is the address", async () => {
+    expect(await ipSeenBy("172.18.0.5")).toBe("172.18.0.5");
   });
 });

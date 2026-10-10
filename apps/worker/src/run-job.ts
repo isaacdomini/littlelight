@@ -2,6 +2,7 @@ import {
   aiBackfillJobSchema,
   aiFlushJobSchema,
   aiPollJobSchema,
+  dataExportJobSchema,
   ingestJobSchema,
   JOBS,
   type JobName,
@@ -16,7 +17,9 @@ import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
 import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
-import { ConfigError, loadConfig } from "./config";
+import { ConfigError, loadConfig, mailConfigOf } from "./config";
+import { createExportMailer, type ExportMailer } from "./email/mailer";
+import { runDataExport } from "./export";
 import { ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
@@ -28,6 +31,7 @@ import {
   SHARE_RECONCILE_SEND_OPTIONS,
   sendAiBackfill,
   sendAiFlush,
+  sendDataExport,
   sendIngest,
   sendPushNotify,
   sendReindex,
@@ -56,11 +60,17 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @littlelight/worker run-job share.reconcile
 //   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"share_viewed","shareLinkId":"…"}'
 //   pnpm --filter @littlelight/worker run-job push.notify '{"kind":"photos_analyzed","babyId":"…"}'
+//   pnpm --filter @littlelight/worker run-job data.export '{"exportId":"…","babyId":"…"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue purge.trash      # via the queue instead
 //   pnpm --filter @littlelight/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
 //   pnpm --filter @littlelight/worker run-job --enqueue push.notify '{"kind":"photos_analyzed","babyId":"…"}'
+//   pnpm --filter @littlelight/worker run-job --enqueue data.export '{"exportId":"…","babyId":"…"}'
+//
+// `data.export` in-process claims the row only while it is `queued` (a running worker usually
+// takes it first: then the result is `{outcome: "skipped"}`), runs as a last attempt (a storage
+// error marks it failed, no retry) and sends the ready/failed notice when SMTP is configured.
 //
 // `photo.reindex` runs the auto-share hook first, like the worker; the share jobs make no model
 // call and need no AI env.
@@ -123,6 +133,7 @@ async function main(argv: string[]): Promise<number> {
   // Send-only pg-boss on the worker role: the running worker owns migrations and cron.
   let boss: PgBoss | undefined;
   let pushSender: PushSender | undefined;
+  let mailer: ExportMailer | undefined;
   const getBoss = async () => {
     if (!boss) {
       boss = new PgBoss({
@@ -189,6 +200,9 @@ async function main(argv: string[]): Promise<number> {
           result = { jobId: await sendPushNotify(b, job, debounce) };
           break;
         }
+        case JOBS.dataExport:
+          result = { jobId: await sendDataExport(b, dataExportJobSchema.parse(payload)) };
+          break;
         default:
           result = { jobId: await b.send(name, {}) };
       }
@@ -273,6 +287,24 @@ async function main(argv: string[]): Promise<number> {
           );
           break;
         }
+        case JOBS.dataExport: {
+          const job = dataExportJobSchema.parse(payload);
+          const mail = mailConfigOf(config);
+          mailer = mail ? createExportMailer(mail, log) : undefined;
+          result = await runDataExport(
+            {
+              pool,
+              storage,
+              dataKey: config.DATA_ENCRYPTION_KEY,
+              maxBytes: config.EXPORT_MAX_BYTES,
+              mailer: mailer ?? null,
+              log,
+            },
+            job,
+            { retry: false, lastAttempt: true },
+          );
+          break;
+        }
         case JOBS.aiFlush:
         case JOBS.aiPoll:
         case JOBS.aiBackfill: {
@@ -315,6 +347,7 @@ async function main(argv: string[]): Promise<number> {
     return 1;
   } finally {
     await pushSender?.close().catch(() => undefined);
+    mailer?.close();
     await boss?.stop({ graceful: false, timeout: 2_000 }).catch(() => undefined);
     await pool.end().catch(() => undefined);
     s3.destroy();

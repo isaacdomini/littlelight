@@ -9,10 +9,13 @@ import { ionReady, renderApp } from "../../testing/render";
 const auth = vi.hoisted(() => ({
   me: { babies: [] as { id: string; role: string; plan: string }[] },
 }));
+const current = vi.hoisted(() => ({
+  baby: null as null | { id: string; role: string; plan: string },
+}));
 const signOut = vi.hoisted(() => vi.fn());
 vi.mock("../../auth/AuthProvider", () => ({
   useAuth: () => ({ me: auth.me, clearSession: vi.fn() }),
-  useCurrentBaby: () => ({ baby: null, babies: [], setCurrentBabyId: vi.fn() }),
+  useCurrentBaby: () => ({ baby: current.baby, babies: [], setCurrentBabyId: vi.fn() }),
   ME_KEY: ["me"],
 }));
 vi.mock("../../auth/useSignOut", () => ({ useSignOut: () => signOut }));
@@ -24,6 +27,7 @@ const baby = (role: string, plan = "plus") => ({ id: `b-${role}-${plan}`, role, 
 beforeEach(() => {
   signOut.mockReset().mockResolvedValue(undefined);
   auth.me = { babies: [baby("admin")] };
+  current.baby = null;
 });
 afterEach(() => {
   cleanup();
@@ -87,5 +91,39 @@ describe("SettingsPage", () => {
     await open();
     fireEvent.click(screen.getByTestId("signout-local"));
     expect(signOut).toHaveBeenCalledWith("local");
+  });
+});
+
+describe("SettingsPage: Export your data (admin only)", () => {
+  it("an admin sees the row and it opens /settings/export", async () => {
+    current.baby = baby("admin");
+    const r = await open();
+    const row = screen.getByTestId("settings-export");
+    expect(row.textContent).toContain("Export your data");
+    fireEvent.click(row);
+    expect(r.location()).toBe("/settings/export");
+  });
+
+  it("a contributor does not see it", async () => {
+    current.baby = baby("contributor");
+    await open();
+    expect(screen.queryByTestId("settings-export")).toBeNull();
+  });
+
+  it("no current album means no row, and a free-tier admin still has it (a data right, not an AI feature)", async () => {
+    current.baby = null;
+    await open();
+    expect(screen.queryByTestId("settings-export")).toBeNull();
+    cleanup();
+    current.baby = baby("admin", "free");
+    await open();
+    expect(screen.getByTestId("settings-export")).toBeTruthy();
+  });
+
+  it("is available on native too", async () => {
+    setNativePlatform("ios");
+    current.baby = baby("admin");
+    await open();
+    expect(screen.getByTestId("settings-export")).toBeTruthy();
   });
 });

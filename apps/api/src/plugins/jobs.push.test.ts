@@ -133,6 +133,32 @@ describe("push send options", () => {
   });
 });
 
+const EXPORT_ID = "66666666-6666-4666-8666-666666666666";
+const exportJob = { exportId: EXPORT_ID, babyId: BABY };
+
+describe("enqueueDataExport", () => {
+  it("sends data.export keyed by the export id with retryLimit 1, retryDelay 60 and a 4 hour expiry", async () => {
+    const boss = fakeBoss();
+    const q = createJobQueue({ log: log(), createBoss: () => boss, retryDelayMs: 0 });
+    expect(await q.enqueueDataExport?.(exportJob)).toBe(true);
+    expect(boss.send).toHaveBeenCalledWith(JOBS.dataExport, exportJob, {
+      singletonKey: EXPORT_ID,
+      retryLimit: 1,
+      retryDelay: 60,
+      expireInSeconds: 14400,
+    });
+  });
+
+  it("rejects an unexpected key before anything is sent", async () => {
+    const boss = fakeBoss();
+    const q = createJobQueue({ log: log(), createBoss: () => boss, retryDelayMs: 0 });
+    await expect(
+      q.enqueueDataExport?.({ ...exportJob, includeLocation: true } as never),
+    ).rejects.toThrow();
+    expect(boss.send).not.toHaveBeenCalled();
+  });
+});
+
 describe("withAllSenders (job-queue stubs without a push sender)", () => {
   it("adds a validating no-op enqueuePush that resolves false and logs the job name only", async () => {
     const warn = vi.fn();
@@ -146,6 +172,9 @@ describe("withAllSenders (job-queue stubs without a push sender)", () => {
     expect(await jobs.enqueuePush(share)).toBe(false);
     expect(warn).toHaveBeenCalledWith({ job: JOBS.pushNotify }, expect.any(String));
     await expect(jobs.enqueuePush({ ...share, extra: 1 } as never)).rejects.toThrow();
+    expect(await jobs.enqueueDataExport(exportJob)).toBe(false);
+    expect(warn).toHaveBeenCalledWith({ job: JOBS.dataExport }, expect.any(String));
+    await expect(jobs.enqueueDataExport({ ...exportJob, extra: 1 } as never)).rejects.toThrow();
   });
 
   it("returns the queue untouched when every sender is present", () => {
@@ -154,6 +183,7 @@ describe("withAllSenders (job-queue stubs without a push sender)", () => {
       enqueueReindex: vi.fn(),
       enqueueShareApply: vi.fn(),
       enqueuePush: vi.fn(),
+      enqueueDataExport: vi.fn(),
       close: vi.fn(),
     };
     expect(withAllSenders(full as never, { warn: vi.fn() } as never)).toBe(full);

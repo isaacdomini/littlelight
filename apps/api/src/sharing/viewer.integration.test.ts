@@ -496,6 +496,46 @@ describe.skipIf(!databaseUrl)("share-link viewer (api + db)", () => {
       });
     });
 
+    it("takenAt is a UTC calendar date: no time of day ever reaches a viewer (D19)", async () => {
+      const cookie = await open(album);
+      const res = await vget(cookie, "/share/photos");
+      const photos = res.json().photos as { id: string; takenAt: string | null }[];
+      for (const p of photos) expect(p.takenAt, p.id).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(Object.fromEntries(photos.map((p) => [p.id, p.takenAt]))).toMatchObject({
+        [ph.a as string]: "2026-06-10",
+        [ph.b as string]: "2026-06-11",
+        [ph.sens as string]: "2026-06-13",
+      });
+    });
+
+    it("takenAt is the UTC date regardless of the photo's local offset or the server time zone, and null stays null", async () => {
+      // 23:30 UTC and 00:30 UTC straddle midnight: the date is the UTC one, as documented.
+      const late = await seedPhoto(h.admin, baby, {
+        uploadedBy: mom.id,
+        withThumb: true,
+        takenAt: "2026-03-01T23:30:00Z",
+      });
+      const early = await seedPhoto(h.admin, baby, {
+        uploadedBy: mom.id,
+        withThumb: true,
+        takenAt: "2026-03-02T00:30:00Z",
+      });
+      const undated = await seedPhoto(h.admin, baby, { uploadedBy: mom.id, withThumb: true });
+      await h.admin.query("UPDATE public.photos SET taken_at = NULL WHERE id = $1", [undated]);
+      const link = await createLink();
+      keep.push(link.id);
+      await addPhotos(link, [late, early, undated]);
+      const cookie = await open(link);
+      const photos = (await vget(cookie, "/share/photos")).json().photos as {
+        id: string;
+        takenAt: string | null;
+      }[];
+      const by = Object.fromEntries(photos.map((p) => [p.id, p.takenAt]));
+      expect(by[late]).toBe("2026-03-01");
+      expect(by[early]).toBe("2026-03-02");
+      expect(by[undated]).toBeNull();
+    });
+
     it("the hidden sensitive tile has thumbUrl null and no URL from /share/photos/urls", async () => {
       const cookie = await open(album);
       const list = viewerPhotosResponseSchema.parse((await vget(cookie, "/share/photos")).json());

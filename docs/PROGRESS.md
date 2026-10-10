@@ -542,3 +542,73 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
     90-day session window hardcoded to GoTrue's inactivity timeout; strict review guard can lock the
     reviewer out if they create a second baby.
 - **Commit**: step 9 (part A): native builds without store accounts
+
+## Final review fixes (after step 9)
+
+- **Review**: combined Fable review of steps 1–9 → **PASS, no must-fix**. Should-fix items and user
+  decisions are in `docs/plans/review-fixes.md`.
+- **Built**:
+  - **Export (FR-10.1)**: migration 19 `data_exports` (FORCE RLS; admin-only insert; 3 per album per
+    day and one in progress, enforced by a trigger and a unique index; no extending or rewinding).
+    API `POST/GET /babies/:id/exports`, `POST …/:exportId/download-url` (requester only, fresh
+    sign-in, 10-min signed URL, counted and audited), `DELETE`. Worker `data.export` (14 queues):
+    streams originals plus `photos.csv/json`, `album.json`, `milestones.csv`, `measurements.csv` and
+    `README.txt` through a zip64 archive and S3 multipart upload. Memory stays bounded (3 GiB
+    synthetic: ~160 MB RSS). GPS is decrypted only when "Include photo locations" is on and the
+    requester is still an admin. Spreadsheet formula injection is guarded. The email notice has no
+    link. Purge removes expired, cancelled, stale and orphaned exports (all object versions). Web:
+    Settings → Export your data (admins), with progress polling; native download streams to a file,
+    then opens the share sheet.
+  - **Sentry**: API, worker and web send errors only, and only when a DSN is set. Settings:
+    `defaultIntegrations:false`, `tracesSampleRate:0`, no breadcrumbs, Sentry 11 `dataCollection` all
+    off, shared `scrubTelemetryEvent` (145 tests). Web Sentry is lazy and web-origin only; native
+    sends nothing. `@sentry/bundler-plugins` is dropped by a pnpm override and Sentry `.map` files are
+    stripped from prod images. OpenTelemetry is deferred.
+  - **Hardening (migration 18)**: FR-1.5 in RLS (an admin row can only be removed or demoted by its
+    owner). `profiles` is self-only, plus a `member_profiles` view (name and relationship). A photo
+    guard stops contributors changing `is_sensitive`/`approval`/`approved_by`; on approval
+    `approved_by`/`approved_at` are pinned to the actor and `now()`.
+  - **Smaller fixes**:
+    - Account deletion marks the profile deleted only after GoTrue succeeds, and compensates on
+      failure.
+    - Downgraded admins can read and clear chat history.
+    - The iOS Release Info.plist has no `littlelight://` scheme or local networking (Debug plist via
+      xcconfig).
+    - Store listings no longer mention Plus.
+    - The viewer `takenAt` is date-only.
+    - The API trusts only a loopback or private proxy hop.
+    - nginx sends a Content-Security-Policy in Report-Only mode (Turnstile allowed) and adds a
+      `CF-Connecting-IP` fallback.
+    - A members list shows "Former member" for a profile mid-deletion.
+  - **CI**: Sentry hygiene, web CSP header check, export gate with log tap and secret scan (coordinate,
+    lat/lng and export-key patterns), three new required integration suites, iOS plist checks in the
+    manual iOS job.
+- **Gate**: orchestrator ran:
+  - lint, typecheck, and share/native/ai/sentry hygiene
+  - unit tests 2,975/2,975
+  - integration 1,358/1,358 (46 files, 0 skipped)
+  - `pnpm e2e:export-gate` 44/44, share gate 50/50, push gate 23/23
+  - web e2e 42/42 and smoke
+  - iOS simulator gate 55/55
+  Test-engineer also ran integration on fresh pgvector + MinIO (1,358/1,358), and devops ran the
+  CSP image checks and actionlint.
+- **Decisions**:
+  - **User decisions (2026-10-09/10):** build export now; wire Sentry, scrubbed; drop Plus from the
+    store listings; the planner's defaults D1–D20 (locations included by default with a toggle,
+    requester-only download, 7-day expiry, email notice without a link, CSP Report-Only first).
+  - **Ops (user approved):** the disk filled during image builds and broke Docker Desktop. Cleared npm,
+    Gradle and dev-tool caches and simulator data, deleted Docker's VM disk, and the stack rebuilt
+    from scratch in one `docker compose up`.
+  - Fastify 5 no longer takes `trustProxy: 1`, so a custom hop predicate is used. Sentry 11 replaced
+    `sendDefaultPii` with `dataCollection`. The contributor guard raises 42501 (403), not 23514.
+- **Open issues**:
+  - Sentry is off until the user supplies `SENTRY_DSN`, `SENTRY_WEB_DSN` and
+    `WEB_CSP_CONNECT_EXTRA`.
+  - CSP should be switched to enforcing after a production observation period (`WEB_CSP_HEADER`).
+  - The native export download uses `Filesystem.downloadFile` (deprecated in favour of
+    `@capacitor/file-transfer`) and is untested on a device.
+  - Demo seed `photos.sha256` values are placeholders (dev only).
+  - One transient `run-job ai.poll` hang was seen once in a gate run and not reproduced.
+  - The GoTrue audit log keeps deleted users' emails (retention note only).
+  - Still open from step 9: Android runtime gate, part B store work, real GitHub CI run.
+- **Commit**: review fixes: export, Sentry, RLS hardening

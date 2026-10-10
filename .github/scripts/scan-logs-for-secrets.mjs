@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Push/native log scan (docs/plans/step-9.md 9.16 and 2.15 "Push gate": "worker/api logs contain
-// no device token, `eyJ`, or `X-Amz-Signature`"). CI runs it on the api + worker logs the
-// log tap (.github/scripts/log-tap.sh) captured across the push gate's container recreations;
+// Push/native and data-export log scan (docs/plans/step-9.md 9.16 and 2.15 "Push gate": "worker/api
+// logs contain no device token, `eyJ`, or `X-Amz-Signature`"; docs/plans/review-fixes.md 2.14
+// "Export gate"). CI runs it on the api + worker logs the log tap (.github/scripts/log-tap.sh)
+// captured across the push gate's and the export gate's container recreations/restarts;
 // runnable locally on any saved log files:
 //
 //   node .github/scripts/scan-logs-for-secrets.mjs [--require <regex>]... <file|dir>...
@@ -18,6 +19,18 @@
 //               pushToken, registrationToken, fcmToken, apnsToken, refreshToken, accessToken,
 //               idToken (pino's "[redacted]" censor and empty values are fine; counters such
 //               as `inputTokens` do not match)
+// Data-export patterns (docs/plans/review-fixes.md 2.3 "Logging", 2.14 "Export gate"; R.13):
+//   coordinate  a decimal coordinate pair `-?\d{1,3}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}`. To keep
+//               false positives low, each number must stand alone (no letter, digit, `_` or dot
+//               either side, so timestamps, versions and long floats do not match), the pair
+//               must be a valid lat/lng in either order (|lat| <= 90, |lng| <= 180), and a pair
+//               right after a timing key (any key containing time/timing/duration/elapsed/
+//               latency, e.g. responseTime, or ending in Ms/_ms) is ignored: those are
+//               measurements, not places.
+//   lat-lng     a latitude/longitude field with a numeric value, JSON (`"gps_lat": 40.7`) or
+//               pino-pretty (`lat: 40.7`) form: lat, lng, latitude, longitude, gps_lat, gps_lng
+//               (a "[redacted]" censor, null or a boolean such as `includeLocation` is fine)
+//   export-key  a data-export object key `babies/<uuid>/exports/<uuid>.zip` (also URL-encoded)
 // Only file:line and the pattern name are printed, never the matching text. `--require` makes the
 // scan non-vacuous: each regex must match somewhere in the scanned logs (e.g. `push\.notify`
 // proves the worker's push jobs ran while the tap was on). ANSI colour codes are stripped first.
@@ -42,6 +55,22 @@ function usage() {
   process.exit(2);
 }
 
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const COORD_PAIR = /(?<![\w.])(-?\d{1,3}\.\d{4,})\s*,\s*(-?\d{1,3}\.\d{4,})(?![\w.])/g;
+const TIMING_KEY =
+  /(?:\w*(?:time|timing|duration|elapsed|latency)\w*|\w*Ms|\w*_ms)["']?\s*[:=]\s*\[?\s*$/i;
+/** True when `row` holds a plausible latitude/longitude pair (see the header). */
+function coordinatePair(row) {
+  for (const m of row.matchAll(COORD_PAIR)) {
+    const a = Math.abs(Number(m[1]));
+    const b = Math.abs(Number(m[2]));
+    if (!((a <= 90 && b <= 180) || (a <= 180 && b <= 90))) continue;
+    if (TIMING_KEY.test(row.slice(Math.max(0, m.index - 48), m.index))) continue;
+    return true;
+  }
+  return false;
+}
+
 const PATTERNS = [
   ["jwt", /eyJ[A-Za-z0-9_-]{10,}/],
   ["presign", /X-Amz-(Signature|Credential)/i],
@@ -52,6 +81,12 @@ const PATTERNS = [
     "token-field",
     /(?<![A-Za-z0-9_])(token|device_?token|push_?token|registration_?token|fcm_?token|apns_?token|refresh_?token|access_?token|id_?token)["']?\s*[:=]\s*(?!["']?\[redacted\])(?!["']?\s*[,}\]]|\s*$)["']?[^\s"',}]/i,
   ],
+  ["coordinate", { test: coordinatePair }],
+  [
+    "lat-lng",
+    /(?<![A-Za-z0-9_])["']?(lat|lng|latitude|longitude|gps_lat|gps_lng)["']?\s*[:=]\s*["']?-?\d/i,
+  ],
+  ["export-key", new RegExp(`babies(?:/|%2F)${UUID}(?:/|%2F)exports(?:/|%2F)${UUID}\\.zip`, "i")],
 ];
 
 const files = [];
@@ -107,4 +142,6 @@ required.forEach((re, k) => {
   }
 });
 if (fail) process.exit(1);
-console.log(`ok: no JWT, presign part, bearer, APNs/FCM token or token field in the logs`);
+console.log(
+  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value or export key in the logs`,
+);

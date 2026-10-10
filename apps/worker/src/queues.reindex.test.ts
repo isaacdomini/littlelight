@@ -15,8 +15,8 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("reindex queue (step 5) in the thirteen-queue set", () => {
-  it("QUEUES has exactly the thirteen jobs, all exclusive except push.notify (short)", () => {
+describe("reindex queue (step 5) in the fourteen-queue set", () => {
+  it("QUEUES has exactly the fourteen jobs, all exclusive except push.notify (short)", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
       [
         "photo.ingest",
@@ -32,6 +32,7 @@ describe("reindex queue (step 5) in the thirteen-queue set", () => {
         "share.apply",
         "share.reconcile",
         "push.notify",
+        "data.export",
       ].sort(),
     );
     for (const [name, q] of Object.entries(QUEUES))
@@ -76,7 +77,7 @@ describe("reindex queue (step 5) in the thirteen-queue set", () => {
     );
   });
 
-  it("startWorkers registers thirteen handlers; reindex runs batches of 25 through one indexer call", async () => {
+  it("startWorkers registers fourteen handlers; reindex runs batches of 25 through one indexer call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;
@@ -102,6 +103,7 @@ describe("reindex queue (step 5) in the thirteen-queue set", () => {
       } as never,
       purge: {} as never,
       sweep: {} as never,
+      dataExport: {} as never,
       ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
       indexer: { reindex } as never,
       autoSharer: {

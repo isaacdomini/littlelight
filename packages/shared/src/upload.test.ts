@@ -5,6 +5,7 @@ import {
   babyPrefix,
   DERIVATIVE_LONG_EDGE,
   derivativeKey,
+  exportKey,
   extensionForMime,
   originalKey,
   PHASH_NEAR_DUPLICATE_MAX_DISTANCE,
@@ -129,5 +130,24 @@ describe("enums match the migration CHECK constraints (value and order)", () => 
     expect(checkValues("client_mime").sort()).toEqual(
       ["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"].sort(),
     );
+  });
+});
+
+describe("exportKey", () => {
+  const EXPORT = "99999999-9999-4999-8999-999999999999";
+  it("is the zip under the baby prefix, so a baby purge deletes it", () => {
+    expect(exportKey(BABY, EXPORT)).toBe(`babies/${BABY}/exports/${EXPORT}.zip`);
+    expect(exportKey(BABY, EXPORT).startsWith(babyPrefix(BABY))).toBe(true);
+  });
+
+  it.each(["x", "../x", `${EXPORT}/../../a`, "", `${EXPORT}.zip`])(
+    "rejects the export id %j",
+    (bad) => {
+      expect(() => exportKey(BABY, bad)).toThrow(TypeError);
+    },
+  );
+
+  it("rejects a bad baby id", () => {
+    expect(() => exportKey("../x", EXPORT)).toThrow(TypeError);
   });
 });

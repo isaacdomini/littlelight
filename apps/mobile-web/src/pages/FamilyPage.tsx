@@ -167,6 +167,8 @@ export function FamilyPage() {
                 {data.members.map((m) => {
                   const mine = m.userId === myId;
                   const pending = !!m.removalRequestedBy;
+                  // A profile mid-deletion has an empty name.
+                  const name = m.displayName.trim() || t("family.formerMember");
                   return (
                     <li
                       key={m.userId}
@@ -177,11 +179,11 @@ export function FamilyPage() {
                         aria-hidden
                         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fill font-semibold text-muted"
                       >
-                        {m.displayName.trim().charAt(0).toUpperCase()}
+                        {name.charAt(0).toUpperCase()}
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold">
-                          {m.displayName} {mine ? t("family.you") : ""}
+                          {name} {mine ? t("family.you") : ""}
                         </p>
                         <p className="text-sm text-muted">
                           {[roleLabel(m.role), m.relationshipLabel].filter(Boolean).join(", ")}

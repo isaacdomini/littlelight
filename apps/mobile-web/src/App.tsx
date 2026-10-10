@@ -47,6 +47,7 @@ import { ProfilePage } from "./pages/onboarding/ProfilePage";
 import { ShareLinkPhotosPage } from "./pages/ShareLinkPhotosPage";
 import { AccountPage } from "./pages/settings/AccountPage";
 import { DevicesPage } from "./pages/settings/DevicesPage";
+import { ExportPage } from "./pages/settings/ExportPage";
 import { NotificationsPage } from "./pages/settings/NotificationsPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 import { SharedAlbumPage } from "./pages/share/SharedAlbumPage";
@@ -161,6 +162,10 @@ function ParentApp() {
                   <Route
                     path="/settings/devices"
                     element={app("/settings/devices", <DevicesPage />, true)}
+                  />
+                  <Route
+                    path="/settings/export"
+                    element={app("/settings/export", <ExportPage />, true)}
                   />
                   <Route
                     path="/settings/notifications"

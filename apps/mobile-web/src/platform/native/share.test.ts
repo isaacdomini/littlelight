@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadAndShare, shareLink } from "./share";
+import { downloadAndShare, downloadLargeAndShare, shareLink } from "./share";
 
 // Native share sheet and download-to-share (docs/plans/step-9.md 2.7, 2.15): the temp file takes
 // an extension from the content type when the name has none, lives in Caches/ll-share, and is
@@ -7,6 +7,7 @@ import { downloadAndShare, shareLink } from "./share";
 
 const FS = vi.hoisted(() => ({
   mkdir: vi.fn(),
+  downloadFile: vi.fn(),
   writeFile: vi.fn(),
   deleteFile: vi.fn(),
 }));
@@ -33,6 +34,7 @@ function stubDownload(type: string, ok = true) {
 
 beforeEach(() => {
   FS.mkdir.mockReset().mockResolvedValue(undefined);
+  FS.downloadFile.mockReset();
   FS.writeFile
     .mockReset()
     .mockImplementation(async (o: { path: string }) => ({ uri: `file:///cache/${o.path}` }));
@@ -172,5 +174,58 @@ describe("shareLink", () => {
   it("is false when the user dismisses the sheet", async () => {
     SHARE.share.mockRejectedValue(new Error("canceled"));
     expect(await shareLink({ url: "https://x.test/s/abc" })).toBe(false);
+  });
+});
+
+describe("downloadLargeAndShare (export ZIPs)", () => {
+  it("streams with the native downloader into Caches/ll-share, shares the file, then deletes it; never fetches the bytes into the WebView", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    FS.downloadFile.mockResolvedValue({ path: "/var/cache/ll-share/x.zip" });
+    expect(await downloadLargeAndShare(SIGNED, "littlelight-export-2026-10-10.zip")).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FS.writeFile).not.toHaveBeenCalled();
+    const arg = FS.downloadFile.mock.calls[0]?.[0] as {
+      url: string;
+      path: string;
+      directory: string;
+    };
+    expect(arg.url).toBe(SIGNED);
+    expect(arg.directory).toBe("CACHE");
+    expect(arg.path.startsWith("ll-share/")).toBe(true);
+    expect(arg.path.endsWith("littlelight-export-2026-10-10.zip")).toBe(true);
+    expect(SHARE.share).toHaveBeenCalledWith({ files: ["file:///var/cache/ll-share/x.zip"] });
+    expect(FS.deleteFile).toHaveBeenCalledWith({ path: arg.path, directory: "CACHE" });
+  });
+
+  it("keeps a file:// path as is and treats a dismissed share sheet as success", async () => {
+    FS.downloadFile.mockResolvedValue({ path: "file:///c/x.zip" });
+    SHARE.share.mockRejectedValue(new Error("dismissed"));
+    expect(await downloadLargeAndShare(SIGNED, "a.zip")).toBe(true);
+    expect(SHARE.share).toHaveBeenCalledWith({ files: ["file:///c/x.zip"] });
+    expect(FS.deleteFile).toHaveBeenCalled();
+  });
+
+  it("a failed download returns false and still cleans up", async () => {
+    FS.downloadFile.mockRejectedValue(new Error("403 for https://s/x?X-Amz-Signature=abc"));
+    expect(await downloadLargeAndShare(SIGNED, "a.zip")).toBe(false);
+    expect(SHARE.share).not.toHaveBeenCalled();
+    expect(FS.deleteFile).toHaveBeenCalled();
+  });
+
+  it("no path from the downloader means failure", async () => {
+    FS.downloadFile.mockResolvedValue({});
+    expect(await downloadLargeAndShare(SIGNED, "a.zip")).toBe(false);
+    expect(SHARE.share).not.toHaveBeenCalled();
+  });
+
+  it("sanitises the file name (no path traversal)", async () => {
+    FS.downloadFile.mockResolvedValue({ path: "/c/x" });
+    await downloadLargeAndShare(SIGNED, "../../etc/passwd");
+    const arg = FS.downloadFile.mock.calls[0]?.[0] as { path: string };
+    const path = arg.path;
+    // one flat segment under ll-share/: no slash survives, so ".." cannot climb out
+    expect(path.split("/")).toHaveLength(2);
+    expect(path.split("/").at(1) ?? "").not.toMatch(/[\\/]/);
   });
 });

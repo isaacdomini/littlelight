@@ -21,6 +21,7 @@
     "e2e:ai-gate": "tsx e2e/ai/gate.ts",
     "e2e:search-gate": "tsx e2e/search/gate.ts",
     "e2e:share-gate": "tsx e2e/sharing/gate.ts",
+    "e2e:export-gate": "tsx e2e/export/gate.ts",
     "e2e:push-gate": "tsx e2e/native/push-gate.ts",
     "e2e:native-android": "tsx e2e/native/android-gate.ts",
     "e2e:native-ios": "bash e2e/native/ios-gate.sh",

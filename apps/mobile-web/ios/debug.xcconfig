@@ -1,1 +1,2 @@
 CAPACITOR_DEBUG = true
+INFOPLIST_FILE = App/Info-Debug.plist

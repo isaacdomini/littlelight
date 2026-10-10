@@ -299,14 +299,18 @@ async function run(): Promise<void> {
   const vAll = await viewerClient();
   await vAll.exchange(tokens[0] as string);
   const seen: string[] = [];
+  const takenAts: (string | null)[] = [];
   let cursor: string | null = null;
   let leaked: string | null = null;
   do {
-    const r: { body: { photos: { id: string }[]; nextCursor: string | null } } = await vAll.call(
+    const r: {
+      body: { photos: { id: string; takenAt: string | null }[]; nextCursor: string | null };
+    } = await vAll.call(
       "GET",
       `/share/photos?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     );
     seen.push(...(r.body.photos ?? []).map((p) => p.id));
+    takenAts.push(...(r.body.photos ?? []).map((p) => p.takenAt));
     leaked =
       leaked ??
       hasKey(r.body, ["babyId", "caption", "isSensitive", "latitude", "longitude", "displayUrl"]);
@@ -316,6 +320,11 @@ async function run(): Promise<void> {
     "viewer of L-all sees no sensitive id and exactly the rule set",
     !seen.some((i) => sensitive.includes(i)) && same([...seen].sort(), expAll),
     `${seen.length}`,
+  );
+  check(
+    "viewer takenAt is a date only (YYYY-MM-DD) or null, never a time of day",
+    takenAts.length > 0 && takenAts.every((t) => t === null || /^\d{4}-\d{2}-\d{2}$/.test(t)),
+    takenAts.find((t) => t !== null && !/^\d{4}-\d{2}-\d{2}$/.test(t)) ?? "",
   );
   check(
     "viewer API carries no babyId, caption, isSensitive, GPS or displayUrl key",

@@ -10,21 +10,27 @@
 #                    (.github/scripts/native-hygiene.sh: no signing material, APNs .p8, Firebase
 #                    config or private key in git, no web-storage token writes in the platform
 #                    layer, Capacitor loggingBehavior "none", no console.log/debug in native
-#                    code), typecheck (workspace + e2e/, incl. e2e/native), unit tests
+#                    code), the review-fix Sentry hygiene check (.github/scripts/sentry-hygiene.sh:
+#                    no @sentry/capacitor, replay, tracing or @opentelemetry package in any
+#                    package.json; every Sentry.init has dataCollection all off,
+#                    defaultIntegrations false, tracesSampleRate 0, beforeSend scrubTelemetryEvent),
+#                    typecheck (workspace + e2e/, incl. e2e/native and e2e/export), unit tests
 #                    (incl. packages/ai adapters against local mock servers), integration tests
 #                    (db-integration: RLS matrix, search + chat + sharing tables etc.;
 #                    api-integration: auth, invites, babies, uploads, photos, search, chat, share
-#                    links + viewer via Fastify inject with a stubbed GoTrue and S3 and the fake
-#                    chat model / embedder; worker-integration: ingest, purge, sweep, the AI batch
-#                    pipeline, the search indexer and the auto-sharer with the in-process fake
-#                    provider against a standalone MinIO) on a pgvector service container (auth.* is
-#                    stubbed by the test harness) with a guard that fails the job if any project
+#                    links + viewer, data exports via Fastify inject with a stubbed GoTrue and S3
+#                    and the fake chat model / embedder; worker-integration: ingest, purge, sweep,
+#                    the AI batch pipeline, the search indexer, the auto-sharer and the data-export
+#                    ZIP job with the in-process fake provider against a standalone MinIO) on a
+#                    pgvector service container (auth.* is stubbed by the test harness) with a guard that fails the job if any project
 #                    or named suite silently skipped, a generated-DB-types drift check against a
 #                    database migrated in production order (bootstrap -> GoTrue migrate -> app
 #                    migrations), and `docker compose config` for both files plus a canary check
 #                    of which services receive which provider key.
 #   images           builds every production image (api, worker, web, migrate) with buildx + GHA
-#                    cache. Nothing is pushed.
+#                    cache, then runs the web image standalone and checks its CSP header with
+#                    `curl -sI` (.github/scripts/check-web-csp.sh: Report-Only by default,
+#                    enforcing with WEB_CSP_HEADER=Content-Security-Policy). Nothing is pushed.
 #   dev-stack-smoke  brings up docker-compose.dev.yml from a clean checkout (no .env, the step-1
 #                    check), then pins api + worker to the keyless fake AI provider with a CI-only
 #                    project .env (VISION_PROVIDER=fake; no provider key exists in CI) and runs
@@ -42,7 +48,10 @@
 #                    GPS (docs/plans/step-8.md 4.5), then the step-9 push gate (docs/plans/
 #                    step-9.md 2.15: `pnpm e2e:push-gate`, fake push provider) with a log tap
 #                    across its api/worker recreations and a scan of those logs for device
-#                    tokens, JWTs, bearer values and presign parts.
+#                    tokens, JWTs, bearer values and presign parts; between the share gate and the
+#                    push gate, the review-fix data-export gate (docs/plans/review-fixes.md 2.14:
+#                    `pnpm e2e:export-gate`) with its own log tap and a scan of those logs for
+#                    coordinates, lat/lng values, export object keys, JWTs and presign parts.
 #   android-debug    step-9 Android debug build on every push/PR (docs/plans/step-9.md 2.14):
 #                    JDK 21 and the Android SDK from the runner image, `native:sync:android`,
 #                    `android:build:debug` (assembleDebug) + lintDebug, then the merged-manifest
@@ -50,8 +59,10 @@
 #                    google-services.json, no signing secrets, no emulator.
 #   ios-sim-build    step-9 iOS Simulator build, manual only (`workflow_dispatch`; macOS minutes
 #                    cost ~10x): `native:sync:ios` + `ios:build:sim` (ad-hoc signed, no team or
-#                    certificate) + plist lint. The native gates (`pnpm e2e:native-ios`,
-#                    `pnpm e2e:native-android`) need a simulator / an HVF/KVM emulator and run
+#                    certificate) + plist lint, the Info-Debug.plist/Info.plist check
+#                    (`check:ios-plists`, macOS plutil) and a Release simulator build whose
+#                    Info.plist must lack the two debug-only keys. The native gates
+#                    (`pnpm e2e:native-ios`, `pnpm e2e:native-android`) need a simulator / an HVF/KVM emulator and run
 #                    locally only (docs/plans/step-9.md 4.4, 4.5); no store upload runs in CI.
 #
 # No secrets are needed or read. Every third-party action is pinned to a full commit SHA.
@@ -81,9 +92,10 @@ jobs:
   check:
     name: Lint, typecheck, test
     runs-on: ubuntu-24.04
-    # Step 9: 2,532 unit tests (~30 s locally) and 1,249 integration tests (~130 s locally,
-    # roughly 2-3x on a hosted runner) plus install, lint, typecheck, types drift.
-    timeout-minutes: 25
+    # Step 9 + review fixes: ~2,600 unit tests (~30 s locally) and ~1,350 integration tests
+    # (~150 s locally incl. the export ZIP suites, roughly 2-3x on a hosted runner) plus install,
+    # lint, typecheck, types drift.
+    timeout-minutes: 30
     services:
       db:
         # Same image as both Compose files.
@@ -160,6 +172,17 @@ jobs:
       - name: Native hygiene (signing material, web storage, Capacitor logging)
         run: bash .github/scripts/native-hygiene.sh
 
+      # docs/plans/review-fixes.md 2.6 / 2.14 (D7, D8): no @sentry/capacitor, replay, tracing,
+      # profiling or @opentelemetry package as a direct dependency in any package.json (the
+      # lockfile's transitive OTel entries under @sentry/node are expected and not checked), and
+      # every Sentry.init in apps/*/src and packages/*/src (api, worker, web) is errors-only:
+      # `dataCollection` with every category off (Sentry 11 has no sendDefaultPii),
+      # `defaultIntegrations: false`, `tracesSampleRate: 0`, `beforeBreadcrumb` => null,
+      # `beforeSend` = the shared scrubTelemetryEvent, and the web init behind isNative(). Same
+      # script runs locally.
+      - name: Sentry hygiene (errors-only telemetry, no replay/tracing/OTel packages)
+        run: bash .github/scripts/sentry-hygiene.sh
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -168,15 +191,16 @@ jobs:
       # process.env. Shell globs: a renamed folder fails loudly (tsc: file not found).
       # e2e/helpers/*.ts covers e2e/helpers/native.ts and e2e/helpers/reset.ts; e2e/native/*.ts
       # are the step-9 push, Android and invite-link gate scripts (the XCUITest project under
-      # e2e/native/ios-uitest is Swift and is built by Xcode, not here). global-setup/teardown
-      # are the Playwright globalSetup/globalTeardown hooks referenced by playwright.config.ts.
+      # e2e/native/ios-uitest is Swift and is built by Xcode, not here); e2e/export/*.ts is the
+      # review-fix data-export gate. global-setup/teardown are the Playwright
+      # globalSetup/globalTeardown hooks referenced by playwright.config.ts.
       - name: Typecheck e2e
         run: >-
           pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
           --target es2022 --strict --types node
           e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts
           e2e/search/*.ts e2e/chat/*.ts e2e/sharing/*.ts e2e/fixtures/*.ts e2e/native/*.ts
-          e2e/playwright.config.ts e2e/playwright.perf.config.ts
+          e2e/export/*.ts e2e/playwright.config.ts e2e/playwright.perf.config.ts
           e2e/global-setup.ts e2e/global-teardown.ts
 
       - name: Unit tests
@@ -252,6 +276,10 @@ jobs:
           # with testConfig(); the defaults are pinned here for any config read from process.env.
           SHARE_MEDIA_URL_TTL_SEC: "300"
           SHARE_RECONCILE_CRON: "41 * * * *"
+          # Review-fix data-export suites (docs/plans/review-fixes.md 2.14): the api harness
+          # stubs the queue, the worker suite runs the ZIP job against the MinIO above with its
+          # own size caps (EXPORT_MAX_BYTES stays unset: the worker default). No SENTRY_DSN:
+          # telemetry stays off.
           # Step-9 push / native suites (docs/plans/step-9.md 2.15): the worker notify tests
           # inject the fake sender and the api harness builds its config with testConfig();
           # the dev defaults are pinned for any config read from process.env. No APNs/FCM
@@ -265,9 +293,9 @@ jobs:
           pnpm test:integration \
             --reporter=default --reporter=github-actions \
             --reporter=json --outputFile.json="$REPORT"
-          # Project dirs, plus the step-6 AI, step-7 search/chat, step-8 sharing and step-9
-          # push / review-account / demo-media suites by name so a rename cannot drop them
-          # silently.
+          # Project dirs, plus the step-6 AI, step-7 search/chat, step-8 sharing, step-9
+          # push / review-account / demo-media and the review-fix (migrations 18-19, data
+          # export api + worker) suites by name so a rename cannot drop them silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
@@ -288,7 +316,10 @@ jobs:
             apps/api/src/auth/review.integration.test.ts \
             apps/api/src/sharing/viewer.push.integration.test.ts \
             apps/worker/src/push/notify.integration.test.ts \
-            apps/worker/src/demo/media.integration.test.ts
+            apps/worker/src/demo/media.integration.test.ts \
+            packages/db/review-fixes.integration.test.ts \
+            apps/api/src/exports/exports.integration.test.ts \
+            apps/worker/src/export/export.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -398,9 +429,22 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           push: false
+          # Only the web image is run below; the others stay in the builder.
+          load: ${{ matrix.image == 'web' }}
           tags: littlelight-${{ matrix.image }}:ci
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # docs/plans/review-fixes.md 2.11 (D9) / R.4: the nginx entrypoint renders the CSP snippet
+      # from WEB_CSP_HEADER / S3_PUBLIC_ENDPOINT / WEB_CSP_CONNECT_EXTRA. The image runs
+      # standalone three times (no variables; report-only with the endpoint + an extra origin;
+      # WEB_CSP_HEADER=Content-Security-Policy) and `curl -sI` on / and /s/x asserts exactly one
+      # Report-Only header by default and exactly one enforcing header when set, values
+      # substituted (no literal `${`), plus Referrer-Policy no-referrer on /s/.
+      - name: Web image CSP header (report-only default, enforcing when set)
+        if: matrix.image == 'web'
+        timeout-minutes: 5
+        run: bash .github/scripts/check-web-csp.sh littlelight-web:ci
 
   dev-stack-smoke:
     name: Dev stack smoke + e2e
@@ -409,8 +453,10 @@ jobs:
     # Chromium download, e2e with one retry, five api restarts, upload gate (~3-4 min), perf
     # seed + perf run on two viewports (~2-4 min), AI gate (~1 min, capped at 10), search gate
     # (2,000-photo seed + 50 search and 50 chat queries, a few minutes, capped at 15), share gate
-    # + log scan (~1-2 min, capped at 15), push gate + log scan (~3-5 min, capped at 15).
-    timeout-minutes: 130
+    # + log scan (~1-2 min, capped at 15), export gate + log scan (~30 s locally; four exports,
+    # each polled to ready within 120 s, one api restart, a purge job; capped at 15), push
+    # gate + log scan (~3-5 min, capped at 15).
+    timeout-minutes: 150
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -699,6 +745,56 @@ jobs:
             *) echo "::error::grep failed (exit $rc)"; exit 1 ;;
           esac
 
+      # The export gate restarts api itself (restart-api.sh: resets the in-memory sign-in-code
+      # counter) and then runs the worker's data.export jobs; an in-place restart keeps the
+      # container id, and the tap re-follows a restarted container with a full replay, so its
+      # files hold every line api + worker printed during the gate (raw logs in $RUNNER_TEMP,
+      # scanned below, never uploaded).
+      - name: Start api/worker log tap (export gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/export-logs" api worker
+
+      # Review-fix data-export gate (docs/plans/review-fixes.md 2.14 "Export gate", 4.2;
+      # e2e/export/gate.ts), keyless, fake AI provider: a fresh admin + co-admin + contributor
+      # and three uploaded fixtures (two geotagged), exports with and without locations polled
+      # to ready, Mailpit mail without links, 403 for the co-admin download and the
+      # contributor, byte-identical originals, photos.csv gps columns only with locations,
+      # album.json without coordinates, the 4th request in 24 h => 429, DELETE + purge.trash
+      # => 0 object versions, fresh-sign-in gate; then demo-mom's Maya export. Cleans up its
+      # exports (Maya's quota restored), shells out to `docker compose exec` (db, worker
+      # run-job), and writes e2e/native-results/export-gate.json; prints PASS/FAIL per check.
+      - name: Export gate (data export, fake provider)
+        timeout-minutes: 15
+        env:
+          EXPORT_GATE_LOG: ${{ runner.temp }}/export-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$EXPORT_GATE_LOG")"
+          rc=0
+          pnpm e2e:export-gate 2>&1 | tee "$EXPORT_GATE_LOG" || rc=$?
+          {
+            echo '### Export gate (data export)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$EXPORT_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |checks passed$|^-- ' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Stop api/worker log tap (export gate)
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/export-logs"
+
+      # docs/plans/review-fixes.md 2.3 "Logging" / 2.14: what api + worker printed during the
+      # export gate holds no coordinate pair, lat/lng value, export object key
+      # (babies/<uuid>/exports/<uuid>.zip), JWT, presign part, bearer or token value. Prints
+      # file:line + pattern name only. `--require` fails the step if the tap did not capture
+      # an export job starting and finishing (vacuous scan).
+      - name: No coordinates, export keys, JWTs or signatures in api/worker logs (export gate)
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs
+          --require 'export: started' --require 'export: ready'
+          "$RUNNER_TEMP/export-logs"
+
       # The push gate recreates api and worker (no push debounce / gap, fake AI) and restores
       # them in its finally, so `docker compose logs` afterwards would only show the restored
       # containers. The tap follows every api/worker container while it runs (raw logs in
@@ -757,6 +853,17 @@ jobs:
           path: |
             e2e/native-results/
             ${{ runner.temp }}/push-gate
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload export gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: export-gate
+          path: |
+            e2e/native-results/export-gate.json
+            ${{ runner.temp }}/export-gate
           if-no-files-found: ignore
           retention-days: 14
 
@@ -958,8 +1065,9 @@ jobs:
     name: iOS Simulator build (manual)
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
-    # pnpm install + web build (~3 min), SPM resolution + xcodebuild (~10-20 min cold).
-    timeout-minutes: 60
+    # pnpm install + web build (~3 min), SPM resolution + Debug xcodebuild (~10-20 min cold),
+    # Release xcodebuild (~5-15 min, SPM cache warm by then).
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -990,6 +1098,17 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # docs/plans/review-fixes.md 2.9 / R.5: the release App/Info.plist has neither
+      # NSAppTransportSecurity nor CFBundleURLTypes, and App/Info-Debug.plist is exactly the
+      # release plist plus those two debug-only keys (apps/mobile-web/scripts/check-ios-plists.ts,
+      # needs macOS plutil, so it runs here and not in the Linux `check` job). Both source plists
+      # must also parse.
+      - name: iOS source plists (lint, Info-Debug = Info + debug-only keys)
+        run: |
+          set -euo pipefail
+          plutil -lint apps/mobile-web/ios/App/App/Info.plist apps/mobile-web/ios/App/App/Info-Debug.plist
+          pnpm --filter @littlelight/mobile-web check:ios-plists
+
       - name: Sync the web build into the iOS project
         run: pnpm --filter @littlelight/mobile-web native:sync:ios
 
@@ -1001,7 +1120,7 @@ jobs:
       - name: Plists and entitlements
         run: |
           set -euo pipefail
-          app="$(find apps/mobile-web/ios/DerivedData -name 'App.app' -path '*iphonesimulator*' | head -n1)"
+          app="$(find apps/mobile-web/ios/DerivedData -name 'App.app' -path '*Debug-iphonesimulator*' | head -n1)"
           test -n "$app" || { echo "::error::App.app not found under apps/mobile-web/ios/DerivedData"; exit 1; }
           plutil -lint "$app/Info.plist" \
             apps/mobile-web/ios/App/App/PrivacyInfo.xcprivacy \
@@ -1010,3 +1129,30 @@ jobs:
           codesign -d --entitlements - "$app" 2>/dev/null | tee "$RUNNER_TEMP/entitlements.txt"
           grep -q 'applinks:littlelight.tesarsoft.com' "$RUNNER_TEMP/entitlements.txt" \
             || { echo "::error::associated domains entitlement missing from the built app"; exit 1; }
+          # The Debug product carries the two debug-only keys (Info-Debug.plist via debug.xcconfig).
+          for key in NSAppTransportSecurity CFBundleURLTypes; do
+            /usr/libexec/PlistBuddy -c "Print :$key" "$app/Info.plist" > /dev/null \
+              || { echo "::error::$key missing from the Debug product's Info.plist"; exit 1; }
+          done
+
+      # docs/plans/review-fixes.md R.5 done-when: the Release configuration (release.xcconfig ->
+      # App/Info.plist) builds for the simulator, unsigned, into its own derived-data folder
+      # outside the checkout, and its product's Info.plist has neither debug-only key
+      # (PlistBuddy fails on a missing key).
+      - name: Release simulator build has no debug-only plist keys
+        working-directory: apps/mobile-web
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-Release" CODE_SIGNING_ALLOWED=NO build
+          app="$(find "$RUNNER_TEMP/DerivedData-Release" -name 'App.app' -path '*Release-iphonesimulator*' | head -n1)"
+          test -n "$app" || { echo "::error::Release App.app not found under \$RUNNER_TEMP/DerivedData-Release"; exit 1; }
+          plutil -lint "$app/Info.plist"
+          for key in NSAppTransportSecurity CFBundleURLTypes; do
+            if /usr/libexec/PlistBuddy -c "Print :$key" "$app/Info.plist" > /dev/null 2>&1; then
+              echo "::error::$key is present in the Release product's Info.plist"
+              exit 1
+            fi
+          done
+          echo "Release Info.plist: no NSAppTransportSecurity, no CFBundleURLTypes"

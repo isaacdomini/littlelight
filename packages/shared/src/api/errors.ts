@@ -5,7 +5,8 @@ import { z } from "zod";
 // Zod failures use `validation_failed` with field paths only; 429s carry `Retry-After`.
 // Step 7 (docs/plans/step-7.md 2.4, D13) adds `plan_required` and `ai_budget_exceeded` so the
 // SPA can key the Plus upsell and the budget notice on a code, not on a message.
-// Step 8 (docs/plans/step-8.md 2.4) adds the share-link viewer codes.
+// Step 8 (docs/plans/step-8.md 2.4) adds the share-link viewer codes. The review-fixes batch
+// (docs/plans/review-fixes.md 2.5) adds the data export codes.
 
 export const apiErrorCodeSchema = z.enum([
   "unauthorized",
@@ -56,6 +57,15 @@ export const apiErrorCodeSchema = z.enum([
   "passcode_invalid",
   /** 429 + `Retry-After`: too many failures on this link from any IP; regenerate clears it. */
   "passcode_locked",
+  // Data export (docs/plans/review-fixes.md 2.5; FR-10.1).
+  /** 409: an export of this album is already queued or running (`data_exports_rate_limit`). */
+  "export_in_progress",
+  /** 410: the export is not ready, has expired or its ZIP was purged. */
+  "export_expired",
+  /** 403: only the admin who requested an export may download it (D3). */
+  "not_requester",
+  /** 409: the album is in the trash and cannot be exported. */
+  "baby_trashed",
   "internal",
 ]);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;

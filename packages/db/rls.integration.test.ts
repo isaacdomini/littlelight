@@ -17,6 +17,7 @@ import {
   U,
 } from "./test/fixtures";
 import {
+  authed,
   connect,
   DATA_KEY,
   type Db,
@@ -117,6 +118,12 @@ async function expectRlsViolation(c: pg.ClientBase, sql: string, params: unknown
   expect(err, `expected an RLS violation for: ${sql}`).not.toBeNull();
   expect(err?.code).toBe("42501");
   expect(err?.message).toMatch(RLS_VIOLATION);
+}
+async function expectContributorGuard(c: pg.ClientBase, sql: string, params: unknown[] = []) {
+  const err = await tryQuery(c, sql, params);
+  expect(err, `expected the contributor guard for: ${sql}`).not.toBeNull();
+  expect(err?.code).toBe("42501");
+  expect(err?.message).toBe("contributors may only trash their own pending uploads");
 }
 async function expectCheckViolation(
   c: pg.ClientBase,
@@ -537,13 +544,19 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
     });
 
     it("cannot remove the last admin (self-removal after the co-admin left, or demotion)", async () => {
-      await db.asUser(U.adminA1, async (c) => {
+      // FR-1.5 (migration 18): an admin cannot delete the other admin's row; the co-admin leaves
+      // by deleting their own. Then the remaining admin is the last one.
+      await db.asUser(U.adminA2, async (c) => {
         expect(
           await rowCount(c, "DELETE FROM baby_members WHERE baby_id = $1 AND user_id = $2", [
             BABY.A,
             U.adminA2,
           ]),
         ).toBe(1);
+        // Same transaction, now acting as the remaining admin.
+        await c.query("SELECT set_config('request.jwt.claims', $1, true)", [
+          JSON.stringify(authed(U.adminA1)),
+        ]);
         await expectCheckViolation(
           c,
           "DELETE FROM baby_members WHERE baby_id = $1 AND user_id = $2",
@@ -827,7 +840,9 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
 
     it("cannot self-approve; may soft-delete own pending; cannot touch approved photos", async () => {
       await db.asUser(U.contribA, async (c) => {
-        await expectRlsViolation(
+        // Migration 18 (D13): the approval columns are guarded by a trigger, which answers a
+        // contributor with 42501 and its fixed message before the WITH CHECK is evaluated.
+        await expectContributorGuard(
           c,
           "UPDATE photos SET approval = 'approved', approved_by = $2, approved_at = now() WHERE id = $1",
           [P.pendingContrib, U.contribA],
@@ -1337,13 +1352,23 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
           "invites",
           "chat_threads",
           "chat_messages",
-          "baby_members",
           "viewer_sessions",
           "audit_log",
           "worker_heartbeats",
         ]) {
           await expectDenied(c, `SELECT count(*) FROM public.${t}`);
         }
+        // Migration 19 (export members list): baby_members is readable by pipeline for four
+        // columns only; who invited whom and removal requests stay out of reach.
+        expect(
+          (await c.query("SELECT baby_id, user_id, role, joined_at FROM baby_members")).rowCount,
+        ).toBeGreaterThan(0);
+        await expectDenied(c, "SELECT invited_by FROM baby_members");
+        await expectDenied(c, "SELECT removal_requested_by FROM baby_members");
+        await expectDenied(c, "SELECT removal_requested_at FROM baby_members");
+        await expectDenied(c, "SELECT * FROM baby_members");
+        await expectDenied(c, "UPDATE baby_members SET role = 'admin'");
+        await expectDenied(c, "DELETE FROM baby_members");
         const p = await c.query(
           "SELECT user_id, display_name, relationship_label FROM profiles LIMIT 1",
         );
@@ -1607,8 +1632,11 @@ describe.skipIf(!databaseUrl)("RLS matrix", () => {
   describe("profiles", () => {
     it("a user sees themselves and co-members, not strangers; can edit only own row", async () => {
       await db.asUser(U.contribA, async (c) => {
+        // Migration 18 (D12): profiles is self-only; co-members come through member_profiles.
         const seen = await ids(c, "SELECT user_id AS id FROM profiles");
-        expect(seen).toEqual([U.adminA1, U.adminA2, U.contribA].sort());
+        expect(seen).toEqual([U.contribA]);
+        const members = await ids(c, "SELECT user_id AS id FROM member_profiles");
+        expect(members).toEqual([U.adminA1, U.adminA2, U.contribA].sort());
         expect(
           await rowCount(c, "UPDATE profiles SET display_name = 'me' WHERE user_id = $1", [
             U.contribA,

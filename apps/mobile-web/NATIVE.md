@@ -85,7 +85,7 @@ from a normal terminal: `~/Library/Android/sdk/emulator/emulator -avd <name>`, t
 
 Universal Links / App Links claim only `/invite/*`, `/s/*`, `/signin/native` on
 `littlelight.tesarsoft.com` (not `/signin/callback`). A `littlelight://` scheme exists for testing:
-iOS Info.plist (the JS router ignores it unless built with `VITE_DEEPLINK_DEV_SCHEME=1`); Android
+iOS `Info-Debug.plist` (Debug configuration only; the JS router ignores it unless built with `VITE_DEEPLINK_DEV_SCHEME=1`); Android
 debug source set only.
 
 - `xcrun simctl openurl booted littlelight://s/<token>`
@@ -130,3 +130,11 @@ cannot hang the UI. Keep them when refactoring.
   backups and device transfer disabled. iOS: `PrivacyInfo.xcprivacy` declares collected data
   (no tracking); WebKit and `Caches/ll-*` are excluded from backup at launch.
 - `Info.plist` strings: photo library (read and add) and camera only.
+
+## iOS Debug-only surface
+
+`ios/debug.xcconfig` sets `INFOPLIST_FILE = App/Info-Debug.plist` and `ios/release.xcconfig` sets
+`App/Info.plist`. `Info-Debug.plist` is `Info.plist` plus exactly `NSAppTransportSecurity`
+(`NSAllowsLocalNetworking`) and the `littlelight://` `CFBundleURLTypes`, so Release builds carry
+neither. `pnpm --filter @littlelight/mobile-web check:ios-plists` enforces this; edit both plists
+together.

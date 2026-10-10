@@ -1,16 +1,22 @@
 import { babyPrefix, originalKey, photoPrefixes } from "@littlelight/shared";
 import { describe, expect, it } from "vitest";
 import {
+  AUDIT_EXPORT_SQL,
   AUDIT_PURGED_SQL,
   DELETE_BABY_SQL,
   DELETE_DUPLICATE_SQL,
+  DELETE_OLD_EXPORTS_SQL,
   DELETE_PHOTO_SQL,
   DUE_BABIES_SQL,
+  DUE_EXPORTS_SQL,
   DUE_PHOTOS_SQL,
+  FAIL_STALE_EXPORT_SQL,
   HELD_BABIES_SQL,
   LEFTOVER_DUPLICATES_SQL,
+  MARK_EXPORT_PURGED_SQL,
   ORPHAN_UPLOADS_SQL,
   purgeTrash,
+  STALE_EXPORTS_SQL,
 } from "./purge";
 import { memoryStorage, recordingLog, scriptedPool } from "./testing/stubs";
 
@@ -200,6 +206,9 @@ describe("purgeTrash", () => {
       photos: 0,
       duplicates: 0,
       orphanUploads: 0,
+      exportsStale: 0,
+      exportsPurged: 0,
+      exportRowsDeleted: 0,
       versionsDeleted: 0,
       errors: 0,
     });
@@ -235,5 +244,115 @@ describe("purgeTrash", () => {
     };
     await purgeTrash({ pool, storage, log: recordingLog() });
     expect(maxOpenDuringStorage).toBe(0);
+  });
+  describe("exports (review fixes 2.3)", () => {
+    const E1 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1";
+    const E2 = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2";
+    const key = (b: string, e: string) => `babies/${b}/exports/${e}.zip`;
+    const held = { [HELD_BABIES_SQL]: () => ({ rows: [{ n: 0 }] }) };
+
+    it("deletes every version of a due ZIP BEFORE marking the row purged, then audits export.purged", async () => {
+      const storage = memoryStorage({ deleteCounts: { [key(B1, E1)]: 1 } });
+      const order: string[] = [];
+      const orig = storage.deleteAllVersions.bind(storage);
+      storage.deleteAllVersions = async (prefix) => {
+        order.push(`objects:${prefix}`);
+        return orig(prefix);
+      };
+      const pool = scriptedPool({
+        ...held,
+        [DUE_EXPORTS_SQL]: seq([
+          { id: E1, baby_id: B1, storage_key: key(B1, E1), status: "ready" },
+        ]),
+        [MARK_EXPORT_PURGED_SQL]: () => {
+          order.push("row");
+          return { rowCount: 1 };
+        },
+        [AUDIT_EXPORT_SQL]: () => {
+          order.push("audit");
+          return { rowCount: 1 };
+        },
+      });
+      const res = await purgeTrash({ pool, storage, log: recordingLog() });
+      expect(order).toEqual([`objects:${key(B1, E1)}`, "row", "audit"]);
+      expect(res.exportsPurged).toBe(1);
+      expect(res.versionsDeleted).toBe(1);
+      const audit = pool.log.find(([sql]) => sql === AUDIT_EXPORT_SQL);
+      expect(audit?.[1]).toEqual([B1, "export.purged", JSON.stringify({ export_id: E1 })]);
+    });
+
+    it("a storage failure keeps the row (not marked purged), counts an error and carries on", async () => {
+      const storage = memoryStorage();
+      storage.failOn.add(`delete:${key(B1, E1)}`);
+      const marked: unknown[] = [];
+      const pool = scriptedPool({
+        ...held,
+        [DUE_EXPORTS_SQL]: seq([
+          { id: E1, baby_id: B1, storage_key: key(B1, E1), status: "ready" },
+          { id: E2, baby_id: B2, storage_key: key(B2, E2), status: "ready" },
+        ]),
+        [MARK_EXPORT_PURGED_SQL]: (params) => {
+          marked.push(params[0]);
+          return { rowCount: 1 };
+        },
+      });
+      const log = recordingLog();
+      const res = await purgeTrash({ pool, storage, log });
+      expect(marked).toEqual([E2]);
+      expect(res.exportsPurged).toBe(1);
+      expect(res.errors).toBe(1);
+      expect(log.lines.find((l) => l.level === "warn")?.obj).toMatchObject({ exportId: E1 });
+      expect(JSON.stringify(log.lines)).not.toContain("stub failure");
+    });
+
+    it("a never-built failed export (no objects) is marked purged without an audit row", async () => {
+      const storage = memoryStorage({ deleteCounts: { [key(B1, E1)]: 0 } });
+      const pool = scriptedPool({
+        ...held,
+        [DUE_EXPORTS_SQL]: seq([
+          { id: E1, baby_id: B1, storage_key: key(B1, E1), status: "failed" },
+        ]),
+        [MARK_EXPORT_PURGED_SQL]: () => ({ rowCount: 1 }),
+      });
+      const res = await purgeTrash({ pool, storage, log: recordingLog() });
+      expect(res.exportsPurged).toBe(1);
+      expect(pool.log.some(([sql]) => sql === AUDIT_EXPORT_SQL)).toBe(false);
+    });
+
+    it("a stale running/queued export is failed with export.failed audit; a lost race audits nothing", async () => {
+      const storage = memoryStorage();
+      const pool = scriptedPool({
+        ...held,
+        [STALE_EXPORTS_SQL]: seq([
+          { id: E1, baby_id: B1 },
+          { id: E2, baby_id: B2 },
+        ]),
+        [FAIL_STALE_EXPORT_SQL]: (params) => ({ rowCount: params[0] === E1 ? 1 : 0 }),
+      });
+      const res = await purgeTrash({ pool, storage, log: recordingLog() });
+      expect(res.exportsStale).toBe(1);
+      const audits = pool.log.filter(([sql]) => sql === AUDIT_EXPORT_SQL);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.[1]).toEqual([B1, "export.failed", JSON.stringify({ export_id: E1 })]);
+    });
+
+    it("deletes rows purged more than 30 days ago and reports the count", async () => {
+      const pool = scriptedPool({
+        ...held,
+        [DELETE_OLD_EXPORTS_SQL]: () => ({ rowCount: 4 }),
+      });
+      const res = await purgeTrash({ pool, storage: memoryStorage(), log: recordingLog() });
+      expect(res.exportRowsDeleted).toBe(4);
+    });
+
+    it("the SQL keeps the safety rules: ready ZIPs go only on expiry, lost requester, demotion or trashed baby", () => {
+      expect(DUE_EXPORTS_SQL).toContain("e.purged_at IS NULL");
+      expect(DUE_EXPORTS_SQL).toContain("e.expires_at < now()");
+      expect(DUE_EXPORTS_SQL).toContain("e.requested_by IS NULL");
+      expect(DUE_EXPORTS_SQL).toContain("NOT public.export_requester_is_admin(e.id)");
+      expect(DUE_EXPORTS_SQL).toContain("b.deleted_at IS NOT NULL");
+      expect(DELETE_OLD_EXPORTS_SQL).toContain("interval '30 days'");
+      expect(MARK_EXPORT_PURGED_SQL).toContain("purged_at IS NULL");
+    });
   });
 });

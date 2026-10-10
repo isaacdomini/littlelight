@@ -93,9 +93,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 17 migrations applied"
+step "3a. database: all 19 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "17" ] || fail "expected 17 applied migrations, found $MIGS"
+[ "$MIGS" = "19" ] || fail "expected 19 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d littlelight -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -206,8 +206,9 @@ echo "api/worker use their own MinIO service accounts; worker queues ready; logs
 
 
 step "5e. step 6: AI wiring (queues line, provider line), seeded bath description, paid-tier gate, no keys in clients"
-# step 6 added 2 queues (10), step 7/8 more (12), step 9 push.notify (13): the boot line carries the total
-grep -Eq 'queues: 13' <<<"$WLOG" || fail "worker log does not show 13 queues"
+# step 6 added 2 queues (10), step 7/8 more (12), step 9 push.notify (13), review fixes data.export (14):
+# the boot line carries the total
+grep -Eq 'queues: 14' <<<"$WLOG" || fail "worker log does not show 14 queues"
 W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
 W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
 if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
@@ -321,10 +322,18 @@ curl -fsS -o /dev/null -b "$MOM_JAR" -X DELETE "$BASE/api/share-links/$LINK_ID" 
 # itself, served by a throwaway nginx container with a stub shell (nothing else is touched).
 NGX_NAME="ll-smoke-nginx-$$"
 NGX_PORT="${SMOKE_NGINX_PORT:-18081}"
-mkdir -p "$TMP/html"
+mkdir -p "$TMP/html" "$TMP/snippets"
 echo '<!doctype html><html><head></head><body><div id="root"></div></body></html>' > "$TMP/html/index.html"
+# default.conf includes /etc/nginx/snippets/csp.conf, which the web image renders from
+# docker/nginx/templates/csp.conf.template at start (review-fixes D9): same template, same variables.
 if docker run -d --rm --name "$NGX_NAME" -p "127.0.0.1:$NGX_PORT:80" \
+     -e NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx/snippets \
+     -e NGINX_ENVSUBST_FILTER='^(WEB_CSP_HEADER|WEB_CSP_CONNECT_EXTRA|S3_PUBLIC_ENDPOINT)$' \
+     -e WEB_CSP_HEADER=Content-Security-Policy-Report-Only -e WEB_CSP_CONNECT_EXTRA="" \
+     -e S3_PUBLIC_ENDPOINT=http://localhost:9000 \
      -v "$ROOT/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+     -v "$ROOT/docker/nginx/templates/csp.conf.template:/etc/nginx/templates/csp.conf.template:ro" \
+     -v "$TMP/snippets:/etc/nginx/snippets" \
      -v "$TMP/html:/usr/share/nginx/html:ro" nginx:1.28-alpine >/dev/null 2>&1; then
   ngx_up() { curl -fsS -o /dev/null "http://127.0.0.1:$NGX_PORT/s/probe"; }
   wait_for 20 "throwaway nginx" ngx_up
@@ -334,6 +343,7 @@ if docker run -d --rm --name "$NGX_NAME" -p "127.0.0.1:$NGX_PORT:80" \
   grep -qi '^cache-control: no-store' <<<"$H" || fail "nginx /s/ has no 'Cache-Control: no-store': $H"
   grep -Eqi '^x-robots-tag: noindex' <<<"$H" || fail "nginx /s/ has no 'X-Robots-Tag: noindex': $H"
   grep -qi '^x-frame-options: DENY' <<<"$H" || fail "nginx /s/ lost X-Frame-Options (add_header inheritance)"
+  grep -qi '^content-security-policy-report-only: .*default-src .self.' <<<"$H" || fail "nginx /s/ lost the CSP (add_header inheritance): $H"
   echo "nginx /s/ sends no-referrer, no-store and noindex"
 else
   echo "WARNING: could not start a throwaway nginx:1.28-alpine (image missing and no network?); /s/ header check skipped"
@@ -416,6 +426,28 @@ for u in $(printf '%s' "$DEMO_URLS" | json 'Object.values(j.urls).map(x=>x.thumb
 done
 [ "$(printf '%s' "$DEMO_URLS" | json 'Object.keys(j.urls).length')" = "12" ] || fail "expected thumbnail URLs for 12 demo photos"
 echo "association files, CORS, native sign-in, push device route and 12 demo thumbnails ok"
+
+step "5i. review fixes: member_profiles view, data_exports locked down, Sentry silent without a DSN, worker mail, no CSP in dev, export routes"
+[ "$("${PSQL[@]}" -c "select relkind from pg_class where relname='member_profiles' and relnamespace='public'::regnamespace")" = "v" ] \
+  || fail "member_profiles is not a view"
+[ "$("${PSQL[@]}" -c "select relrowsecurity and relforcerowsecurity from pg_class where relname='data_exports' and relnamespace='public'::regnamespace")" = "t" ] \
+  || fail "data_exports does not have ENABLE+FORCE row level security"
+[ "$("${PSQL[@]}" -c "select has_column_privilege('authenticated','public.data_exports','storage_key','SELECT')")" = "f" ] \
+  || fail "authenticated can read data_exports.storage_key"
+[ "$("${PSQL[@]}" -c "select has_table_privilege('viewer','public.data_exports','SELECT')")" = "f" ] \
+  || fail "the viewer role can read data_exports"
+[ "$("${PSQL[@]}" -c "select count(*) from pg_policies where tablename='profiles' and policyname='profiles_authenticated_select' and qual like '%shares_baby_with%'")" = "0" ] \
+  || fail "profiles is readable by co-members again (member_profiles is the only path)"
+SENTRY_LINES="$("${DC[@]}" logs --no-color api worker 2>&1 | grep -ci sentry || true)"
+[ "$SENTRY_LINES" = "0" ] || fail "$SENTRY_LINES api/worker log line(s) mention sentry although SENTRY_DSN is unset"
+[ "$("${DC[@]}" exec -T worker printenv SMTP_HOST | tr -d '\r')" = "mail" ] || fail "worker SMTP_HOST is not 'mail'"
+WEB_HDRS="$(curl -fsSI "$BASE/" || true)"
+grep -qi '^content-security-policy' <<<"$WEB_HDRS" && fail "the dev web server sends a Content-Security-Policy header (Vite dev must not)"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/babies/$MAYA_ID/exports")" = "401" ] || fail "GET exports without a session is not 401"
+EXPORTS="$(curl -fsS -b "$MOM_JAR" "$BASE/api/babies/$MAYA_ID/exports")" || fail "GET exports as demo-mom failed"
+[ "$(printf '%s' "$EXPORTS" | json 'Array.isArray(j.exports)')" = "true" ] || fail "exports list is not an array: $EXPORTS"
+grep -Eqi 'storage_key|storageKey|X-Amz|https?:' <<<"$EXPORTS" && fail "the exports list leaks a storage key or a URL"
+echo "review-fix wiring ok"
 
 if [ "${SMOKE_SKIP_STORAGE_STOP:-0}" != "1" ]; then
   step "5c. stopping storage degrades the api (503) and the worker (unhealthy)"

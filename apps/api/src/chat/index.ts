@@ -9,6 +9,8 @@
 // Register after auth (the routes use `requireAuth`). The POST route streams over SSE with
 // `reply.hijack()`: the server's `keepAliveTimeout` must exceed the SSE keepalive (15 s) and the
 // request timeout must not cut a turn (plan 2.9). Add `req.body.text` to the pino redact list.
+
+export { requireChatHistoryAccess } from "./access";
 export {
   type AgentDeps,
   type AgentEvent,

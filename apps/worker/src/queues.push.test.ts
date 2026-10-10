@@ -32,7 +32,7 @@ describe("push.notify queue definition", () => {
       expireInSeconds: 300,
     });
     const others = Object.entries(QUEUES).filter(([name]) => name !== JOBS.pushNotify);
-    expect(others).toHaveLength(12);
+    expect(others).toHaveLength(13);
     expect(others.every(([, q]) => q.policy === "exclusive")).toBe(true);
   });
 
@@ -120,6 +120,7 @@ describe("startWorkers: push.notify", () => {
       } as never,
       purge: {} as never,
       sweep: {} as never,
+      dataExport: {} as never,
       ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
       indexer: {
         reindex: vi.fn(async () => ({ indexed: 0 })),

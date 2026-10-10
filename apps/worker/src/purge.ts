@@ -10,6 +10,17 @@ import type { ObjectStorage } from "./storage";
 // being "forgotten". Quarantined photos (CSAM hash match) are never purged automatically: the
 // original is evidence and an operator decides; a trashed baby holding one is deferred too (its
 // prefix delete would destroy the evidence).
+//
+// Review fixes (docs/plans/review-fixes.md 2.3, D5): data exports.
+//   5. Stale exports (a job that died: `running` for > 5 h, past the 4-hour job expiry, or
+//      `queued` for > 1 day) are marked `failed/internal` + audit `export.failed`.
+//   6. Every export ZIP that is no longer downloadable is deleted (all versions), then the row is
+//      marked `purged_at` (a `ready` row becomes `expired`) + audit `export.purged`: past
+//      `expires_at` (incl. early expiry by an admin), failed or cancelled, requester gone
+//      (`requested_by` NULL after account deletion), demoted, left the album or deleted
+//      (`export_requester_is_admin()` false), or the album is in the trash. A purged baby's ZIPs
+//      go with its prefix (step 1) and its rows by cascade.
+//   7. Rows purged more than 30 days ago are deleted.
 
 export const PURGE_BATCH = 100;
 const MAX_BATCHES = 50;
@@ -79,6 +90,48 @@ WHERE f.state IN ('failed', 'aborted')
 ORDER BY f.updated_at, f.id
 LIMIT $1`;
 
+export const STALE_EXPORTS_SQL = `
+SELECT id, baby_id
+FROM data_exports
+WHERE purged_at IS NULL
+  AND ((status = 'running' AND started_at < now() - interval '5 hours')
+       OR (status = 'queued' AND created_at < now() - interval '1 day'))
+  AND id <> ALL($2::uuid[])
+ORDER BY created_at, id
+LIMIT $1`;
+
+export const FAIL_STALE_EXPORT_SQL = `
+UPDATE data_exports SET status = 'failed', error = 'internal', finished_at = now()
+WHERE id = $1 AND purged_at IS NULL
+  AND ((status = 'running' AND started_at < now() - interval '5 hours')
+       OR (status = 'queued' AND created_at < now() - interval '1 day'))`;
+
+export const DUE_EXPORTS_SQL = `
+SELECT e.id, e.baby_id, e.storage_key, e.status
+FROM data_exports e
+LEFT JOIN babies b ON b.id = e.baby_id
+WHERE e.purged_at IS NULL
+  AND e.status IN ('ready', 'failed', 'expired')
+  AND (e.status <> 'ready'
+       OR e.expires_at < now()
+       OR e.requested_by IS NULL
+       OR NOT public.export_requester_is_admin(e.id)
+       OR b.deleted_at IS NOT NULL)
+  AND e.id <> ALL($2::uuid[])
+ORDER BY e.created_at, e.id
+LIMIT $1`;
+
+export const MARK_EXPORT_PURGED_SQL = `
+UPDATE data_exports
+   SET status = CASE WHEN status = 'ready' THEN 'expired' ELSE status END, purged_at = now()
+ WHERE id = $1 AND purged_at IS NULL AND status IN ('ready', 'failed', 'expired')`;
+
+export const DELETE_OLD_EXPORTS_SQL = `
+DELETE FROM data_exports WHERE purged_at < now() - interval '30 days'`;
+
+export const AUDIT_EXPORT_SQL = `
+INSERT INTO audit_log (baby_id, event, metadata) VALUES ($1, $2, $3::jsonb)`;
+
 export interface PurgeDeps {
   pool: PipelinePool;
   storage: ObjectStorage;
@@ -92,6 +145,12 @@ export interface PurgeResult {
   photos: number;
   duplicates: number;
   orphanUploads: number;
+  /** Exports whose job died, marked failed (step 5). */
+  exportsStale: number;
+  /** Export ZIPs deleted and rows marked purged (step 6). */
+  exportsPurged: number;
+  /** Export rows purged > 30 days ago, deleted (step 7). */
+  exportRowsDeleted: number;
   versionsDeleted: number;
   errors: number;
 }
@@ -133,6 +192,9 @@ export async function purgeTrash(deps: PurgeDeps): Promise<PurgeResult> {
     photos: 0,
     duplicates: 0,
     orphanUploads: 0,
+    exportsStale: 0,
+    exportsPurged: 0,
+    exportRowsDeleted: 0,
     versionsDeleted: 0,
     errors: 0,
   };
@@ -224,6 +286,57 @@ export async function purgeTrash(deps: PurgeDeps): Promise<PurgeResult> {
     if (!last || rows.length < batch) break;
     cursor = { at: last.updated_at, id: last.id };
   }
+
+  // 5. Exports whose job died.
+  result.exportsStale = await drain<{ id: string; baby_id: string }>(
+    deps,
+    STALE_EXPORTS_SQL,
+    async (row) =>
+      runAsPipeline(pool, {}, async (c) => {
+        const n = (await c.query(FAIL_STALE_EXPORT_SQL, [row.id])).rowCount ?? 0;
+        if (n > 0) {
+          await c.query(AUDIT_EXPORT_SQL, [
+            row.baby_id,
+            "export.failed",
+            JSON.stringify({ export_id: row.id }),
+          ]);
+        }
+        return n > 0;
+      }),
+    fail("exportId"),
+  );
+
+  // 6. Export ZIPs that can no longer be downloaded: every version, then the row.
+  result.exportsPurged = await drain<{
+    id: string;
+    baby_id: string;
+    storage_key: string;
+    status: string;
+  }>(
+    deps,
+    DUE_EXPORTS_SQL,
+    async (row) => {
+      const n = await storage.deleteAllVersions(row.storage_key);
+      result.versionsDeleted += n;
+      return runAsPipeline(pool, {}, async (c) => {
+        const marked = ((await c.query(MARK_EXPORT_PURGED_SQL, [row.id])).rowCount ?? 0) > 0;
+        if (marked && (row.status === "ready" || n > 0)) {
+          await c.query(AUDIT_EXPORT_SQL, [
+            row.baby_id,
+            "export.purged",
+            JSON.stringify({ export_id: row.id }),
+          ]);
+        }
+        return marked;
+      });
+    },
+    fail("exportId"),
+  );
+
+  // 7. Purged export rows after 30 days.
+  result.exportRowsDeleted = await runAsPipeline(pool, {}, async (c) => {
+    return (await c.query(DELETE_OLD_EXPORTS_SQL)).rowCount ?? 0;
+  });
 
   log.info({ ...result }, "purge: done");
   return result;

@@ -309,6 +309,45 @@ export interface ChatTurnsInsert {
   created_at?: Date;
 }
 
+export interface DataExportsRow {
+  id: string;
+  baby_id: string;
+  requested_by: string | null;
+  include_location: boolean;
+  status: "queued" | "running" | "ready" | "failed" | "expired";
+  error: "storage_error" | "too_large" | "requester_not_admin" | "internal" | null;
+  storage_key: string;
+  photo_count: number | null;
+  photos_done: number;
+  bytes: string | null;
+  created_at: Date;
+  started_at: Date | null;
+  finished_at: Date | null;
+  expires_at: Date;
+  purged_at: Date | null;
+  downloads: number;
+  last_downloaded_at: Date | null;
+}
+
+export interface DataExportsInsert {
+  id?: string;
+  baby_id: string;
+  requested_by?: string | null;
+  include_location?: boolean;
+  status?: "queued" | "running" | "ready" | "failed" | "expired";
+  error?: "storage_error" | "too_large" | "requester_not_admin" | "internal" | null;
+  photo_count?: number | null;
+  photos_done?: number;
+  bytes?: string | null;
+  created_at?: Date;
+  started_at?: Date | null;
+  finished_at?: Date | null;
+  expires_at?: Date;
+  purged_at?: Date | null;
+  downloads?: number;
+  last_downloaded_at?: Date | null;
+}
+
 export interface InvitesRow {
   id: string;
   baby_id: string;
@@ -932,6 +971,7 @@ export interface Tables {
   chat_messages: { row: ChatMessagesRow; insert: ChatMessagesInsert };
   chat_threads: { row: ChatThreadsRow; insert: ChatThreadsInsert };
   chat_turns: { row: ChatTurnsRow; insert: ChatTurnsInsert };
+  data_exports: { row: DataExportsRow; insert: DataExportsInsert };
   invites: { row: InvitesRow; insert: InvitesInsert };
   measurements: { row: MeasurementsRow; insert: MeasurementsInsert };
   milestones: { row: MilestonesRow; insert: MilestonesInsert };
@@ -968,6 +1008,7 @@ export const TABLE_NAMES = [
   "chat_messages",
   "chat_threads",
   "chat_turns",
+  "data_exports",
   "invites",
   "measurements",
   "milestones",

@@ -67,6 +67,19 @@ const proxy = {
 };
 
 export default defineConfig({
+  // Unset DSN becomes a literal "" so the lazy Sentry import in src/lib/telemetry.ts is dead code
+  // and is dropped from the bundle (a web build without VITE_SENTRY_DSN contains no Sentry).
+  define: {
+    "import.meta.env.VITE_SENTRY_DSN": JSON.stringify(process.env.VITE_SENTRY_DSN ?? ""),
+  },
+  build: {
+    rollupOptions: {
+      // @littlelight/shared is a pure-module barrel (zod schemas, constants). Treat it as
+      // side-effect free so the web bundle only keeps what the screens import (server-only env and
+      // telemetry code stays out).
+      treeshake: { moduleSideEffects: (id: string) => !/packages\/shared\/src\//.test(id) },
+    },
+  },
   plugins: [react(), tailwindcss(), aasaJson()],
   server: {
     // `web` is required: GoTrue fetches its email templates from http://web:8080/email-templates/*.

@@ -17,7 +17,7 @@ Functionality** only (no analytics, no advertising, no personalisation, no devel
 Not collected: Coarse Location, Contacts, Health and Fitness, Financial Info, Browsing History,
 Purchases, Usage Data, Diagnostics, Sensitive Info, Device ID, Advertising Data. No face data.
 
-Third-party processing: our AI model provider processes photos and queries for Plus accounts only,
+Third-party processing: our AI model provider processes photos and queries for albums with AI features enabled only,
 as our processor under a data-processing agreement, with training on the data excluded. It is not a
 third-party use for tracking or ads. Server-side error reporting (Sentry) is not part of the app.
 

@@ -165,8 +165,8 @@ export function userAgentLabel(ua: string | null | undefined): string {
 /**
  * `audit_log.event` values: step 3 (auth, invites, members, babies, account), step 4 (uploads,
  * photo moderation, purge, safety), step 5 (details, milestones, measurements), step 6 (AI
- * overrides, AI retry, plan changes, AI budget), step 7 (chat history cleared) and step 8
- * (share links).
+ * overrides, AI retry, plan changes, AI budget), step 7 (chat history cleared), step 8
+ * (share links) and the review-fixes batch (data exports).
  */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
@@ -238,6 +238,20 @@ export const AUDIT_EVENTS = [
   "share_link.sensitive_hidden",
   /** Per-link passcode lock reached (written by the token exchange, `actor_user_id` NULL). */
   "share_link.passcode_locked",
+  // Data export (docs/plans/review-fixes.md 2.2, 2.3, 2.5; FR-10.1). The row's `baby_id` names
+  // the baby; metadata never carries the storage key, bytes, a URL or an email.
+  /** An admin requested an export; metadata `{export_id, include_location}`. */
+  "export.requested",
+  /** The worker finished the ZIP (`actor_user_id` NULL); metadata `{export_id, count}`. */
+  "export.ready",
+  /** The worker gave up (`actor_user_id` NULL); metadata `{export_id}`. */
+  "export.failed",
+  /** The requester minted a download URL; metadata `{export_id}`. */
+  "export.downloaded",
+  /** An admin expired an export early (`DELETE …/exports/:exportId`); metadata `{export_id}`. */
+  "export.expired",
+  /** The hourly sweep deleted the ZIP (`actor_user_id` NULL); metadata `{export_id}`. */
+  "export.purged",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -298,5 +312,9 @@ export const auditMetadataSchema = z.strictObject({
   hours: z.number().int().min(1).max(SHARE_LINK_MAX_TTL_HOURS).optional(),
   /** `share_link.updated`: which settings changed. */
   fields: z.array(shareLinkAuditFieldSchema).min(1).max(SHARE_LINK_AUDIT_FIELDS.length).optional(),
+  /** `export.*`: the `data_exports` row (never its storage key, size or a URL). */
+  export_id: z.uuid().optional(),
+  /** `export.requested`: whether GPS columns were asked for (never a coordinate). */
+  include_location: z.boolean().optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

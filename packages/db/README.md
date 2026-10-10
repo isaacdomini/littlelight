@@ -35,9 +35,9 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `supabase_auth_admin` | yes | GoTrue only; owns `auth.*`. |
 | `littlelight_api` | yes, NOINHERIT | API connection role. Has **no** privileges on app tables: every unit of work must `SET LOCAL ROLE authenticated \| viewer \| service_role`; a query outside that fails with `permission denied`. |
 | `littlelight_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
-| `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). |
+| `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). Reads only its **own** `profiles` row; co-members' names come from the `member_profiles` view (see "Review hardening and data exports"). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link (no parent user ids), the allow-listed columns of `photos`, `photo_derivatives` (thumb/display, and never those of a hidden sensitive photo), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Its only writes go through `viewer_session_check()`. Nothing else, and nothing once the link is expired/revoked or the baby is deleted (see "Sharing (step 8)"). |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables). Never invites, tokens, chat, members, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables; for the FR-10.1 export: `data_exports` progress/result/purge columns, the `babies` profile columns (no billing), `baby_members (baby_id, user_id, role, joined_at)` read-only, EXECUTE on `export_requester_is_admin` / `export_requester_email`). Never invites, tokens, chat, removal requests or `invited_by`, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
 | `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes. Reachable from `littlelight_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
@@ -116,7 +116,9 @@ Notes for API/worker code:
   the API ignores requests older than 7 days); `removal_requested_by` becomes NULL if the
   requesting admin's account is deleted while the request is open. The removal itself is a
   plain `DELETE FROM baby_members` once the target confirms, still subject to
-  `baby_members_keep_last_admin`.
+  `baby_members_keep_last_admin`. Since migration 18 the policies enforce FR-1.5 themselves: an
+  `authenticated` actor can `UPDATE` (demote) or `DELETE` an **admin** row only when it is their
+  own; another admin's row affects 0 rows (no error), so the API must check the row count.
 - Business rules enforced by triggers (all raise `check_violation`, SQLSTATE 23514): max two
   admins, last admin stays, 20 invites/baby/day, free-tier 1,000-photo cap, AI queue and
   `photo_ai` only for approved photos of a paid-tier baby, `shared_photos` only approved live
@@ -128,7 +130,12 @@ Notes for API/worker code:
   (`jsonb_has_gps_keys`: contains `gps`/`latitude`/`longitude`, word-start `geo`, or exactly
   `lat`/`lng`/`lon`; a trigger rather than a CHECK so the rejected row is never echoed into the
   server log as `DETAIL`), upload sessions hold at most 500 files and only their creator may add
-  to them (`upload_files_session_owner`, see "Uploads and ingest").
+  to them (`upload_files_session_owner`, see "Uploads and ingest"), an admin approval pins
+  `approved_by` (`photos_user_update_guard`; its contributor branch raises 42501, not 23514), one
+  export in progress and 3 exports per album per day
+  (`data_exports_rate_limit`), never for a trashed album (`data_exports_baby_live`), and an
+  export's expiry can only be shortened from a user role (`data_exports_user_update_guard`); see
+  "Review hardening and data exports".
 
 ## Session functions (`auth.sessions`)
 
@@ -821,6 +828,92 @@ pushes with no extra code path (the session row disappears or ages out; profiles
 `push_devices.token has an invalid shape`, `push_devices.app_version has an invalid shape` ⇒ 400
 `validation_failed` (the request schema rejects these first).
 
+## Review hardening and data exports
+
+Migrations `1792300000100_review-hardening.sql` and `1792300000200_data-exports.sql`
+(docs/plans/review-fixes.md 2.1, D11–D13; PRD FR-1.5, FR-10.1, "Roles and permissions").
+
+**FR-1.5 in policy text (D11).** `baby_members_authenticated_update` is
+`USING (is_baby_admin(baby_id) AND (role <> 'admin' OR user_id = auth_uid()))`,
+`baby_members_authenticated_delete` is
+`USING (user_id = auth_uid() OR (is_baby_admin(baby_id) AND role <> 'admin'))`. Promoting or
+removing a contributor, stepping down, leaving and confirming a removal request (the target
+deletes their own row) still work; demoting or deleting the other admin directly affects 0 rows.
+
+**Profiles (D12).** `profiles_authenticated_select` is `USING (user_id = auth_uid())`: a self-read
+keeps every granted column (consent versions, timezone, units, `notify_*`), nobody else's row is
+visible. Co-member display data comes only from the view
+
+```sql
+public.member_profiles (user_id uuid, display_name text, relationship_label text)
+  -- WITH (security_barrier); rows: deleted_at IS NULL AND (user_id = auth_uid() OR shares_baby_with(user_id))
+```
+
+`GRANT SELECT` to `authenticated` only (not `viewer`, `pipeline`, `service_role`; under
+`service_role` it returns nothing because `auth_uid()` is NULL). The view is owned by the
+migration superuser, so it reads `profiles` past RLS and its WHERE is the policy. Join it as
+`LEFT JOIN public.member_profiles mp ON mp.user_id = …` wherever API code shows another member's
+name. `pipeline` keeps its 3-column `profiles` grant. Not in the generated types (views are not
+generated).
+
+**Photos approval columns (D13).** `photos_user_update_guard` (BEFORE INSERT OR UPDATE, function
+`photos_user_write_guard`, SECURITY INVOKER) acts only when `current_user = 'authenticated'`:
+
+| Actor | Write | Result |
+| --- | --- | --- |
+| contributor (not admin) | UPDATE changing `is_sensitive`, `approval`, `approved_by` or `approved_at` | **42501** `contributors may only trash their own pending uploads` (same SQLSTATE as the RLS denial it replaces, so the API's 403 mapping holds) |
+| contributor | UPDATE `deleted_at` of own pending upload | allowed (policy unchanged) |
+| admin | UPDATE to `approval = 'approved'` from anything else | `approved_by := auth_uid()`, `approved_at := now()` whatever was supplied |
+| admin | any other UPDATE changing `approved_by` / `approved_at` | 23514 `approved_by and approved_at are set by the database when a photo is approved` |
+| admin | INSERT `approved` with `approved_by` NULL | filled with `auth_uid()` / `now()` (the upload path inserts this shape) |
+| anyone | INSERT `approved` with another `approved_by`, or non-approved with any `approved_by` | `new row violates row-level security policy` (`photos_authenticated_insert`) |
+
+`pipeline`, `service_role`, the superuser and SECURITY DEFINER functions (e.g. the AI sensitive
+sync) are not affected.
+
+**`data_exports` (FR-10.1).** One row per export request; the ZIP is at the generated
+`storage_key = babies/<baby_id>/exports/<id>.zip`. `status` queued → running → ready | failed,
+then expired once purged; `error` storage_error | too_large | requester_not_admin | internal.
+`expires_at` defaults to `now() + 7 days`. ENABLE + FORCE RLS.
+
+| Role | Read | Write |
+| --- | --- | --- |
+| `authenticated` | admins of the baby (both admins see every export, D3): every column **except** `storage_key` (`SELECT *` / `RETURNING *` fail: name columns) | INSERT `(baby_id, requested_by, include_location)` with `is_baby_admin(baby_id) AND requested_by = auth_uid()`; UPDATE `(expires_at, downloads, last_downloaded_at)` as admin, where `expires_at` may only move earlier and the counter only forward; no DELETE |
+| `viewer` | – | – |
+| `pipeline` | all rows, all columns | UPDATE `(status, error, photo_count, photos_done, bytes, started_at, finished_at, purged_at)`; DELETE only rows with `purged_at` older than 30 days |
+| `service_role` | ALL | ALL |
+
+Triggers (fixed messages, 23514): `data_exports_baby_live` `cannot export a trashed album`;
+`data_exports_rate_limit` (locks the baby row `FOR NO KEY UPDATE`) `an export is already in
+progress for this album` (a queued/running row exists; the partial unique index
+`data_exports_one_active_per_baby` is the backstop) and `export rate limit reached: 3 per album
+per day` (≥ 3 rows created in the last 24 h, any status); `data_exports_user_update_guard`
+`an export cannot be extended` / `export download history cannot be rewritten`.
+FKs: `baby_id` ON DELETE CASCADE (baby purge removes the rows), `requested_by` ON DELETE SET NULL
+(account deletion; the hourly purge then deletes the ZIP).
+
+Worker functions (SECURITY DEFINER, pinned `search_path`, EXECUTE to `pipeline` only):
+
+| Function | Returns |
+| --- | --- |
+| `export_requester_is_admin(p_export_id uuid) RETURNS boolean` | true while the requester has a live profile and is an admin of the export's baby; the gate before any GPS decryption |
+| `export_requester_email(p_export_id uuid) RETURNS text` | `auth.users.email` of the requester only when `status IN ('ready','failed')`, the requester is still an admin and the profile is live; else NULL. Never log it |
+
+Export worker read grants added: `babies (name, nickname, birth_date_is_due_date,
+birth_weight_g, birth_length_mm, home_label)` and `baby_members (baby_id, user_id, role,
+joined_at)` with `baby_members_pipeline_select USING (true)`. Everything else it reads
+(`profiles` 3 columns, `photos`, `photo_exif`, `photo_details`, `milestones`, `measurements`,
+`photo_ai`, `photo_ai_overrides`, `audit_log` INSERT with actor NULL) was already granted.
+
+**Retention.**
+
+| Data | Where | Retention |
+| --- | --- | --- |
+| Postgres backups | `pg_dump` by the `backup` service (`docker/backup/pg-backup.sh`) | `BACKUP_RETENTION_DAYS` (default 35) |
+| GoTrue audit log | `auth.audit_log_entries` (GoTrue-owned); payloads hold actor **emails and IP addresses** | **no built-in retention.** Recommended: prune rows older than 90 days (`DELETE FROM auth.audit_log_entries WHERE created_at < now() - interval '90 days'` as the superuser, e.g. from the backup job). Deferred (review-fixes D20); until then it grows forever and every backup carries it |
+| Export ZIPs | MinIO `babies/<id>/exports/` | until `expires_at` (7 days), or earlier on admin expiry, requester removal/deletion or a failed export; removed by `purge.trash` (all versions), which sets `purged_at` |
+| `data_exports` rows | Postgres | deleted by `purge.trash` 30 days after `purged_at`; immediately with the baby |
+
 ## Store-review family (`src/review-family.ts`)
 
 `pnpm db:review-family --email <address> [--confirm-production]` (one transaction;
@@ -992,6 +1085,8 @@ PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(distinct photo_id) from photo_derivatives; select count(*) from photo_derivatives where photo_id = '00000000-0000-4000-8000-000000000304'; rollback;"
 # viewer gets nothing on upload tables: permission denied for table upload_sessions
 PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from upload_sessions; rollback;"
+# FR-1.5: mom cannot demote or delete dad (UPDATE 0, DELETE 0); co-member profiles only via member_profiles (0, then 3)
+PGPASSWORD=dev $PSQL -U littlelight_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-000000000001\",\"role\":\"authenticated\"}',true); update baby_members set role='contributor' where user_id='00000000-0000-4000-8000-000000000002'; delete from baby_members where user_id='00000000-0000-4000-8000-000000000002'; select count(*) from profiles where user_id <> auth_uid(); select count(*) from member_profiles; rollback;"
 # Home label in SQL, pipeline only: Home, then <null> 200 m away; never a plaintext coordinate in the result
 PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; select set_config('app.data_key','dev-only-data-encryption-key-32-chars-min',true); select home_place_label('00000000-0000-4000-8000-000000000100', 47.6062, -122.3321), home_place_label('00000000-0000-4000-8000-000000000100', 47.6080, -122.3321); rollback;"
 ```
@@ -1017,3 +1112,5 @@ PGPASSWORD=dev $PSQL -U littlelight_worker -c "begin; set local role pipeline; s
 | `1792100000100_sharing-v1.sql` | `share_links.ttl_hours`, `token_rotated_at` (DB-maintained), `has_passcode` (generated); `share_links_shape` (+ ttl 1..720, expiry ≤ 30 days, hash format), `share_links_cap` (20/baby), `share_links_lifecycle` (no renew/un-revoke of a revoked link with the old token), `share_links_end_sessions`; `viewer_sessions.revoked_at` + `viewer_sessions_guard` + `viewer_session_check(uuid)`; `shared_photo_exclusions` (ENABLE+FORCE RLS, guard); `shared_photos.sensitive_released_at/_by`, narrowed user UPDATE grant, viewer column grant, `shared_photos_pipeline_delete` (rule rows); `shared_photos_gate` hardened (`FOR SHARE`, quarantine, analysed-only / exclusions / no release for rule rows, release normalisation); `photos_sensitive_unshare_rules` also clears releases; `viewer_link_id()`, `viewer_photo_ids()`, `viewer_media_photo_ids()`, `viewer_can_see_media(uuid)` and the four viewer policies rewritten on them; `share_rules.evaluated_at` (pipeline UPDATE), narrowed user grants, updated_at on rule columns only, `share_rules_shape` (tags, include tag, paid plan); `share_passcode_failures` (service_role only) + `share_passcode_lock_state(uuid, bytea)` + `share_link_passcode_locked(uuid)` | drop the new tables, functions, triggers, columns, index and policies; restore the step-2 gate, unshare trigger, viewer policies (photos: step 4), shared_photos/share_rules grants and policies, share_rules updated_at trigger, and the step-5 `share_links_shape`, verbatim |
 | `1792200000100_native-push.sql` | guard (`auth.sessions`); `profiles.notify_photos_analyzed/notify_share_viewed` (default true, own-row UPDATE grant); `push_devices` (ENABLE+FORCE RLS, owner SELECT of safe columns + DELETE, unique `digest(token,'sha256')`, `push_devices_shape`) and `push_deliveries` (ENABLE+FORCE RLS, service_role only); internal `push_session_live`, `push_claims_session_id`; `register_push_device`, `unregister_push_devices_for_session` (authenticated); `push_targets`, `push_photos_analyzed_count` (pipeline/service_role), `push_link_baby`, `push_record_delivery` (pipeline) | drop the functions, both tables and the shape function; revoke and drop the two `profiles` columns |
 | `1792200000200_photo-ai-tripwire-detach.sql` | `photo_ai_paid_tier_tripwire` exempts exactly one UPDATE shape: `batch_id` becomes NULL and every other column except `updated_at` is unchanged (whole-row jsonb compare), so deleting an `ai_batches` row (FK `ON DELETE SET NULL`) works when the batch holds photos of a free/lapsed/trashed baby; every other INSERT/UPDATE for such a baby is still refused (23514, same fixed message) | restore the step-2 tripwire body verbatim |
+| `1792300000100_review-hardening.sql` | FR-1.5 in `baby_members_authenticated_update` / `_delete` (an admin row only by its owner); `profiles_authenticated_select` self-only + `member_profiles` view (security_barrier, 3 columns, live profiles, `authenticated` only); `photos_user_write_guard` + `photos_user_update_guard` trigger (contributors cannot touch approval/sensitivity columns; admin approval pins `approved_by`/`approved_at`; approved INSERT without approver gets the actor); `photos_authenticated_insert` requires `approved_by = auth_uid()` for approved rows and NULL otherwise | restore the step-2/4 policies verbatim; drop trigger, function and view |
+| `1792300000200_data-exports.sql` | guard (`auth.users`); `data_exports` (ENABLE+FORCE RLS, generated `storage_key` not granted to `authenticated`, 5 indexes incl. `data_exports_one_active_per_baby`); `data_exports_baby_live`, `data_exports_rate_limit`, `data_exports_user_update_guard` triggers; `export_requester_is_admin`, `export_requester_email` (pipeline only); pipeline read grants on `babies` profile columns and `baby_members (baby_id, user_id, role, joined_at)` + `baby_members_pipeline_select` | drop the policy and revoke the two grants; drop functions, table, trigger functions |

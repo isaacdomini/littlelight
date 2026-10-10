@@ -3,9 +3,10 @@ import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
 import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
 import { createPool, createS3Client, errorCategory } from "./clients";
-import { ConfigError, loadConfig } from "./config";
+import { ConfigError, loadConfig, mailConfigOf } from "./config";
 import { demoMediaEnabled, ensureDemoMedia } from "./demo/media";
 import { createDiskMonitor } from "./disk";
+import { createExportMailer, type ExportMailer } from "./email/mailer";
 import {
   createAiQueueAgeSampler,
   createSearchStatsSampler,
@@ -25,6 +26,7 @@ import {
 } from "./queues";
 import { createAutoSharer } from "./sharing/autoshare";
 import { createStorage } from "./storage";
+import { captureJobError, closeTelemetry, initTelemetry } from "./telemetry";
 import { WORKER_VERSION } from "./version";
 
 // Worker entry (docs/plans/step-1.md 2.9, docs/plans/step-4.md 2.5–2.9). pg-boss runs as
@@ -43,7 +45,11 @@ import { WORKER_VERSION } from "./version";
 // enqueues `photos_analyzed`. Dev only (docs/plans/step-9.md 2.11): with SEED_DEMO_FAMILY=true and
 // NODE_ENV !== production, `ensureDemoMedia()` renders the seeded demo photos' originals and
 // derivatives into MinIO after the workers start, in the background (never delays readiness;
-// a failure is one warning and the next start retries).
+// a failure is one warning and the next start retries). Review fixes
+// (docs/plans/review-fixes.md 2.3, 2.4, 2.6): Sentry is initialised first (only with
+// SENTRY_DSN; errors only, scrubbed), the export mailer is created from the SMTP settings (none
+// outside production ⇒ exports complete and log `emailed: false`), and `data.export` is served
+// with the data key, `EXPORT_MAX_BYTES` and the streaming storage.
 
 function readConfig() {
   try {
@@ -58,6 +64,7 @@ function readConfig() {
 }
 
 const config = readConfig();
+initTelemetry(config);
 const log = createLogger(config);
 const id = workerId();
 
@@ -75,8 +82,9 @@ try {
 // cron jobs and the AI flush/poll/backfill handlers (+2, docs/plans/step-6.md 2.7), and the
 // search reindex/reconcile/backfill handlers (+1, docs/plans/step-7.md 2.7), and the share
 // apply/reconcile handlers (+1, docs/plans/step-8.md 2.8), and the push.notify handler and the
-// reindex push hook (+1, docs/plans/step-9.md 2.8).
-const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 9);
+// reindex push hook (+1, docs/plans/step-9.md 2.8), and the data.export handler (+1,
+// docs/plans/review-fixes.md 2.3: short transactions only, never one held across the stream).
+const pool = createPool(config, `littlelight-worker:${id}`, config.INGEST_CONCURRENCY + 10);
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
 const s3 = createS3Client(config);
 const storage = createStorage(s3, config.S3_BUCKET);
@@ -91,7 +99,10 @@ const boss = new PgBoss({
   application_name: `littlelight-worker-boss:${id}`,
   useListenNotify: true,
 });
-boss.on("error", (err) => log.error({ err: errorCategory(err) }, "pg-boss error"));
+boss.on("error", (err) => {
+  log.error({ err: errorCategory(err) }, "pg-boss error");
+  captureJobError("pg-boss", err);
+});
 boss.on("warning", (w) => log.warn({ warning: errorCategory(w) }, "pg-boss warning"));
 
 const aiPipeline = createAiPipeline({
@@ -114,6 +125,9 @@ const indexer = createSearchIndexer({
 const autoSharer = createAutoSharer({ pool, log });
 
 const pushSender = createPushSender(config, log);
+
+const mailConfig = mailConfigOf(config);
+const exportMailer: ExportMailer | null = mailConfig ? createExportMailer(mailConfig, log) : null;
 
 const heartbeat = startHeartbeat(
   {
@@ -151,12 +165,14 @@ async function shutdown(signal: string, code = 0) {
     await heartbeat.stop();
     await boss.stop({ graceful: true, timeout: 30_000 });
     await pushSender.close();
+    exportMailer?.close();
     await pool.end();
     s3.destroy();
   } catch (err) {
     log.error({ err: errorCategory(err) }, "error during shutdown");
     code = 1;
   }
+  await closeTelemetry();
   process.exit(code);
 }
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -182,11 +198,24 @@ try {
       minGapMin: config.PUSH_MIN_GAP_MIN,
       photosDebounceSec: config.PUSH_PHOTOS_DEBOUNCE_SEC,
     },
+    dataExport: {
+      pool,
+      storage,
+      dataKey: config.DATA_ENCRYPTION_KEY,
+      maxBytes: config.EXPORT_MAX_BYTES,
+      mailer: exportMailer,
+      log,
+    },
     log,
     ingestConcurrency: config.INGEST_CONCURRENCY,
   });
   log.info(
-    { workerId: id, version: WORKER_VERSION, ingestConcurrency: config.INGEST_CONCURRENCY },
+    {
+      workerId: id,
+      version: WORKER_VERSION,
+      ingestConcurrency: config.INGEST_CONCURRENCY,
+      exportMail: exportMailer ? "smtp" : "off",
+    },
     "worker started",
   );
   if (demoMediaEnabled(process.env, config.NODE_ENV)) {
@@ -196,5 +225,6 @@ try {
   }
 } catch (err) {
   log.error({ err: errorCategory(err) }, "worker failed to start");
+  captureJobError("startup", err);
   await shutdown("startup-failure", 1);
 }

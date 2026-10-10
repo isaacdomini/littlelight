@@ -86,8 +86,9 @@ export type HealthzPublicResponse = z.infer<typeof healthzPublicResponseSchema>;
 const healthzAnyResponseSchema = z.union([healthzResponseSchema, healthzPublicResponseSchema]);
 
 /**
- * True when the TCP peer is this host. Uses the raw socket address, never `request.ip`:
- * with `trustProxy: true` that comes from `X-Forwarded-For`, which any client can set.
+ * True when the TCP peer is this host. Uses the raw socket address, never `request.ip`: behind
+ * the proxy (`trustProxyHop`) that is the proxy's X-Forwarded-For entry, and a request that
+ * reaches port 3000 directly can set X-Forwarded-For itself.
  */
 export function isLoopbackSocket(request: Pick<FastifyRequest, "raw">): boolean {
   const addr = request.raw.socket?.remoteAddress;

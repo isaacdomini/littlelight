@@ -4,6 +4,9 @@ import {
   aiBackfillJobSchema,
   aiFlushJobSchema,
   aiPollJobSchema,
+  DATA_EXPORT_JOB,
+  dataExportJobSchema,
+  dataExportSingletonKey,
   ingestJobSchema,
   JOBS,
   REINDEX_REASONS,
@@ -34,8 +37,9 @@ describe("JOBS", () => {
       shareApply: "share.apply",
       shareReconcile: "share.reconcile",
       pushNotify: "push.notify",
+      dataExport: "data.export",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(13);
+    expect(new Set(Object.values(JOBS)).size).toBe(14);
   });
 });
 
@@ -192,5 +196,34 @@ describe("searchBackfillJobSchema", () => {
     ["null", null],
   ])("rejects %s", (_n, data) => {
     expect(searchBackfillJobSchema.safeParse(data).success).toBe(false);
+  });
+});
+
+describe("data.export job", () => {
+  const job = {
+    exportId: "22222222-2222-4222-8222-222222222222",
+    babyId: "11111111-1111-4111-8111-111111111111",
+  };
+
+  it("is the JOBS.dataExport queue, keyed by the export id", () => {
+    expect(DATA_EXPORT_JOB).toBe("data.export");
+    expect(JOBS.dataExport).toBe(DATA_EXPORT_JOB);
+    expect(dataExportSingletonKey(job)).toBe(job.exportId);
+  });
+
+  it("accepts exactly the two ids", () => {
+    expect(dataExportJobSchema.parse(job)).toEqual(job);
+  });
+
+  it.each([
+    ["include_location (the worker reads the row)", { ...job, includeLocation: true }],
+    ["a storage key", { ...job, key: "babies/x/exports/y.zip" }],
+    ["an email", { ...job, email: "mom@example.com" }],
+    ["a missing export id", { babyId: job.babyId }],
+    ["a missing baby id", { exportId: job.exportId }],
+    ["a non-uuid export id", { ...job, exportId: "e1" }],
+    ["null", null],
+  ])("rejects %s", (_n, data) => {
+    expect(dataExportJobSchema.safeParse(data).success).toBe(false);
   });
 });

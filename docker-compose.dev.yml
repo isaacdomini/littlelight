@@ -71,6 +71,10 @@
 # every other service that loads .env.local. Live push from a laptop additionally needs
 # PUSH_PROVIDER=live in the shell. The worker renders the demo family's images on start while
 # SEED_DEMO_FAMILY=true (.env.dev).
+# Review fixes (docs/plans/review-fixes.md 2.3-2.6, 2.11): the worker sends "export ready /
+# failed" mail to Mailpit with the api's SMTP values. Sentry is off (no DSN anywhere; see
+# x-dev-no-sentry). The Content-Security-Policy header is production nginx only: the Vite dev
+# server sends none (D9), so check it against the prod web image (.env.example, "Web Content-Security-Policy").
 name: littlelight-dev
 
 x-dev: &dev
@@ -112,8 +116,8 @@ x-dev-shared:
   # Host in presigned URLs (api signer; worker config). For a phone on the LAN put
   # S3_PUBLIC_ENDPOINT=http://<laptop-lan-ip>:9000 in the shell or the git-ignored `.env`.
   s3-public-endpoint: &dev-s3-public-endpoint ${S3_PUBLIC_ENDPOINT:-http://localhost:${STORAGE_PORT:-9000}}
-  # Mailpit (SMTP :1025, no auth). GoTrue (codes) and the API (invites, new-device alerts)
-  # send from the same address.
+  # Mailpit (SMTP :1025, no auth). GoTrue (codes), the API (invites, new-device alerts) and the
+  # worker (export ready/failed) send from the same address.
   smtp-host: &dev-smtp-host mail
   smtp-port: &dev-smtp-port "1025"
   mail-from: &dev-mail-from noreply@littlelight.local
@@ -181,6 +185,13 @@ x-dev-no-review-account: &dev-no-review-account
   REVIEW_ACCOUNT_EMAIL: ""
   REVIEW_ACCOUNT_CODE_HASH: ""
 
+# Sentry (docs/plans/review-fixes.md 2.6, D8): off in dev (.env.dev sets nothing). A
+# SENTRY_DSN / SENTRY_ENVIRONMENT put in .env.local reaches api and worker only; blanked on
+# migrate and web. The browser SDK reads VITE_SENTRY_DSN (Vite dev server; see .env.dev).
+x-dev-no-sentry: &dev-no-sentry
+  SENTRY_DSN: ""
+  SENTRY_ENVIRONMENT: ""
+
 services:
   db:
     image: pgvector/pgvector:0.8.7-pg17
@@ -224,7 +235,7 @@ services:
     <<: [*dev, *dev-db-tools]
     command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
     environment:
-      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account]
+      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry]
       DATA_ENCRYPTION_KEY: *dev-data-encryption-key
     volumes:
       - ./packages/db/src:/repo/packages/db/src:ro
@@ -414,8 +425,8 @@ services:
       # tsx, so only the imported source graph is polled. Override from the shell if needed.
       CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-1}
       CHOKIDAR_INTERVAL: ${CHOKIDAR_INTERVAL:-500}
-      # Auth + mail (docs/plans/step-3.md 2.8). The api is the only app service with SMTP; the
-      # worker gets none. AUTH_INTERNAL_URL and the optional TURNSTILE_* keys come from .env.dev /
+      # Auth + mail (docs/plans/step-3.md 2.8). The worker gets the same SMTP values (export
+      # emails). AUTH_INTERNAL_URL and the optional TURNSTILE_* keys come from .env.dev /
       # .env.local; these must match GoTrue, so they are pinned here.
       PUBLIC_URL: *dev-public-url
       AUTH_APPLE_ENABLED: *dev-apple-enabled
@@ -525,6 +536,14 @@ services:
       # renders the seeded demo photos' originals + derivatives into MinIO on start (dev only,
       # idempotent, never blocks readiness). The store-review account is api-only
       # (*dev-no-review-account).
+      # Data export (docs/plans/review-fixes.md 2.3, 2.4): "export ready/failed" emails go to
+      # Mailpit like the api's (same anchors). EXPORT_MAX_BYTES is a Compose INTERPOLATION
+      # variable (empty => 100 GiB, minimum 1 GiB).
+      SMTP_HOST: *dev-smtp-host
+      SMTP_PORT: *dev-smtp-port
+      SMTP_SECURE: "false"
+      MAIL_FROM: *dev-mail-from
+      EXPORT_MAX_BYTES: ${EXPORT_MAX_BYTES:-}
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -561,7 +580,7 @@ services:
     command: ["pnpm", "--filter", "@littlelight/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
     init: true
     environment:
-      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account]
+      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry]
     volumes:
       - ./apps/mobile-web/src:/repo/apps/mobile-web/src
       - ./packages/shared/src:/repo/packages/shared/src

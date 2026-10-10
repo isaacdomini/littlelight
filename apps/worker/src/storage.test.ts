@@ -239,3 +239,55 @@ describe("putObject / multipart", () => {
     expect(client.calls[0]?.input).not.toHaveProperty("Prefix");
   });
 });
+
+describe("getObjectStream", () => {
+  it("returns a Node stream without buffering, and reads the same bytes", async () => {
+    const { Readable } = await import("node:stream");
+    const client = s3(() => ({ Body: Readable.from([Buffer.from("ab"), Buffer.from("cd")]) }));
+    const stream = await createStorage(client, "b").getObjectStream("k");
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(c as Buffer);
+    expect(Buffer.concat(chunks).toString()).toBe("abcd");
+    expect(client.calls.map((c) => c.name)).toEqual(["GetObject"]);
+    expect(client.calls[0]?.input).toMatchObject({ Bucket: "b", Key: "k" });
+  });
+
+  it("accepts a body that only offers a web stream", async () => {
+    const web = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("web"));
+        c.close();
+      },
+    });
+    const client = s3(() => ({ Body: { transformToWebStream: () => web } }));
+    const stream = await createStorage(client, "b").getObjectStream("k");
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(Buffer.from(c as Uint8Array));
+    expect(Buffer.concat(chunks).toString()).toBe("web");
+  });
+
+  it("a missing body or an SDK error is a StorageError carrying a safe code only", async () => {
+    await expect(
+      createStorage(
+        s3(() => ({})),
+        "b",
+      ).getObjectStream("k"),
+    ).rejects.toMatchObject({ code: "EmptyBody" });
+    const nf = s3(() => {
+      throw awsError("NoSuchKey");
+    });
+    const err = await createStorage(nf, "b")
+      .getObjectStream("k")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(StorageError);
+    expect(err.code).toBe("NoSuchKey");
+    expect(String(err.message)).not.toContain("X-Amz-Signature");
+  });
+
+  it("an unsupported body type fails closed", async () => {
+    const odd = s3(() => ({ Body: { nope: true } }));
+    await expect(createStorage(odd, "b").getObjectStream("k")).rejects.toMatchObject({
+      code: "UnsupportedBody",
+    });
+  });
+});

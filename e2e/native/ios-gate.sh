@@ -127,7 +127,21 @@ for k in NSLocationWhenInUseUsageDescription NSLocationAlwaysUsageDescription NS
   "$PB" -c "Print :$k" "$APP/Info.plist" >/dev/null 2>&1 && fail "$k is declared (the app must not ask for it)" || pass "$k is not declared"
 done
 "$PB" -c 'Print :NSAppTransportSecurity:NSAllowsArbitraryLoads' "$APP/Info.plist" 2>/dev/null | grep -qi true && fail "ATS allows arbitrary loads" || pass "ATS: no arbitrary loads"
-"$PB" -c 'Print :CFBundleURLTypes' "$APP/Info.plist" 2>/dev/null | grep -q "littlelight" && pass "debug URL scheme littlelight:// registered" || fail "no littlelight:// URL scheme"
+# The Debug product is built from App/Info-Debug.plist (debug.xcconfig); Release from App/Info.plist
+# (release.xcconfig), which has neither key (review-fixes D17). The built Debug bundle names its
+# plist Info.plist whichever source it came from, so the reads above and below stay on $APP.
+"$PB" -c 'Print :CFBundleURLTypes' "$APP/Info.plist" 2>/dev/null | grep -q "littlelight" && pass "debug URL scheme littlelight:// registered (Debug build)" || fail "no littlelight:// URL scheme in the Debug build"
+"$PB" -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$APP/Info.plist" 2>/dev/null | grep -qi true && pass "ATS: local networking allowed (Debug build)" || fail "ATS NSAllowsLocalNetworking missing from the Debug build"
+SRC=apps/mobile-web/ios/App/App
+check "plutil -lint Info-Debug.plist (source)" plutil -lint "$SRC/Info-Debug.plist"
+check "plutil -lint Info.plist (source, Release)" plutil -lint "$SRC/Info.plist"
+for k in CFBundleURLTypes NSAppTransportSecurity; do
+  "$PB" -c "Print :$k" "$SRC/Info.plist" >/dev/null 2>&1 && fail "release Info.plist declares $k (debug-only)" || pass "release Info.plist has no $k"
+  "$PB" -c "Print :$k" "$SRC/Info-Debug.plist" >/dev/null 2>&1 && pass "Info-Debug.plist declares $k" || fail "Info-Debug.plist is missing $k"
+done
+grep -q 'App/Info-Debug.plist' apps/mobile-web/ios/debug.xcconfig && pass "debug.xcconfig points at Info-Debug.plist" || fail "debug.xcconfig does not use Info-Debug.plist"
+grep -q 'App/Info.plist' apps/mobile-web/ios/release.xcconfig && ! grep -q 'Info-Debug' apps/mobile-web/ios/release.xcconfig && pass "release.xcconfig points at Info.plist" || fail "release.xcconfig does not use Info.plist"
+check "pnpm check:ios-plists (Info-Debug.plist = Info.plist + the two debug keys)" pnpm --filter @littlelight/mobile-web check:ios-plists
 "$PB" -c 'Print :NSPrivacyTracking' "$APP/PrivacyInfo.xcprivacy" 2>/dev/null | grep -qi false && pass "PrivacyInfo: NSPrivacyTracking = false" || fail "PrivacyInfo: NSPrivacyTracking is not false"
 ENT="$(otool -arch x86_64 -s __TEXT __entitlements "$APP/App" 2>/dev/null | awk 'NR>2{$1="";print}' | tr -d ' \n' | xxd -r -p 2>/dev/null)"
 printf '%s' "$ENT" > "$OUT/entitlements.xml"

@@ -1,4 +1,7 @@
 import {
+  type DataExportJob,
+  dataExportJobSchema,
+  dataExportSingletonKey,
   type IngestJob,
   ingestJobSchema,
   JOBS,
@@ -50,6 +53,13 @@ import { errorCategory } from "../routes/healthz";
 // worker's `short` queue, so a burst coalesces into one queued job; `startAfter` is the debounce
 // (`PUSH_SHARE_DEBOUNCE_SEC` / `PUSH_PHOTOS_DEBOUNCE_SEC`). A lost send loses one notification
 // (no reconcile: pushes are best effort).
+//
+// Review fixes (docs/plans/review-fixes.md 2.2, 2.5) add `data.export {exportId, babyId}`
+// (`enqueueDataExport`): sent after the request's transaction committed, outside `runAs`. The
+// strict `dataExportJobSchema` carries the two ids only (never a storage key, URL, email or the
+// location flag: the worker re-reads the row). `singletonKey = exportId` on the worker's
+// `exclusive` queue; 1 retry after 60 s; 4-hour expiry. A failed send is NOT repaired by a
+// reconcile: the route marks the row `failed/internal` and answers 503, so the admin can retry.
 
 /** Per-photo ingest options (plan 2.5): one queued copy per photo, 3 retries with backoff. */
 export const INGEST_SEND_OPTIONS = Object.freeze({
@@ -87,6 +97,17 @@ export const SHARE_APPLY_SEND_OPTIONS = Object.freeze({
 export const PUSH_SEND_OPTIONS = Object.freeze({
   retryLimit: 2,
   expireInSeconds: 300,
+}) satisfies SendOptions;
+
+/**
+ * `data.export` options (2.2): the worker's queue is `exclusive` with `singletonKey = exportId`,
+ * one retry 60 s later (storage errors only; the handler never rethrows for `too_large` /
+ * `requester_not_admin`), 4-hour expiry (a 50 GB album streams in ~17 min).
+ */
+export const DATA_EXPORT_SEND_OPTIONS = Object.freeze({
+  retryLimit: 1,
+  retryDelay: 60,
+  expireInSeconds: 14_400,
 }) satisfies SendOptions;
 
 /** Debounce per push kind, in seconds (`PUSH_PHOTOS_DEBOUNCE_SEC` / `PUSH_SHARE_DEBOUNCE_SEC`). */
@@ -152,6 +173,17 @@ export interface JobQueue {
    * `createJobQueue` always implements it and `app.jobs` always has it.
    */
   enqueuePush?(job: PushNotifyJob): Promise<boolean>;
+  /**
+   * Validate and enqueue `data.export` (singletonKey = exportId, `DATA_EXPORT_SEND_OPTIONS`).
+   * Same contract: `true` when accepted (or an identical job is already queued), `false` after a
+   * failed retry (logged by category and job name only), never throws for transport errors;
+   * throws only for an invalid payload. Call only after the export row committed, outside
+   * `runAs`. On `false` the caller marks the row `failed/internal` (nothing re-sends it).
+   *
+   * Optional in this interface only so job-queue stubs written before this batch still
+   * type-check; `createJobQueue` always implements it and `app.jobs` always has it.
+   */
+  enqueueDataExport?(job: DataExportJob): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -284,6 +316,16 @@ export function createJobQueue(opts: JobQueueOptions): AppJobQueue {
         "push enqueue failed; this notification is skipped",
       );
     },
+    async enqueueDataExport(input) {
+      const job = dataExportJobSchema.parse(input);
+      return sendWithRetry(
+        JOBS.dataExport,
+        job,
+        dataExportSingletonKey(job),
+        DATA_EXPORT_SEND_OPTIONS,
+        "data export enqueue failed; the export is marked failed",
+      );
+    },
     async close() {
       closed = true;
       const b = boss ?? (starting ? await starting.catch(() => null) : null);
@@ -316,14 +358,18 @@ export async function enqueueReindexAll(
 }
 
 /**
- * `jobs` with every sender present. A stub without `enqueueShareApply` / `enqueuePush` gets one
+ * `jobs` with every sender present. A stub without `enqueueShareApply` / `enqueuePush` /
+ * `enqueueDataExport` gets one
  * that validates the payload (a bad payload still throws, as in production), logs by job name
  * only and resolves `false` (the "not accepted" result). Exported for tests.
  */
 export function withAllSenders(jobs: JobQueue, log: Pick<FastifyBaseLogger, "warn">): AppJobQueue {
-  if (jobs.enqueueShareApply && jobs.enqueuePush) return jobs as AppJobQueue;
+  if (jobs.enqueueShareApply && jobs.enqueuePush && jobs.enqueueDataExport) {
+    return jobs as AppJobQueue;
+  }
   const shareApply = jobs.enqueueShareApply?.bind(jobs);
   const push = jobs.enqueuePush?.bind(jobs);
+  const dataExport = jobs.enqueueDataExport?.bind(jobs);
   return {
     enqueueIngest: (job) => jobs.enqueueIngest(job),
     enqueueReindex: (job) => jobs.enqueueReindex(job),
@@ -339,6 +385,13 @@ export function withAllSenders(jobs: JobQueue, log: Pick<FastifyBaseLogger, "war
       (async (input) => {
         pushNotifyJobSchema.parse(input);
         log.warn({ job: PUSH_NOTIFY_JOB }, "job queue has no push.notify sender; not enqueued");
+        return false;
+      }),
+    enqueueDataExport:
+      dataExport ??
+      (async (input) => {
+        dataExportJobSchema.parse(input);
+        log.warn({ job: JOBS.dataExport }, "job queue has no data.export sender; not enqueued");
         return false;
       }),
     close: () => jobs.close(),

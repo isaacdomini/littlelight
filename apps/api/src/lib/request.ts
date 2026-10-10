@@ -1,4 +1,4 @@
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import {
   CLIENT_HEADER,
   type ClientKind,
@@ -8,7 +8,9 @@ import {
 import type { FastifyRequest } from "fastify";
 
 // Per-request client facts (docs/plans/step-3.md 2.2, 2.3). Hops: Cloudflare → cloudflared →
-// nginx (prod) or Vite (dev) → api; port 3000 is never public, so `trustProxy: true` is safe.
+// nginx (prod) or Vite (dev) → api; port 3000 is never public. Fastify trusts exactly that last
+// hop (`trustProxyHop`, docs/plans/review-fixes.md D10), so a client's own X-Forwarded-For
+// entries cannot choose `request.ip`.
 // IPs feed rate limits and GoTrue only: never write them to logs, audit metadata or responses.
 
 type Req = Pick<FastifyRequest, "headers" | "ip">;
@@ -22,12 +24,44 @@ function header(request: Req, name: string): string | undefined {
 
 /**
  * Client IP: `CF-Connecting-IP` when present and a valid IP literal, else Fastify's `request.ip`
- * (X-Forwarded-For aware with `trustProxy: true`).
+ * (the right-most X-Forwarded-For entry, i.e. the peer the proxy saw: `trustProxyHop`).
+ * `CF-Connecting-IP` is set by Cloudflare, or by nginx from `$remote_addr` when absent; without
+ * Cloudflare in front a client can still forge it (documented in `.env.example`).
  */
 export function clientIp(request: Req): string {
   const cf = header(request, "cf-connecting-ip");
   if (cf && isIP(cf) !== 0) return cf;
   return request.ip;
+}
+
+/** Loopback and private ranges: where the proxy in front of the api (nginx / Vite) connects from. */
+const PROXY_PEERS = new BlockList();
+PROXY_PEERS.addSubnet("127.0.0.0", 8, "ipv4");
+PROXY_PEERS.addSubnet("10.0.0.0", 8, "ipv4");
+PROXY_PEERS.addSubnet("172.16.0.0", 12, "ipv4");
+PROXY_PEERS.addSubnet("192.168.0.0", 16, "ipv4");
+PROXY_PEERS.addAddress("::1", "ipv6");
+PROXY_PEERS.addSubnet("fc00::", 7, "ipv6");
+
+/** True for a loopback or private (RFC 1918 / ULA) address, IPv4-mapped IPv6 included. */
+export function isProxyPeerAddress(address: string): boolean {
+  const v4 = address.startsWith("::ffff:") ? address.slice("::ffff:".length) : address;
+  const family = isIP(v4);
+  if (family === 4) return PROXY_PEERS.check(v4, "ipv4");
+  if (family === 6) return PROXY_PEERS.check(v4, "ipv6");
+  return false;
+}
+
+/**
+ * Fastify `trustProxy` (docs/plans/review-fixes.md 2.11, D10: "trust exactly one hop"). Only the
+ * immediate TCP peer (hop 0) is trusted, and only when it is a loopback/private address (the
+ * nginx or Vite container); `request.ip` is then the right-most X-Forwarded-For entry, which
+ * nginx appends from `$remote_addr`. Entries a client prepends are never reached. A numeric
+ * `trustProxy: 1` is not used: Fastify 5.12 treats any number as "trust nothing" (and its types
+ * reject it), which would make `request.ip` the proxy's own address for every client.
+ */
+export function trustProxyHop(address: string, hop: number): boolean {
+  return hop === 0 && isProxyPeerAddress(address);
 }
 
 const COUNTRY = /^[A-Z0-9]{2}$/;

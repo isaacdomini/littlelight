@@ -3,12 +3,16 @@ import {
   databaseEnvSchema,
   EMBED_DIMS,
   encryptionEnvSchema,
+  exportEnvSchema,
   ingestEnvSchema,
   jwtEnvSchema,
   logEnvSchema,
+  type MailEnv,
+  mailEnvSchema,
   pushEnvSchema,
   s3EnvSchema,
   searchEnvSchema,
+  sentryEnvSchema,
   shareEnvSchema,
 } from "@littlelight/shared";
 import { z } from "zod";
@@ -29,7 +33,11 @@ import { z } from "zod";
 // `shareEnvSchema`: `SHARE_RECONCILE_CRON` (docs/plans/step-8.md 2.8; `SHARE_MEDIA_URL_TTL_SEC` is
 // the api's and never fails worker boot). Step 9 adds `pushEnvSchema` as-is (docs/plans/step-9.md
 // 2.8, 2.10): `PUSH_PROVIDER` (none|fake|live; `fake` fails boot in production), APNS_*/FCM_*
-// (secrets: never logged), the `PUSH_*_URL` overrides and the debounce/gap settings.
+// (secrets: never logged), the `PUSH_*_URL` overrides and the debounce/gap settings. Review fixes
+// (docs/plans/review-fixes.md 2.2, 2.4, 2.6) add `EXPORT_MAX_BYTES` (`exportEnvSchema`), Sentry
+// (`sentryEnvSchema`: `SENTRY_DSN` unset ⇒ off) and the api's SMTP settings (`mailEnvSchema`) for
+// the export notices. SMTP is required in production (boot fails without it, like the api) and
+// optional elsewhere: without `SMTP_HOST` the export still completes and logs `emailed: false`.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -48,6 +56,9 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof searchEnvSchema> &
   z.output<typeof workerShareEnvSchema> &
   z.output<typeof pushEnvSchema> &
+  z.output<typeof exportEnvSchema> &
+  z.output<typeof sentryEnvSchema> &
+  Partial<MailEnv> &
   z.output<typeof logEnvSchema>;
 
 /** Env needed by `healthcheck.ts` only (no S3/JWT/encryption key: it reads the heartbeat row). */
@@ -108,6 +119,25 @@ export const embedDimsGuardSchema = z.object({
     }),
 });
 
+/** SMTP settings are parsed when any is set, and always in production (then they are required). */
+function mailRequired(env: RawEnv): boolean {
+  const set = (k: string) => (env[k] ?? "").trim() !== "";
+  return env.NODE_ENV === "production" || set("SMTP_HOST") || set("MAIL_FROM");
+}
+
+/** The SMTP settings, or null when this worker has none (non-production only). */
+export function mailConfigOf(config: Partial<MailEnv>): MailEnv | null {
+  if (!config.SMTP_HOST || !config.MAIL_FROM) return null;
+  return {
+    SMTP_HOST: config.SMTP_HOST,
+    SMTP_PORT: config.SMTP_PORT ?? 587,
+    SMTP_USER: config.SMTP_USER,
+    SMTP_PASS: config.SMTP_PASS,
+    SMTP_SECURE: config.SMTP_SECURE ?? false,
+    MAIL_FROM: config.MAIL_FROM,
+  };
+}
+
 export function loadConfig(env: RawEnv = process.env): WorkerConfig {
   const merged = parseAll(env, [
     heartbeatEnvSchema,
@@ -120,6 +150,9 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     searchEnvSchema,
     workerShareEnvSchema,
     pushEnvSchema,
+    exportEnvSchema,
+    sentryEnvSchema,
+    ...(mailRequired(env) ? [mailEnvSchema] : []),
     embedDimsGuardSchema,
     logEnvSchema,
   ]);

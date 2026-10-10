@@ -22,6 +22,7 @@ import { requireChatAccess, todayIn } from "../search/access";
 import { resolveSearchChatDeps, type SearchChatDeps } from "../search/deps";
 import { defaultFastPathMinSimilarity } from "../search/hybrid";
 import { liveRowsInOrder, signSummaries } from "../search/summaries";
+import { requireChatHistoryAccess } from "./access";
 import { type AgentEvent, runChatTurn, type TurnResult } from "./agent";
 import {
   budgetAuditExists,
@@ -44,9 +45,11 @@ import { runTool, type ToolContext } from "./tools";
 //   GET    /babies/:id/chat/thread    the caller's thread (last 100 messages) + turns left today
 //   POST   /babies/:id/chat/messages  one turn: SSE (`Accept: text/event-stream`) or JSON
 //   DELETE /babies/:id/chat/thread    clear history (audit `chat.cleared`)
-// Gate first (`requireChatAccess`: 404 stranger, 403 contributor, 403 `plan_required`), so no
-// model call happens for anyone else; every statement runs under the caller's claims (no
-// `withServiceRole`). Turn flow: Tx A (consent, gate, 100 turns/24 h via `chat_reserve_turn`,
+// Gate first, so no model call happens for anyone else. GET/DELETE of the thread use
+// `requireChatHistoryAccess` (404 stranger, 403 contributor; no plan check, so a downgraded admin
+// can still read and clear their history: review-fixes 2.7, D15). POST uses `requireChatAccess`
+// (404 stranger, 403 contributor, 403 `plan_required`) before any model call. Every statement
+// runs under the caller's claims (no `withServiceRole`). Turn flow: Tx A (consent, gate, 100 turns/24 h via `chat_reserve_turn`,
 // monthly budget incl. `ai_spend`, thread lock + "reply in progress" check, history, the user
 // message) → the agent loop outside any transaction (each tool in its own claims transaction) →
 // Tx B (assistant message + `ai_spend` row + thread touch). Logs carry ids, counts, tokens, cost
@@ -118,7 +121,7 @@ export function chatRoutes(app: FastifyInstance, given?: SearchChatDeps): void {
       const { id: babyId } = request.params;
       const { threadId, rows, used } = await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
-        await requireChatAccess(client, ctx.uid, babyId);
+        await requireChatHistoryAccess(client, ctx.uid, babyId);
         const thread = await currentThread(client, babyId, ctx.uid);
         const rows = thread
           ? await threadMessages(client, thread.id, CHAT_LIMITS.threadMessages)
@@ -151,7 +154,7 @@ export function chatRoutes(app: FastifyInstance, given?: SearchChatDeps): void {
       const { id: babyId } = request.params;
       await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
-        await requireChatAccess(client, ctx.uid, babyId);
+        await requireChatHistoryAccess(client, ctx.uid, babyId);
         const n = await deleteThreads(client, babyId, ctx.uid);
         await audit(client, "chat.cleared", { babyId, actorUserId: ctx.uid });
         request.log.info({ babyId, threads: n }, "chat cleared");

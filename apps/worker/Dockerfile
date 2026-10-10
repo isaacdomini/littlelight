@@ -44,7 +44,11 @@ RUN pnpm --filter @littlelight/worker build
 # Production dependencies only. Workspace packages are bundled into dist by tsup.
 FROM pnpm AS prod-deps
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@littlelight/worker"
+    pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@littlelight/worker" \
+ && find node_modules -path '*/@sentry*/*' -name '*.map' -type f -delete
+# ^ Sentry ships source maps for every build flavour (~35 MB); production stack traces point at
+# its compiled JS instead (our own dist keeps its maps for --enable-source-maps). Deleted in
+# this stage, before the COPY into prod, so the files never reach an image layer.
 
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS prod

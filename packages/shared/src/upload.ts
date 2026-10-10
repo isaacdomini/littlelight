@@ -127,6 +127,17 @@ export function photoPrefixes(babyId: string, photoId: string): readonly [string
   return [originalKey(babyId, photoId), `${babyPrefix(babyId)}derivatives/${photoId}/`] as const;
 }
 
+/**
+ * `babies/{babyId}/exports/{exportId}.zip`: the ZIP of one data export (FR-10.1). Equals the
+ * generated `data_exports.storage_key` column, so the api can sign a download URL without
+ * selecting that column (`authenticated` has no grant on it). Under `babyPrefix`, so a baby
+ * purge deletes it with everything else.
+ */
+export function exportKey(babyId: string, exportId: string): string {
+  assertUuid(exportId, "exportId");
+  return `${babyPrefix(babyId)}exports/${exportId}.zip`;
+}
+
 const MIME_EXTENSIONS = {
   "image/jpeg": "jpg",
   "image/png": "png",

@@ -1,6 +1,6 @@
 import cookie from "@fastify/cookie";
 import type { AiEnvInput } from "@littlelight/ai";
-import { AI_PIPELINE_DEFAULTS } from "@littlelight/shared";
+import { AI_PIPELINE_DEFAULTS, redactUrl } from "@littlelight/shared";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import {
   serializerCompiler,
@@ -12,7 +12,9 @@ import { createGoTrueClient, type GoTrueClient, registerAuth } from "./auth";
 import { chatRoutes } from "./chat";
 import { type ApiConfig, chatSettings, nativeSettings, searchSettings } from "./config";
 import { createSmtpMailer, type Mailer } from "./email/mailer";
+import { exportsRoutes } from "./exports/routes";
 import { registerErrorHandling } from "./lib/errors";
+import { trustProxyHop } from "./lib/request";
 import { measurementsRoutes } from "./measurements/routes";
 import { milestonesRoutes } from "./milestones/routes";
 import { aiRoutes } from "./photos/ai-routes";
@@ -22,6 +24,7 @@ import { registerNativeCors } from "./plugins/cors";
 import { createPool, type DbClient, registerDb } from "./plugins/db";
 import { createJobQueue, type JobQueue, registerJobs, sendOnlyBoss } from "./plugins/jobs";
 import { createS3Client, registerStorage, type StorageClient } from "./plugins/storage";
+import { registerTelemetry } from "./plugins/telemetry";
 import { babiesRoutes } from "./routes/babies";
 import { healthzRoutes } from "./routes/healthz";
 import { meRoutes } from "./routes/me";
@@ -67,47 +70,12 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
 }
 
-// A path segment that looks like a bearer token (invite tokens are 43-char base64url, share
-// tokens 22: `SHARE_TOKEN_LENGTH`); UUIDs are identifiers, not secrets, and stay readable.
-const TOKEN_SEGMENT = /^[A-Za-z0-9_-]{22,}$/;
-const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
- * The only literal segments of the viewer routes (`/share/*`, docs/plans/step-8.md 2.6). Anything
- * else under `/share/` that is not a UUID is logged as `[redacted]`: no viewer route takes a
- * token in its path, so a token there is a client mistake that must still never reach a log.
+ * URL as logged (query string dropped; invite/share tokens and token-shaped segments replaced).
+ * Moved to `@littlelight/shared` (`telemetry.ts`) so the request logger and the Sentry scrubber
+ * apply one set of rules; re-exported here for existing imports and tests.
  */
-const SHARE_ROUTE_SEGMENTS: ReadonlySet<string> = new Set([
-  "session",
-  "album",
-  "photos",
-  "urls",
-  "download",
-  "manifest.webmanifest",
-]);
-
-/**
- * URL as logged: query strings dropped (they can carry codes, and the viewer manifest's `?t=`
- * share token), the segment after `/invites/` or `/s/` (SPA share link) replaced, every segment
- * under `/share/` except the route's own words and UUIDs replaced, and any token-shaped segment
- * replaced. Works with and without the browser-facing `/api` prefix. Exported for tests.
- */
-export function redactUrl(url: string): string {
-  const q = url.indexOf("?");
-  const path = q === -1 ? url : url.slice(0, q);
-  const parts = path.split("/");
-  const shareAt = parts[1] === "api" ? 2 : 1;
-  const underShare = parts[shareAt] === "share";
-  const segments = parts.map((seg, i, all) => {
-    if (seg === "") return seg;
-    if (i > 0 && (all[i - 1] === "invites" || all[i - 1] === "s")) return "[redacted]";
-    if (underShare && i > shareAt && !SHARE_ROUTE_SEGMENTS.has(seg) && !UUID_SEGMENT.test(seg)) {
-      return "[redacted]";
-    }
-    if (TOKEN_SEGMENT.test(seg) && !UUID_SEGMENT.test(seg)) return "[redacted]";
-    return seg;
-  });
-  return segments.join("/") + (q === -1 ? "" : "?[redacted]");
-}
+export { redactUrl };
 
 /**
  * Pino options. Never log auth headers, cookies (`ll_access`, `ll_refresh`, the viewer's
@@ -212,6 +180,8 @@ function registerRoutes(app: FastifyInstance, config: ApiConfig): void {
   };
   searchRoutes(app, searchChat);
   chatRoutes(app, searchChat);
+  // Review fixes (docs/plans/review-fixes.md 2.5; PRD FR-10.1): admin-only album export.
+  exportsRoutes(app);
 }
 
 /** Build the Fastify app without listening (used by `server.ts` and by tests via `inject`). */
@@ -220,8 +190,13 @@ export async function buildApp(opts: BuildAppOptions) {
   const native = nativeSettings(config);
   const app = Fastify({
     logger: opts.logger ?? loggerOptions(config),
-    // nginx (prod) / Vite (dev) are the only hops in front of us; port 3000 is never public.
-    trustProxy: true,
+    // Trust exactly one hop: nginx (prod) / Vite (dev) sit directly in front of us on a private
+    // network and port 3000 is never public. `request.ip` is the address that hop saw (the
+    // right-most X-Forwarded-For entry), so a client-supplied X-Forwarded-For can no longer
+    // choose it (docs/plans/review-fixes.md 2.11, D10; `trustProxyHop` explains why not `1`).
+    // `clientIp()` still prefers `CF-Connecting-IP`, which nginx sets from `$remote_addr` when
+    // Cloudflare did not.
+    trustProxy: trustProxyHop,
     // Longer than nginx's upstream keepalive and cloudflared's idle limits, so the proxy (not
     // the API) always closes an idle connection first (docs/plans/step-7.md 2.9, R6). Fastify's
     // `requestTimeout` stays 0: a chat SSE turn is bounded by CHAT_MODEL_TIMEOUT_MS × rounds.
@@ -231,6 +206,9 @@ export async function buildApp(opts: BuildAppOptions) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerErrorHandling(app);
+  // Review fixes (docs/plans/review-fixes.md 2.6): capture 5xx (route pattern, method, status
+  // and the scrubbed exception only) when `initTelemetry` ran with a DSN; otherwise a no-op.
+  registerTelemetry(app);
   // Step 9 (docs/plans/step-9.md 2.3): CORS for the native WebView origins only, before every
   // other hook so a preflight never reaches auth. The web SPA stays same-origin.
   registerNativeCors(app, native.NATIVE_APP_ORIGINS);
