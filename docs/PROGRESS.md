@@ -742,3 +742,10 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - A requester can set `picking → expired` early (harmless).
   - The worker keeps its own per-job token mint.
 - **Commit**: step 10: review fixes
+- **Re-review (`047ea07`)**: **PASS**. All 5 should-fix items verified fixed, with tests.
+- **Minor follow-ups (non-blocking)**:
+  - A stale `googleFailure` comment in `imports/common.ts` still mentions `mintAccessToken`.
+  - The 401 retry uses a `fresh` mint, so concurrent 401s can cause a duplicate refresh grant.
+  - The worker's `invalid_grant` can't evict the API's in-memory cache. This self-heals on the
+    next 401 or create.
+  - The `touchConnection` write inside the mint could be best-effort.
