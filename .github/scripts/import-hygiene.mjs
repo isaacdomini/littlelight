@@ -52,7 +52,7 @@
 //
 //
 // `--drift <base>` runs only the step-10 scope checks against a git base commit (CI and the step-10
-// gate use b3f2b56, the review-fix commit step 10 starts from; docs/plans/step-10.md 4.1 names an
+// gate use eb9343e, the review-fix commit step 10 starts from; docs/plans/step-10.md 4.1 names an
 // older commit, superseded):
 //  D1. No AI-path change: `git diff <base>` and untracked files under packages/ai,
 //      apps/worker/src/ai, apps/api/src/chat and apps/api/src/search are empty.

@@ -18,7 +18,7 @@
 #                    logs a baseUrl/pickerUri/token/code, the worker never reads google_accounts
 #                    nor inserts into photos, the URL guard precedes every media fetch, the fake
 #                    Google provider is refused in production (static + runtime), no AI-path
-#                    change and no new dependency but @capacitor/browser since b3f2b56),
+#                    change and no new dependency but @capacitor/browser since eb9343e),
 #                    typecheck (workspace + e2e/, incl. e2e/native, e2e/export and e2e/import), unit tests
 #                    (incl. packages/ai adapters against local mock servers), integration tests
 #                    (db-integration: RLS matrix, search + chat + sharing tables etc.;
@@ -125,7 +125,7 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     steps:
-      # Full history: the import hygiene's drift check diffs against b3f2b56 (below).
+      # Full history: the import hygiene's drift check diffs against eb9343e (below).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -207,7 +207,7 @@ jobs:
       # every media request goes through parseAllowedMediaUrl / resolveMediaRedirect, null-checked,
       # redirect "manual"; GOOGLE_IMPORT_CLIENT_SECRET never in the client app or the web image.
       # Runtime (tsx, needs the install above): the env schema, startFakeGoogleServer and the
-      # google-fake CLI all refuse NODE_ENV=production (controls start). Drift vs b3f2b56 (hence
+      # google-fake CLI all refuse NODE_ENV=production (controls start). Drift vs eb9343e (hence
       # fetch-depth 0): no change under packages/ai, apps/worker/src/ai, apps/api/src/chat and
       # apps/api/src/search, and @capacitor/browser is the only new dependency. The plist keys and
       # the Photos-prompt call sites are in native-hygiene.sh above. Same script runs locally.

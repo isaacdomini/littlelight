@@ -21,7 +21,7 @@
 #         nodeEnv "test" starts and answers /healthz (control: the refusal is about production);
 #      c. the CLI (`google-fake`) with NODE_ENV=production exits 1 with its refusal message
 #         within 60 s and never listens (a watchdog kills it otherwise, and the step fails).
-#   3. Step-10 scope vs IMPORT_DRIFT_BASE (default b3f2b56, the review-fix commit step 10 starts
+#   3. Step-10 scope vs IMPORT_DRIFT_BASE (default eb9343e, the review-fix commit step 10 starts
 #      from; import-hygiene.mjs --drift): no change under the AI paths, and @capacitor/browser is
 #      the only new dependency. Needs the base commit in the clone (CI: fetch-depth 0).
 #      IMPORT_DRIFT_BASE=skip skips it (local runs on a shallow clone only; CI never sets it).
@@ -31,7 +31,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(pwd)"
-BASE="${IMPORT_DRIFT_BASE:-b3f2b56}"
+BASE="${IMPORT_DRIFT_BASE:-eb9343e}"
 fail=0
 
 echo "-- static"
