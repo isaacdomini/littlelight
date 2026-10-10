@@ -63,6 +63,39 @@ describe("sign-out with album sync", () => {
   });
 });
 
+describe("a stalled sync pause", () => {
+  it("is abandoned after 5 s exactly, not earlier, and the push removal still ran first", async () => {
+    vi.useFakeTimers();
+    try {
+      mods.onSignOut.mockReturnValue(new Promise(() => undefined));
+      const done = vi.fn();
+      void beforeNativeSignOut().then(done);
+      await vi.advanceTimersByTimeAsync(4900);
+      expect(done).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(mods.unregisterCurrentPushDevice).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not stop the local wipe that follows", async () => {
+    vi.useFakeTimers();
+    try {
+      mods.onSignOut.mockReturnValue(new Promise(() => undefined));
+      const p = beforeNativeSignOut();
+      await vi.advanceTimersByTimeAsync(5001);
+      await p;
+      await wipeNativeLocalData();
+      expect(mods.wipeNativeFiles).toHaveBeenCalledTimes(1);
+      expect(mods.clearLocal).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("local wipe with album sync", () => {
   it("clears the sync config and ledger without an API call", async () => {
     await wipeNativeLocalData();

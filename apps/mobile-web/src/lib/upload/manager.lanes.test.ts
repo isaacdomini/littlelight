@@ -458,3 +458,62 @@ describe("waitForTerminal / errorOf / clearFinished / summarize", () => {
     for (const k of stored) expect(window.localStorage.getItem(k)).not.toContain(syncRef(1).sha256);
   });
 });
+
+describe("opaque client ids (the file name never reaches the server)", () => {
+  const OPAQUE = /^\d+-[0-9a-f]{12}$/;
+  const registerBodies = () =>
+    api.calls.filter((c) => c.path === `/uploads/${SESSION}/files` && c.method === "POST");
+
+  it("sync lane: ids are opaque and no part of the name is in the register body", async () => {
+    scriptApi();
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    const name = "Maya-first-bath_SECRETNAME.heic";
+    const ids = m.addNative(BABY, [syncRef(3, { name })], undefined, { lane: "sync" });
+    expect(ids[0]).toMatch(OPAQUE);
+    await settle(m, (i) => i.find((x) => x.clientId === ids[0])?.state === "ingested");
+    const bodies = registerBodies();
+    expect(bodies.length).toBeGreaterThan(0);
+    const text = JSON.stringify(bodies.map((b) => b.body));
+    expect(text).not.toContain("SECRETNAME");
+    expect(text).not.toContain("Maya");
+    expect(text).not.toContain("first-bath");
+    expect(text).toContain(ids[0] as string);
+  });
+
+  it("user lane (native refs): ids are opaque and the body has no name", async () => {
+    scriptApi();
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    const ids = m.addNative(BABY, [ref({ name: "Bath_SECRETNAME.jpg" })]);
+    expect(ids[0]).toMatch(OPAQUE);
+    await settle(m, (i) => i.find((x) => x.clientId === ids[0])?.state === "ingested");
+    expect(JSON.stringify(registerBodies().map((b) => b.body))).not.toContain("SECRETNAME");
+  });
+
+  it("user lane (web File): ids are opaque and the body has no name", async () => {
+    scriptApi();
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    m.add(BABY, [new File([new Uint8Array(8)], "Bath_SECRETNAME.jpg", { type: "image/jpeg" })]);
+    const id = m.getSnapshot()[0]?.clientId ?? "";
+    expect(id).toMatch(OPAQUE);
+    await settle(m, (i) => i[0]?.state === "ingested");
+    expect(JSON.stringify(registerBodies().map((b) => b.body))).not.toContain("SECRETNAME");
+  });
+
+  it("two files with the same name get different ids", () => {
+    scriptApi();
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    const a = m.addNative(BABY, [ref({ name: "IMG_0001.jpg" }), ref({ name: "IMG_0001.jpg" })]);
+    const b = m.addNative(BABY, [syncRef(1, { name: "IMG_0001.jpg" })], undefined, {
+      lane: "sync",
+    });
+    const all = [...a, ...b];
+    expect(new Set(all).size).toBe(3);
+    for (const id of all) expect(id).toMatch(OPAQUE);
+    m.add(BABY, [
+      new File([new Uint8Array(4)], "same.jpg", { type: "image/jpeg" }),
+      new File([new Uint8Array(4)], "same.jpg", { type: "image/jpeg" }),
+    ]);
+    const ids = m.getSnapshot().map((i) => i.clientId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});

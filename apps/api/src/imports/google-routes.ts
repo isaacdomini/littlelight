@@ -20,8 +20,13 @@ import {
 } from "../auth";
 import { ApiError, featureUnavailable, rateLimited } from "../lib/errors";
 import { isGoogleError } from "./google/client";
-import { mintAccessToken, revokeGoogleConnection, storeConnection } from "./google/connection";
-import { mintGoogleState, verifyGoogleState } from "./google/state";
+import {
+  closeBatchSession,
+  forgetAccessToken,
+  revokeGoogleConnection,
+  storeConnection,
+} from "./google/connection";
+import { createConsumedGoogleStates, mintGoogleState, verifyGoogleState } from "./google/state";
 import { loadConnection, myPickingBatches } from "./queries";
 
 // Google Photos connection (docs/plans/step-10.md 2.6, D6, D14, D15, D18): server-side OAuth with
@@ -31,8 +36,10 @@ import { loadConnection, myPickingBatches } from "./queries";
 // - `POST /me/import/google/connect` mints the `state` (google/state.ts) and returns Google's
 //   consent URL, which the client opens (system browser on native).
 // - `GET /import/google/callback` needs no session (the native flow lands in SFSafariViewController
-//   / Custom Tabs without app credentials): the `state` is the credential, and its GoTrue session
-//   must still be live. It always answers 302 to the SPA's connected page with a status.
+//   / Custom Tabs without app credentials): the `state` is the credential, single use (its `jti`
+//   is consumed before the code exchange; a replay answers `expired` and changes nothing), and its
+//   GoTrue session must still be live. It always answers 302 to the SPA's connected page with a
+//   status.
 // - Never logged: the code, the state, tokens, the consent URL (the request serializer drops query
 //   strings; pino redacts `req.query.code` / `req.query.state`; log lines carry statuses only).
 
@@ -51,6 +58,8 @@ export function googleImportRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
   const r = app.withTypeProvider<ZodTypeProvider>();
   const publicUrl = app.config.PUBLIC_URL.replace(/\/+$/, "");
   const redirectUri = `${publicUrl}/api/import/google/callback`;
+  /** Used connect states (`jti`), in memory: the api runs as one instance. */
+  const consumedStates = createConsumedGoogleStates();
 
   function connectedUrl(
     status: GoogleConnectStatus,
@@ -132,6 +141,14 @@ export function googleImportRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       if (!verified.ok) return done("expired");
       const { sub: uid, sid, client, returnTo, exp } = verified.claims;
 
+      // Single use, decided before anything else (and synchronously, so of two parallel
+      // callbacks with one state only the first proceeds): a leaked consent URL cannot be
+      // completed a second time to swap in another Google account.
+      if (!consumedStates.consume(verified.claims)) {
+        request.log.warn({ status: "expired" }, "google connect state already used");
+        return done("expired", client);
+      }
+
       // The GoTrue session that started the flow must still be live (sign-out anywhere, account
       // deletion or an idle timeout ends it). Same check as every authenticated request.
       try {
@@ -171,6 +188,8 @@ export function googleImportRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       }
       try {
         await storeConnection(app, uid, refreshToken, scope);
+        // A new grant: an access token of the previous one must not be used any more.
+        forgetAccessToken(google, uid);
       } catch {
         request.log.warn({ status: "error" }, "google connection could not be stored");
         await google.revoke(refreshToken);
@@ -212,14 +231,11 @@ export function googleImportRoutes(app: FastifyInstance, opts: GoogleRoutesOptio
       const google = app.googleImport;
       if (google) {
         for (const b of picking) {
-          try {
-            const grant = await mintAccessToken(app, google, auth.uid, b.id);
-            if (grant.sessionId) await google.deleteSession(grant.accessToken, grant.sessionId);
-          } catch {
-            // best effort: the session expires at Google on its own
-          }
+          // best effort (never throws): the session expires at Google on its own
+          await closeBatchSession(app, google, auth.uid, b.id);
         }
       }
+      // Evicts the cached access token before and after the revoke.
       const { existed, revoked } = await revokeGoogleConnection(app, auth.uid, request.log);
       if (existed) {
         await withClaims(request, (client, ctx) =>

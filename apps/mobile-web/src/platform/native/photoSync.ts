@@ -402,8 +402,9 @@ export class PhotoSyncManager {
     const cfg = this.status.config;
     if (!cfg) return;
     this.waitAbort?.abort();
-    await this.patch(cfg, { paused: true, lastError: "signed_out" });
+    // Wipe locally first so a stalled network call cannot leave the ledger/config behind.
     await this.clearLocal();
+    await this.patch(cfg, { paused: true, lastError: "signed_out" });
   }
 
   /** Local-only wipe (account deletion, session lost): ledger and config, no API call. */

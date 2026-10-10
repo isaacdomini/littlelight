@@ -12,7 +12,7 @@ Functionality** only (no analytics, no advertising, no personalisation, no devel
 | User Content > Other User Content | Yes | Notes, milestones, measurements, chat messages, baby name and birth date |
 | Search History > Search History | Yes | Search and chat queries, to return results |
 | Identifiers > User ID | Yes | Account id |
-| Identifiers > User ID (Google connection) | Yes | Only if a parent connects Google Photos: the server stores an encrypted Google refresh token and the Google account id against the user, to download the photos chosen in Google's picker. Covered by the existing User ID row; no new type. |
+| Identifiers > User ID (Google connection) | Yes | Only if a parent connects Google Photos: the server stores an encrypted Google refresh token and the granted scope against the user (no Google account id is requested or stored), to download the photos chosen in Google's picker. Covered by the existing User ID row; no new type. |
 | Location > Precise Location | Yes | GPS embedded in photo metadata (iPhone keeps it). The app never asks for device location. Stored encrypted; shown to the parent only as a coarse place name. |
 
 Photo import (step 10): Apple Photos album sync (full library access, one chosen album read, originals

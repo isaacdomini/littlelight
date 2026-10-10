@@ -24,7 +24,7 @@ import {
 } from "../lib/errors";
 import { batchNotFound, notBatchRequester, requireMember, rethrowGoogle } from "./common";
 import { type GoogleClient, isGoogleError } from "./google/client";
-import { mintAccessToken } from "./google/connection";
+import { closeBatchSession, loadBatchSessionId, withGoogleAccess } from "./google/connection";
 import {
   claimPoll,
   finishPicking,
@@ -40,10 +40,11 @@ import {
 // Google Photos Picker batches (`import_batches`; docs/plans/step-10.md 2.2, 2.6, D1, D11, D19).
 // Admins and contributors may import (D1); the worker books a contributor's photos `pending`.
 //
-// - Create: an access token minted from the stored refresh token (request memory only), a Picker
-//   session at Google, then under the caller's claims the `picking` row with the session id and
-//   the clamped poll interval ([IMPORT_PICKER_POLL_MIN_SEC, 60]) and picker expiry (≤ 30 min).
-//   The response carries `pickerUri` once; it is never stored or logged.
+// - Create: an access token (the per-user cache, else minted from the stored refresh token;
+//   memory only, google/token-cache.ts), a Picker session at Google, then under the caller's
+//   claims the `picking` row with the session id and the clamped poll interval
+//   ([IMPORT_PICKER_POLL_MIN_SEC, 60]) and picker expiry (≤ 30 min). The response carries
+//   `pickerUri` once; it is never stored or logged.
 // - Get: the requester's client polls; while `picking`, the api asks Google at most once per
 //   poll interval (`claimPoll`); `mediaItemsSet` ⇒ `queued`, then (after commit) `import.google`.
 //   A failed enqueue leaves the batch `queued` for `import.sweep` to re-send.
@@ -90,15 +91,8 @@ export function importBatchRoutes(app: FastifyInstance, opts: BatchRoutesOptions
     batchId: string,
     log: Pick<FastifyBaseLogger, "info">,
   ): Promise<void> {
-    try {
-      const grant = await mintAccessToken(app, google, uid, batchId);
-      const deleted = grant.sessionId
-        ? await google.deleteSession(grant.accessToken, grant.sessionId)
-        : false;
-      log.info({ batchId, deleted }, "picker session closed");
-    } catch {
-      log.info({ batchId, deleted: false }, "picker session closed");
-    }
+    const deleted = await closeBatchSession(app, google, uid, batchId);
+    log.info({ batchId, deleted }, "picker session closed");
   }
 
   r.route({
@@ -128,11 +122,13 @@ export function importBatchRoutes(app: FastifyInstance, opts: BatchRoutesOptions
       const hit = opts.createThrottle.hit(auth.uid);
       if (!hit.allowed) throw rateLimited(hit.retryAfterSec);
 
-      let accessToken: string;
+      let accessToken = "";
       let session: PickerSession;
       try {
-        ({ accessToken } = await mintAccessToken(app, google, auth.uid));
-        session = await google.createSession(accessToken);
+        session = await withGoogleAccess(app, google, auth.uid, (token) => {
+          accessToken = token;
+          return google.createSession(token);
+        });
       } catch (err) {
         rethrowGoogle(err, request.log, "picker session create");
       }
@@ -202,9 +198,11 @@ export function importBatchRoutes(app: FastifyInstance, opts: BatchRoutesOptions
       }
       if (step.action === "poll" && google) {
         try {
-          const grant = await mintAccessToken(app, google, auth.uid, batchId);
-          if (grant.sessionId) {
-            const session = await google.getSession(grant.accessToken, grant.sessionId);
+          const sessionId = await loadBatchSessionId(app, auth.uid, batchId);
+          if (sessionId) {
+            const session = await withGoogleAccess(app, google, auth.uid, (token) =>
+              google.getSession(token, sessionId),
+            );
             if (session.mediaItemsSet) {
               const queued = await withClaims(request, (client) =>
                 finishPicking(client, batchId, "queued"),

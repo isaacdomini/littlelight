@@ -64,15 +64,31 @@ export interface GoogleClient {
   authUrl(input: AuthUrlInput): string;
   /** `authorization_code` grant. */
   exchangeCode(code: string, redirectUri: string): Promise<GoogleTokenResponse>;
-  /** `refresh_token` grant ⇒ an access token for this request only. */
+  /** `refresh_token` grant ⇒ an access token (callers keep it in memory only). */
   refreshAccessToken(refreshToken: string): Promise<string>;
+  /** `refresh_token` grant ⇒ the access token and its lifetime (for the per-user token cache). */
+  refreshAccess(refreshToken: string): Promise<RefreshedAccess>;
   /** Revoke a token (best effort, 5 s). `true` when Google confirmed. Never throws. */
   revoke(token: string): Promise<boolean>;
   createSession(accessToken: string): Promise<PickerSession>;
   getSession(accessToken: string, sessionId: string): Promise<PickerSession>;
   /** Best effort. `true` when deleted (or already gone). Never throws. */
   deleteSession(accessToken: string, sessionId: string): Promise<boolean>;
+  /**
+   * `deleteSession` with the reason of a failure: `unauthorized` is a 401 (the access token is
+   * dead: the caller drops it and may retry with a fresh one). Never throws.
+   */
+  closeSession(accessToken: string, sessionId: string): Promise<CloseSessionResult>;
 }
+
+/** A refreshed access token: in memory only, never logged, stored or returned to a client. */
+export interface RefreshedAccess {
+  accessToken: string;
+  /** Google's `expires_in` (seconds from now). */
+  expiresInSec: number;
+}
+
+export type CloseSessionResult = "deleted" | "unauthorized" | "failed";
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -193,6 +209,22 @@ export function createGoogleClient(
 
   const sessionPath = (id: string) => `/v1/sessions/${encodeURIComponent(id)}`;
 
+  async function refreshAccess(refreshToken: string): Promise<RefreshedAccess> {
+    const token = await tokenCall({ grant_type: "refresh_token", refresh_token: refreshToken });
+    return { accessToken: token.access_token, expiresInSec: token.expires_in };
+  }
+
+  async function closeSession(accessToken: string, sessionId: string): Promise<CloseSessionResult> {
+    try {
+      const res = await pickerCall("DELETE", sessionPath(sessionId), accessToken);
+      await res.body?.cancel().catch(() => undefined);
+      if (res.ok || res.status === 404) return "deleted";
+      return res.status === 401 ? "unauthorized" : "failed";
+    } catch {
+      return "failed";
+    }
+  }
+
   return {
     provider,
     authUrl({ state, redirectUri }) {
@@ -215,9 +247,9 @@ export function createGoogleClient(
       });
     },
     async refreshAccessToken(refreshToken) {
-      const token = await tokenCall({ grant_type: "refresh_token", refresh_token: refreshToken });
-      return token.access_token;
+      return (await refreshAccess(refreshToken)).accessToken;
     },
+    refreshAccess,
     async revoke(token) {
       try {
         const res = await call(
@@ -242,13 +274,8 @@ export function createGoogleClient(
       return parseSession(await pickerCall("GET", sessionPath(sessionId), accessToken));
     },
     async deleteSession(accessToken, sessionId) {
-      try {
-        const res = await pickerCall("DELETE", sessionPath(sessionId), accessToken);
-        await res.body?.cancel().catch(() => undefined);
-        return res.ok || res.status === 404;
-      } catch {
-        return false;
-      }
+      return (await closeSession(accessToken, sessionId)) === "deleted";
     },
+    closeSession,
   };
 }

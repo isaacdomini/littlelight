@@ -180,6 +180,30 @@ describe("createGoogleClient", () => {
     ).toBe(false);
   });
 
+  it("refreshAccess returns the token with its lifetime", async () => {
+    const c = client(async () =>
+      json(200, { access_token: "fake-access-7", expires_in: 1800, token_type: "Bearer" }),
+    );
+    expect(await c.refreshAccess("r")).toEqual({
+      accessToken: "fake-access-7",
+      expiresInSec: 1800,
+    });
+  });
+
+  it("closeSession tells a dead access token (401) from other failures; never throws", async () => {
+    const status = (n: number) => client(async () => new Response(null, { status: n }));
+    expect(await status(204).closeSession("t", "s")).toBe("deleted");
+    expect(await status(404).closeSession("t", "s")).toBe("deleted");
+    expect(await status(401).closeSession("t", "s")).toBe("unauthorized");
+    expect(await status(403).closeSession("t", "s")).toBe("failed");
+    expect(await status(500).closeSession("t", "s")).toBe("failed");
+    expect(
+      await client(async () => {
+        throw new Error("x");
+      }).closeSession("t", "s"),
+    ).toBe("failed");
+  });
+
   it("revoke is best effort and never throws", async () => {
     expect(await client(async () => new Response(null, { status: 200 })).revoke("t")).toBe(true);
     expect(await client(async () => new Response(null, { status: 400 })).revoke("t")).toBe(false);

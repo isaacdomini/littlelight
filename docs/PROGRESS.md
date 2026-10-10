@@ -717,3 +717,28 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Still open from earlier: Android runtime gate, part B store work, Sentry DSNs, CSP enforcing, a
     real GitHub CI run.
 - **Commit**: step 10: photo import
+
+## Step 10 review fixes
+
+- **Review**: step-10 review (diff `b3f2b56..8298884`) → **PASS, no must-fix**; 5 should-fix, 4 nice-to-have.
+- **Fixed**:
+  - **OAuth `state` is single-use.** An in-memory consumed-`jti` register is checked before the code
+    exchange. States minted before an API restart are refused. A replay, even with another Google
+    account, is answered `expired` and the connection is left unchanged.
+  - **Per-user Google access-token cache** (in memory, cleared 60 s before expiry, single-flight).
+    On a 401 the token is evicted and the call retried once. Disconnect, reconnect and
+    `invalid_grant` evict the token. Polls no longer decrypt or refresh each time; 11 polls caused
+    1 token call.
+  - **Opaque upload `clientId`** (all lanes), so no file name reaches the server.
+  - **Sign-out wipes the sync ledger and config before the best-effort PATCH.**
+  - **Store and docs:** the privacy label no longer claims a Google account id is stored, and
+    `NATIVE.md` no longer mentions a deep link for the Google return.
+  - **Telemetry scrub** now covers `ll-sync-export/`, `ll-sync/` and `ll-share/` paths.
+- **Gate**: orchestrator ran lint, typecheck, all 5 hygiene checks, unit tests (3,591), the import
+  gate (42/42) and web e2e (42/42). Test-engineer ran integration CI-style on fresh pgvector and
+  MinIO: 1,540/1,540.
+- **Not fixed (nice-to-have, recorded)**:
+  - A cancel while `queued` leaves the Google picker session to expire at Google.
+  - A requester can set `picking → expired` early (harmless).
+  - The worker keeps its own per-job token mint.
+- **Commit**: step 10: review fixes

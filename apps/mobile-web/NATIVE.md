@@ -139,7 +139,8 @@ EXIF and GPS needs it; only the chosen album is read and nothing is ever deleted
 
 Google Photos import connects a Google account, then uses Google's own picker. Google refuses OAuth
 and the picker inside embedded web views, so the app opens them with `@capacitor/browser`
-(SFSafariViewController on iOS, Custom Tabs on Android) and returns through the deep link. Do not
+(SFSafariViewController on iOS, Custom Tabs on Android) and re-checks the connection and batch status on `browserFinished` / `resume` (there is no deep link; the
+`/import/google/connected` page tells the user to return to the app). Do not
 swap this for an in-app WebView or a `window.open`. The server keeps an encrypted refresh token;
 downloads keep the capture date but Google removes the location. Android has no photo auto-sync and no
 media permission. For local development with the fake Google server run

@@ -18,8 +18,8 @@ import { SHARE_PATH } from "./constants";
 //    invite/share path segments, emails, coordinates, Postgres row details and token-shaped runs
 //    are replaced, and so are (step 10, photo import) Google OAuth tokens and codes, the fake
 //    Picker's token shapes, Google media / Picker URLs, OAuth `code=`/`state=` pairs, native
-//    upload-cache and photo-library paths and PHAsset identifiers; strings are capped at
-//    `TELEMETRY_MAX_STRING_CHARS`;
+//    upload-cache, share-staging and album-sync paths, photo-library paths and PHAsset
+//    identifiers; strings are capped at `TELEMETRY_MAX_STRING_CHARS`;
 // 4. walks at most `TELEMETRY_MAX_DEPTH` levels (deeper values become a marker), caps arrays and
 //    objects, cuts cycles, and copies: the input is never mutated.
 // The output of `scrubTelemetryEvent` is stable under a second pass (idempotent).
@@ -143,8 +143,13 @@ export const TELEMETRY_SCRUB_PATTERNS = Object.freeze({
    */
   googlePickerUrl:
     /\b(photospicker\.googleapis\.com\/v1\/(?:sessions|mediaItems)|photos\.google\.com\/picker)([/?])(?!\[)[^\s"'<>()[\]{}]+/i,
-  /** A file in the native upload cache (`Caches/ll-uploads/<uuid>.heic`): group 1 kept. */
-  nativeUploadPath: /\b(ll-uploads)\/(?!\[)[^\s"'<>()[\]{}]+/,
+  /**
+   * A file in a native app directory: the upload cache (`Caches/ll-uploads/<uuid>.heic`), the
+   * share-extension staging area (`ll-share/`), Apple album sync exports (`Caches/ll-sync-export/`)
+   * and the sync ledger (`Application Support/ll-sync/<sha256(albumId)>.json`). Group 1 (the
+   * directory name) is kept; the rest of the path is replaced.
+   */
+  nativeUploadPath: /\b(ll-uploads|ll-share|ll-sync-export|ll-sync)\/(?!\[)[^\s"'<>()[\]{}]+/,
   /** A file in the iOS photo library (`/var/mobile/Media/DCIM/…`): group 1 kept. */
   photoLibraryPath: /(\/var\/mobile\/Media)\/(?!\[)[^\s"'<>()[\]{}]+/,
   /** A PHAsset local identifier (`<UUID>/L0/001`): never leaves the device (D3). */

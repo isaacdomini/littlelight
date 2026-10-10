@@ -10,7 +10,8 @@ import type { ApiConfig } from "../../config";
 // own `info` (like the viewer JWT), so neither a GoTrue token nor a viewer token verifies here and
 // a state JWT verifies nowhere else; its own issuer and audience as well. It binds the user
 // (`sub`) and the GoTrue session (`sid`, re-checked live at the callback), expires after 10
-// minutes and carries a random `jti`. Never logged (pino drops query strings; `redactUrl`).
+// minutes and carries a random `jti`, which the callback consumes once
+// (`createConsumedGoogleStates`). Never logged (pino drops query strings; `redactUrl`).
 
 const HKDF_SALT = "littlelight";
 const STATE_KEY_INFO = "google-oauth-state-v1";
@@ -99,4 +100,60 @@ export async function verifyGoogleState(
   } catch (err) {
     return { ok: false, reason: err instanceof joseErrors.JWTExpired ? "expired" : "invalid" };
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Single use (step 10 review should-fix 1)
+// ---------------------------------------------------------------------------------------------
+
+/** Most consumed states remembered at once; beyond it new callbacks fail closed (`expired`). */
+export const MAX_CONSUMED_GOOGLE_STATES = 50_000;
+
+export interface ConsumedGoogleStates {
+  /**
+   * Mark the state's `jti` used. `true` the first time; `false` when it was already used, when it
+   * was minted before this store existed (an api restart forgets used `jti`s, so older states are
+   * refused), or when the store is full. Call it before exchanging the code, so two parallel
+   * callbacks with one state cannot both proceed.
+   */
+  consume(claims: Pick<GoogleStateClaims, "jti" | "iat" | "exp">): boolean;
+  /** `jti`s remembered (expired ones until the next prune). */
+  readonly size: number;
+}
+
+/**
+ * In-memory register of used connect states (one api instance, `docker-compose.yml`). A `jti` is
+ * kept until its state can no longer verify (`exp` + clock tolerance), then pruned. States minted
+ * before the register was created are refused, which closes the replay window an api restart
+ * would otherwise open: a parent mid-consent during a restart sees `expired` and starts again.
+ */
+export function createConsumedGoogleStates(
+  opts: { now?: () => number; max?: number } = {},
+): ConsumedGoogleStates {
+  const now = opts.now ?? Date.now;
+  const max = opts.max ?? MAX_CONSUMED_GOOGLE_STATES;
+  const createdAtSec = Math.floor(now() / 1000);
+  /** jti => epoch ms after which the state cannot verify any more. */
+  const used = new Map<string, number>();
+
+  function prune(at: number): void {
+    for (const [jti, until] of used) {
+      if (at >= until) used.delete(jti);
+    }
+  }
+
+  return {
+    consume({ jti, iat, exp }) {
+      if (iat < createdAtSec) return false;
+      const at = now();
+      prune(at);
+      if (used.has(jti)) return false;
+      if (used.size >= max) return false;
+      used.set(jti, (exp + CLOCK_TOLERANCE_SEC) * 1000);
+      return true;
+    },
+    get size() {
+      return used.size;
+    },
+  };
 }

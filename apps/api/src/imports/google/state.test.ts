@@ -2,6 +2,7 @@ import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 import { TEST_JWT_SECRET, TEST_PUBLIC_URL } from "../../testing/support";
 import {
+  createConsumedGoogleStates,
   GOOGLE_STATE_AUDIENCE,
   GOOGLE_STATE_TTL_SEC,
   googleStateIssuer,
@@ -109,5 +110,50 @@ describe("Google OAuth state JWT", () => {
     expect(Object.keys(payload).sort()).toEqual(
       ["aud", "client", "exp", "iat", "iss", "jti", "returnTo", "sid", "sub"].sort(),
     );
+  });
+});
+
+describe("createConsumedGoogleStates (single-use register)", () => {
+  const T0 = Date.parse("2026-10-10T10:00:00Z");
+  const claims = (jti: string, atMs = T0) => ({
+    jti,
+    iat: Math.floor(atMs / 1000),
+    exp: Math.floor(atMs / 1000) + GOOGLE_STATE_TTL_SEC,
+  });
+
+  it("accepts a jti the first time and refuses the second", () => {
+    const store = createConsumedGoogleStates({ now: () => T0 });
+    expect(store.consume(claims("a"))).toBe(true);
+    expect(store.consume(claims("a"))).toBe(false);
+    expect(store.consume(claims("b"))).toBe(true);
+    expect(store.size).toBe(2);
+  });
+
+  it("prunes a jti once its state can no longer verify (exp + tolerance)", () => {
+    let now = T0;
+    const store = createConsumedGoogleStates({ now: () => now });
+    store.consume(claims("a"));
+    now = T0 + (GOOGLE_STATE_TTL_SEC + 4) * 1000;
+    expect(store.consume(claims("a"))).toBe(false); // still inside the tolerance
+    now = T0 + (GOOGLE_STATE_TTL_SEC + 6) * 1000;
+    expect(store.consume(claims("other", now))).toBe(true);
+    expect(store.size).toBe(1); // "a" pruned
+  });
+
+  it("refuses states minted before the register was created (api restart)", () => {
+    const store = createConsumedGoogleStates({ now: () => T0 });
+    expect(store.consume(claims("old", T0 - 60_000))).toBe(false);
+    expect(store.size).toBe(0);
+    expect(store.consume(claims("new", T0))).toBe(true);
+  });
+
+  it("fails closed when full, and frees room after pruning", () => {
+    let now = T0;
+    const store = createConsumedGoogleStates({ now: () => now, max: 2 });
+    expect(store.consume(claims("a"))).toBe(true);
+    expect(store.consume(claims("b"))).toBe(true);
+    expect(store.consume(claims("c"))).toBe(false);
+    now = T0 + (GOOGLE_STATE_TTL_SEC + 10) * 1000;
+    expect(store.consume(claims("d", now))).toBe(true);
   });
 });

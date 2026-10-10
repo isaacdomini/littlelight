@@ -156,6 +156,24 @@ describe("scrubTelemetryString: photo import (step 10)", () => {
     expect(out).toContain("ll-uploads/");
   });
 
+  it.each([
+    [
+      "ll-sync-export",
+      "/var/mobile/Containers/Data/Caches/ll-sync-export/MayaBirthday-IMG_0042.heic",
+    ],
+    [
+      "ll-sync",
+      "/var/mobile/Containers/Data/Library/Application Support/ll-sync/9f86d081884c7d65.json",
+    ],
+    ["ll-share", "/private/var/mobile/Containers/Shared/AppGroup/X/ll-share/Maya-first-bath.jpg"],
+  ])("scrubs files under %s/ but keeps the directory name", (dir, path) => {
+    const out = scrubTelemetryString(`open failed: ${path} (ENOENT)`);
+    const leaf = path.split("/").pop() as string;
+    expect(out).not.toContain(leaf);
+    expect(out).toContain(`${dir}/`);
+    expect(out).toContain("(ENOENT)");
+  });
+
   it("scrubs PHAsset local identifiers", () => {
     const out = scrubTelemetryString("asset ABCDEF01-2345-6789-ABCD-EF0123456789/L0/001 failed");
     expect(out).not.toContain("ABCDEF01");

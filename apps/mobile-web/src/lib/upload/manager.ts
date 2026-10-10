@@ -192,8 +192,13 @@ function errorCodeFor(e: unknown): { code: ItemErrorCode; retryable: boolean } {
   return { code: "network", retryable: true };
 }
 
-function sanitizeName(name: string): string {
-  return name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 40);
+/** Opaque per-file id (stored server-side as upload_files.client_id): never derived from a file name. */
+function opaqueId(n: number): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${n}-${rand}`;
 }
 
 export interface UploadManagerOptions {
@@ -301,7 +306,7 @@ export class UploadManager {
     const ids: string[] = [];
     let needsRegister = false;
     for (const ref of refs) {
-      const clientId = `${++this.counter}-${sanitizeName(ref.name)}`;
+      const clientId = opaqueId(++this.counter);
       ids.push(clientId);
       const reason = validateFile({ name: ref.name, size: ref.size, type: ref.mime });
       // The platform already hashed it (album sync): skip our own SHA-256 + EXIF read.
@@ -347,7 +352,7 @@ export class UploadManager {
     const detailsKey = JSON.stringify(details ?? {});
     const added: UploadItem[] = [];
     for (const file of files) {
-      const clientId = `${++this.counter}-${sanitizeName(file.name)}`;
+      const clientId = opaqueId(++this.counter);
       const reason = validateFile(file);
       const item: UploadItem = {
         clientId,
@@ -454,7 +459,7 @@ export class UploadManager {
         continue;
       }
       claimed.add(match.fileId);
-      const clientId = `${++this.counter}-${sanitizeName(file.name)}`;
+      const clientId = opaqueId(++this.counter);
       const r = this.newRuntime(file, detailsKey, session.details);
       r.sha256 = sha;
       r.prepared = true;

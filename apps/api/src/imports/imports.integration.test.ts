@@ -370,7 +370,7 @@ describe.skipIf(!databaseUrl)("photo import API", () => {
       expect(await accounts()).toEqual([mom.id]);
     });
 
-    it("an authorization code works once: the replay is status=error and keeps the first connection", async () => {
+    it("a state works once: the replay is status=expired and keeps the first connection", async () => {
       await setConsent({ decision: "allow", account: "acct-once" });
       const { url } = googleConnectResponseSchema.parse(
         (await h.inject(mom, "POST", "/me/import/google/connect", { client: "web" })).json(),
@@ -386,8 +386,71 @@ describe.skipIf(!databaseUrl)("photo import API", () => {
         connectedStatus((await h.inject(null, "GET", path)).headers.location as string).get(
           "status",
         ),
-      ).toBe("error");
+      ).toBe("expired");
       expect(googleConnectionSchema.parse((await connection(mom)).json()).connected).toBe(true);
+    });
+
+    it("a used state with a new code from another Google account: expired, connection unchanged, no /token call", async () => {
+      await setConsent({ decision: "allow", account: "acct-first" });
+      const { url } = googleConnectResponseSchema.parse(
+        (await h.inject(mom, "POST", "/me/import/google/connect", { client: "web" })).json(),
+      );
+      const loc1 = new URL(
+        (await fetch(url, { redirect: "manual" })).headers.get("location") ?? "",
+      );
+      const first = await h.inject(
+        null,
+        "GET",
+        `${loc1.pathname.replace(/^\/api/, "")}${loc1.search}`,
+      );
+      expect(connectedStatus(first.headers.location as string).get("status")).toBe("ok");
+      const before = (
+        await h.admin.query<{ connected_at: string; token: string }>(
+          "SELECT connected_at::text, refresh_token_enc::text AS token FROM public.google_accounts WHERE user_id = $1",
+          [mom.id],
+        )
+      ).rows[0];
+
+      // An attacker's own consent yields a fresh code; delivered with mom's already-used state.
+      await setConsent({ decision: "allow", account: "acct-attacker" });
+      const loc2 = new URL(
+        (await fetch(url, { redirect: "manual" })).headers.get("location") ?? "",
+      );
+      expect(loc2.searchParams.get("state")).toBe(loc1.searchParams.get("state"));
+      await json("DELETE", "/__fake/requests");
+      const replay = await h.inject(
+        null,
+        "GET",
+        `${loc2.pathname.replace(/^\/api/, "")}${loc2.search}`,
+      );
+      expect(connectedStatus(replay.headers.location as string).get("status")).toBe("expired");
+      expect((await fakeRequests()).filter((r) => r.path === "/token")).toEqual([]);
+      const after = (
+        await h.admin.query<{ connected_at: string; token: string }>(
+          "SELECT connected_at::text, refresh_token_enc::text AS token FROM public.google_accounts WHERE user_id = $1",
+          [mom.id],
+        )
+      ).rows[0];
+      expect(after).toEqual(before);
+    });
+
+    it("two parallel callbacks with one state: exactly one is ok", async () => {
+      await setConsent({ decision: "allow", account: "acct-race" });
+      const { url } = googleConnectResponseSchema.parse(
+        (await h.inject(mom, "POST", "/me/import/google/connect", { client: "web" })).json(),
+      );
+      const loc = new URL((await fetch(url, { redirect: "manual" })).headers.get("location") ?? "");
+      const path = `${loc.pathname.replace(/^\/api/, "")}${loc.search}`;
+      await json("DELETE", "/__fake/requests");
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () => h.inject(null, "GET", path)),
+      );
+      const statuses = results
+        .map((r) => connectedStatus(r.headers.location as string).get("status"))
+        .sort();
+      expect(statuses).toEqual(["expired", "expired", "expired", "ok"]);
+      expect((await fakeRequests()).filter((r) => r.path === "/token")).toHaveLength(1);
+      expect(await accounts()).toEqual([mom.id]);
     });
 
     it("throttles connect starts to 10 per user per hour (429 with Retry-After)", async () => {
@@ -616,6 +679,96 @@ describe.skipIf(!databaseUrl)("photo import API", () => {
       );
       expect(polls.length).toBe(1);
       expect(sent).toEqual([]);
+    });
+
+    describe("access-token cache", () => {
+      const tokenCalls = async () => (await fakeRequests()).filter((r) => r.path === "/token");
+      const refreshGrants = async () => {
+        // /token calls after the connect (code exchange) are refresh grants
+        return (await tokenCalls()).length;
+      };
+
+      it("polls reuse one minted token: one /token across many due polls", async () => {
+        const { batch } = await startBatch(mom);
+        await json("DELETE", "/__fake/requests");
+        for (let i = 0; i < 4; i++) {
+          await dueNow(batch.id);
+          const res = await getBatch(mom, batch.id);
+          expect(importBatchResponseSchema.parse(res.json()).batch.status).toBe("picking");
+        }
+        expect(await refreshGrants()).toBeLessThanOrEqual(1);
+        const polls = (await fakeRequests()).filter(
+          (r) => r.method === "GET" && r.path.startsWith("/v1/sessions/"),
+        );
+        expect(polls).toHaveLength(4);
+      });
+
+      it("a token Google expired early costs exactly one retry: one extra /token, the poll still succeeds", async () => {
+        const { batch } = await startBatch(mom);
+        await dueNow(batch.id);
+        await getBatch(mom, batch.id); // warms the cache
+        await json("POST", "/__fake/expire-access-tokens", {});
+        await json("DELETE", "/__fake/requests");
+        await dueNow(batch.id);
+        const res = await getBatch(mom, batch.id);
+        expect(res.statusCode).toBe(200);
+        expect(importBatchResponseSchema.parse(res.json()).batch.status).toBe("picking");
+        expect(await refreshGrants()).toBe(1);
+        const reqs = (await fakeRequests()).map(
+          (r) => `${r.method} ${r.path.startsWith("/v1/sessions/") ? "session" : r.path}`,
+        );
+        expect(reqs.filter((r) => r === "GET session")).toHaveLength(2); // 401, then the retry
+        // the new token is cached: the next poll mints nothing
+        await json("DELETE", "/__fake/requests");
+        await dueNow(batch.id);
+        await getBatch(mom, batch.id);
+        expect(await refreshGrants()).toBe(0);
+      });
+
+      it("disconnect and reconnect each force a new mint", async () => {
+        const { batch } = await startBatch(mom);
+        await dueNow(batch.id);
+        await getBatch(mom, batch.id); // warms the cache
+        await json("DELETE", "/__fake/requests");
+        await dueNow(batch.id);
+        await getBatch(mom, batch.id);
+        expect(await refreshGrants()).toBe(0);
+
+        // reconnect: the cached token of the old grant is dropped
+        await connect(mom);
+        await json("DELETE", "/__fake/requests");
+        await dueNow(batch.id);
+        await getBatch(mom, batch.id);
+        expect(await refreshGrants()).toBe(1);
+
+        // disconnect then connect again: a mint again, never a token of the old grant
+        expect((await h.inject(mom, "DELETE", "/me/import/google/connection")).statusCode).toBe(
+          204,
+        );
+        await connect(mom);
+        await json("DELETE", "/__fake/requests");
+        const next = await createBatch(mom, await h.baby(mom, "Fourth"));
+        expect(next.statusCode, next.body).toBe(201);
+        expect(await refreshGrants()).toBe(1);
+      });
+
+      it("invalid_grant: 409 google_reconnect and the cached token is evicted", async () => {
+        const { batch } = await startBatch(mom);
+        await dueNow(batch.id);
+        await getBatch(mom, batch.id); // warms the cache
+        await json("POST", "/__fake/revoke-all", {});
+        await json("POST", "/__fake/expire-access-tokens", {});
+        const res = await createBatch(mom, await h.baby(mom, "Second"));
+        expect(res.statusCode).toBe(409);
+        expect(apiErrorSchema.parse(res.json()).error).toBe("google_reconnect");
+        expect(googleConnectionSchema.parse((await connection(mom)).json()).needsReconnect).toBe(
+          true,
+        );
+        // evicted: a further call does not reuse the dead token, it reports reconnect
+        const again = await createBatch(mom, await h.baby(mom, "Third"));
+        expect(again.statusCode).toBe(409);
+        expect(apiErrorSchema.parse(again.json()).error).toBe("google_reconnect");
+      });
     });
 
     it("picked => queued and import.google is sent once, with ids only", async () => {

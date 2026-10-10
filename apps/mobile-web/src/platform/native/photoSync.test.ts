@@ -734,6 +734,42 @@ describe("settings actions", () => {
     expect(h.m.getStatus().config).toBeNull();
   });
 
+  it("sign-out wipes the ledger and config BEFORE the PATCH, even if the PATCH hangs", async () => {
+    const h = make();
+    h.api.mockImplementation(() => new Promise(() => undefined));
+    const done = vi.fn();
+    void h.m.onSignOut().then(done);
+    await vi.waitFor(() => expect(h.plugin.resetLedger).toHaveBeenCalled());
+    expect(h.kv.data.has(SYNC_CONFIG_KEY)).toBe(false);
+    expect(h.m.getStatus().config).toBeNull();
+    expect(h.api).toHaveBeenCalled(); // the PATCH was attempted, and is still pending
+    expect(done).not.toHaveBeenCalled();
+  });
+
+  it("sign-out wipes the ledger and config even if the PATCH rejects", async () => {
+    const h = make();
+    h.api.mockRejectedValue(new ApiError(0, "network", "offline"));
+    await h.m.onSignOut().catch(() => undefined);
+    expect(h.plugin.resetLedger).toHaveBeenCalled();
+    expect(h.kv.data.has(SYNC_CONFIG_KEY)).toBe(false);
+    expect(h.m.getStatus().config).toBeNull();
+  });
+
+  it("sign-out: the local wipe happens before the PATCH is sent", async () => {
+    const h = make();
+    const order: string[] = [];
+    h.plugin.resetLedger.mockImplementation(async () => {
+      order.push("wipe");
+    });
+    h.api.mockImplementation(async () => {
+      order.push("patch");
+      return { source: { id: SOURCE } };
+    });
+    await h.m.onSignOut();
+    expect(order.indexOf("wipe")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("wipe")).toBeLessThan(order.indexOf("patch"));
+  });
+
   it("sign-out without sync set up does nothing", async () => {
     const h = make({ cfg: null });
     await h.m.onSignOut();
