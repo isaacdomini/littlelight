@@ -227,6 +227,9 @@ async function addMember(babyId: string, email: string, role: "admin" | "contrib
   );
 }
 
+/** The brand logo <img> is the one URL emails may carry: exactly `${PUBLIC_URL}/email/logo.png`. */
+const withoutLogo = (s: string) => s.split(`src="${BASE}/email/logo.png"`).join('src=""');
+
 async function partA(): Promise<void> {
   console.log("\n-- A. fresh album: requester, co-admin, contributor, three fixtures --");
   const reqEmail = uniqueEmail("expgate-mom");
@@ -311,7 +314,7 @@ async function partA(): Promise<void> {
   const mail = await waitMail(reqEmail, /export of Export Gate is ready/i, seen);
   check("the requester got the 'ready' email", mail !== null);
   if (mail) {
-    const all = `${mail.subject}\n${mail.text}\n${mail.html}`;
+    const all = withoutLogo(`${mail.subject}\n${mail.text}\n${mail.html}`);
     check(
       "the email carries no link, token or storage key",
       !/https?:\/\/|href=|X-Amz|\.zip|exports\//i.test(all),
@@ -559,7 +562,8 @@ async function partB(): Promise<void> {
   const mail = await waitMail("demo-mom@tinyglow.local", /export of Maya is ready/i, seen);
   check(
     "Mailpit: 'ready' email to demo-mom, no link",
-    mail !== null && !/https?:\/\/|href=|X-Amz|\.zip/i.test(`${mail.text}\n${mail.html}`),
+    mail !== null &&
+      !/https?:\/\/|href=|X-Amz|\.zip/i.test(withoutLogo(`${mail.text}\n${mail.html}`)),
   );
   const dadView = (await listExports(dad, MAYA)).body.exports?.find((x) => x.id === e.id);
   const dadDl = await dad.call<{ error?: string }>(

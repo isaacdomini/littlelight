@@ -494,6 +494,16 @@ services:
       #   SHARE_MEDIA_URL_TTL_SEC=30 docker compose -f docker-compose.dev.yml up -d --no-deps api
       # The worker's SHARE_RECONCILE_CRON comes from .env.dev / .env.local.
       SHARE_MEDIA_URL_TTL_SEC: ${SHARE_MEDIA_URL_TTL_SEC:-300}
+      # Family-start safeguards (docs/plans/step-11.md 2.4, 2.10, D-J): new families per client
+      # IP per rolling 24 h, checked when an account creates its first album (guests never
+      # count). Production defaults to 5; dev raises it to 1000 because the seed and the e2e
+      # suites start many families from one address. Compose INTERPOLATION (shell or the
+      # git-ignored project `.env`, not .env.local, which `environment:` would override), so the
+      # abuse gate can lower it and a plain `up` puts it back on 1000:
+      #   FAMILIES_PER_IP_PER_DAY=2 docker compose -f docker-compose.dev.yml up -d --no-deps api
+      # BLOCK_DISPOSABLE_EMAIL and EMAIL_DOMAIN_DENYLIST / _ALLOWLIST are unset in .env.dev (api
+      # defaults: block on, no extra domains); try them from .env.local.
+      FAMILIES_PER_IP_PER_DAY: ${FAMILIES_PER_IP_PER_DAY:-1000}
       # Native apps (docs/plans/step-9.md 2.3, 2.8). NATIVE_APP_ORIGINS (CORS allow-list) comes
       # from .env.dev / .env.local. The api enqueues share_viewed pushes with this delay (s);
       # Compose INTERPOLATION, same value as the worker's (see the worker block). No other push
@@ -590,6 +600,9 @@ services:
       SMTP_SECURE: "false"
       MAIL_FROM: *dev-mail-from
       EXPORT_MAX_BYTES: ${EXPORT_MAX_BYTES:-}
+      # Browser origin for the logo in the export emails (${PUBLIC_URL}/email/logo.png), same
+      # anchor as the api's; unset would send them without the logo.
+      PUBLIC_URL: *dev-public-url
       # Photo import (docs/plans/step-10.md 2.7, 2.10): Picker downloads in flight per
       # import.google job (1..4); each streams to /tmp (<= 100 MiB). Provider + fake URLs come
       # from *dev-google-import-env; GOOGLE_IMPORT_CLIENT_ID / _SECRET from .env.local.

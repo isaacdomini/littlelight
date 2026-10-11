@@ -125,8 +125,8 @@ describe.skipIf(!databaseUrl)("timeline and details (step 5)", () => {
 
     async function seed() {
       await q(
-        "INSERT INTO babies (id, name, birth_date, plan) VALUES ($1, 'Deep', '2025-06-30', 'plus')",
-        [DEEP_BABY],
+        "INSERT INTO babies (id, name, birth_date, plan, family_id) VALUES ($1, 'Deep', '2025-06-30', 'plus', (SELECT family_id FROM babies WHERE id = $2))",
+        [DEEP_BABY, BABY.A],
       );
       await q("INSERT INTO baby_members (baby_id, user_id, role) VALUES ($1, $2, 'admin')", [
         DEEP_BABY,

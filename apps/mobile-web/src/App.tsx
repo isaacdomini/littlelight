@@ -26,6 +26,7 @@ import { Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import { FreshSignInProvider } from "./auth/FreshSignInGate";
 import { RedirectIfSignedIn, RequireAuth, RequireOnboarded, RootRedirect } from "./auth/guards";
+import { SuspendedGate } from "./components/SuspendedGate";
 import { ShareExpired } from "./components/share/ShareExpired";
 import { t } from "./i18n";
 import { ApiError } from "./lib/api";
@@ -114,77 +115,85 @@ function ParentApp() {
           <IonReactRouter>
             <FreshSignInProvider>
               {isNative() && <NativeEvents />}
-              <IonTabs>
-                <IonRouterOutlet>
-                  {/* public */}
-                  <Route
-                    path="/welcome"
-                    element={
-                      <RedirectIfSignedIn path="/welcome">
-                        <WelcomePage />
-                      </RedirectIfSignedIn>
-                    }
-                  />
-                  <Route path="/verify" element={<VerifyPage />} />
-                  <Route path="/signin/callback" element={<CallbackPage />} />
-                  <Route path="/signin/native" element={<NativeSignInPage />} />
-                  <Route path="/invite/:token" element={<InvitePage />} />
-                  <Route path="/legal/terms" element={<LegalPage kind="terms" />} />
-                  <Route path="/legal/privacy" element={<LegalPage kind="privacy" />} />
-                  {/* onboarding */}
-                  <Route
-                    path="/onboarding/consent"
-                    element={flow("/onboarding/consent", <ConsentPage />)}
-                  />
-                  <Route
-                    path="/onboarding/profile"
-                    element={flow("/onboarding/profile", <ProfilePage />)}
-                  />
-                  <Route path="/onboarding/baby" element={flow("/onboarding/baby", <BabyPage />)} />
-                  <Route
-                    path="/onboarding/invite"
-                    element={flow("/onboarding/invite", <InviteCoParentPage />)}
-                  />
-                  <Route path="/onboarding/plan" element={flow("/onboarding/plan", <PlanPage />)} />
-                  <Route
-                    path="/onboarding/first-upload"
-                    element={flow("/onboarding/first-upload", <FirstUploadPage />)}
-                  />
-                  {/* app */}
-                  <Route path="/chat" element={app("/chat", <ChatPage />)} />
-                  <Route path="/timeline" element={app("/timeline", <TimelinePage />)} />
-                  <Route path="/upload" element={app("/upload", <UploadPage />)} />
-                  <Route path="/milestones" element={app("/milestones", <MilestonesPage />)} />
-                  <Route path="/family" element={app("/family", <FamilyPage />)} />
-                  <Route
-                    path="/family/share/:linkId"
-                    element={app("/family/share/:linkId", <ShareLinkPhotosPage />)}
-                  />
-                  <Route path="/settings" element={app("/settings", <SettingsPage />, true)} />
-                  <Route
-                    path="/settings/devices"
-                    element={app("/settings/devices", <DevicesPage />, true)}
-                  />
-                  <Route
-                    path="/settings/export"
-                    element={app("/settings/export", <ExportPage />, true)}
-                  />
-                  <Route
-                    path="/settings/import"
-                    element={app("/settings/import", <ImportPage />, true)}
-                  />
-                  <Route
-                    path="/settings/notifications"
-                    element={app("/settings/notifications", <NotificationsPage />, true)}
-                  />
-                  <Route
-                    path="/settings/account"
-                    element={app("/settings/account", <AccountPage />, true)}
-                  />
-                  <Route path="/" element={<RootRedirect />} />
-                </IonRouterOutlet>
-                <TabBar />
-              </IonTabs>
+              <SuspendedGate>
+                <IonTabs>
+                  <IonRouterOutlet>
+                    {/* public */}
+                    <Route
+                      path="/welcome"
+                      element={
+                        <RedirectIfSignedIn path="/welcome">
+                          <WelcomePage />
+                        </RedirectIfSignedIn>
+                      }
+                    />
+                    <Route path="/verify" element={<VerifyPage />} />
+                    <Route path="/signin/callback" element={<CallbackPage />} />
+                    <Route path="/signin/native" element={<NativeSignInPage />} />
+                    <Route path="/invite/:token" element={<InvitePage />} />
+                    <Route path="/legal/terms" element={<LegalPage kind="terms" />} />
+                    <Route path="/legal/privacy" element={<LegalPage kind="privacy" />} />
+                    {/* onboarding */}
+                    <Route
+                      path="/onboarding/consent"
+                      element={flow("/onboarding/consent", <ConsentPage />)}
+                    />
+                    <Route
+                      path="/onboarding/profile"
+                      element={flow("/onboarding/profile", <ProfilePage />)}
+                    />
+                    <Route
+                      path="/onboarding/baby"
+                      element={flow("/onboarding/baby", <BabyPage />)}
+                    />
+                    <Route
+                      path="/onboarding/invite"
+                      element={flow("/onboarding/invite", <InviteCoParentPage />)}
+                    />
+                    <Route
+                      path="/onboarding/plan"
+                      element={flow("/onboarding/plan", <PlanPage />)}
+                    />
+                    <Route
+                      path="/onboarding/first-upload"
+                      element={flow("/onboarding/first-upload", <FirstUploadPage />)}
+                    />
+                    {/* app */}
+                    <Route path="/chat" element={app("/chat", <ChatPage />)} />
+                    <Route path="/timeline" element={app("/timeline", <TimelinePage />)} />
+                    <Route path="/upload" element={app("/upload", <UploadPage />)} />
+                    <Route path="/milestones" element={app("/milestones", <MilestonesPage />)} />
+                    <Route path="/family" element={app("/family", <FamilyPage />)} />
+                    <Route
+                      path="/family/share/:linkId"
+                      element={app("/family/share/:linkId", <ShareLinkPhotosPage />)}
+                    />
+                    <Route path="/settings" element={app("/settings", <SettingsPage />, true)} />
+                    <Route
+                      path="/settings/devices"
+                      element={app("/settings/devices", <DevicesPage />, true)}
+                    />
+                    <Route
+                      path="/settings/export"
+                      element={app("/settings/export", <ExportPage />, true)}
+                    />
+                    <Route
+                      path="/settings/import"
+                      element={app("/settings/import", <ImportPage />, true)}
+                    />
+                    <Route
+                      path="/settings/notifications"
+                      element={app("/settings/notifications", <NotificationsPage />, true)}
+                    />
+                    <Route
+                      path="/settings/account"
+                      element={app("/settings/account", <AccountPage />, true)}
+                    />
+                    <Route path="/" element={<RootRedirect />} />
+                  </IonRouterOutlet>
+                  <TabBar />
+                </IonTabs>
+              </SuspendedGate>
             </FreshSignInProvider>
           </IonReactRouter>
         </IonApp>

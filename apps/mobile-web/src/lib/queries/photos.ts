@@ -341,6 +341,7 @@ export function usePhotosInvalidation() {
       uploadManager.onPhotosChanged((babyId) => {
         void queryClient.invalidateQueries({ queryKey: photosRoot(babyId) });
         void queryClient.invalidateQueries({ queryKey: ["babies", babyId, "milestones"] });
+        void queryClient.invalidateQueries({ queryKey: ["babies", babyId, "freeTier"] });
       }),
     [queryClient],
   );
@@ -351,6 +352,7 @@ function useInvalidatePhotos(babyId: string) {
   return () => {
     void queryClient.invalidateQueries({ queryKey: photosRoot(babyId) });
     void queryClient.invalidateQueries({ queryKey: ["babies", babyId, "milestones"] });
+    void queryClient.invalidateQueries({ queryKey: ["babies", babyId, "freeTier"] });
   };
 }
 

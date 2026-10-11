@@ -1,4 +1,6 @@
 import {
+  type AbuseEnv,
+  abuseEnvSchema,
   aiPipelineEnvSchema,
   authEnvSchema,
   CHAT_DEFAULTS,
@@ -7,6 +9,7 @@ import {
   databaseEnvSchema,
   EMBED_DIMS,
   encryptionEnvSchema,
+  FAMILIES_PER_IP_PER_DAY_DEFAULT,
   GOOGLE_IMPORT_DEFAULTS,
   type GoogleImportEnv,
   googleImportEnvSchema,
@@ -64,6 +67,11 @@ import { z } from "zod";
 // `GOOGLE_IMPORT_PROVIDER` none (default) | fake (refused in production) | live (needs
 // `GOOGLE_IMPORT_CLIENT_ID` + `GOOGLE_IMPORT_CLIENT_SECRET`), the fake's internal and public base
 // URLs. Read through `googleImportSettings`; the client secret is never logged or serialized.
+// Step 11 (docs/plans/step-11.md 2.3, 2.5, D-H, D-J) adds the family-start safeguards
+// (`abuseEnvSchema`): `FAMILIES_PER_IP_PER_DAY` (default 5; dev Compose 1000),
+// `BLOCK_DISPOSABLE_EMAIL` (default true), `EMAIL_DOMAIN_DENYLIST` / `EMAIL_DOMAIN_ALLOWLIST`
+// (comma lists of domains). They apply when an account starts its family (first album), never at
+// sign-in. Every one has a default, so the api boots with none set. Read through `abuseSettings`.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -129,7 +137,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   // set by `loadConfig` (default `NODE_ENV`).
   Partial<SentryEnv> &
   // Optional in the type (always set by `loadConfig`); read through `googleImportSettings`.
-  Partial<Omit<GoogleImportEnv, "NODE_ENV">>;
+  Partial<Omit<GoogleImportEnv, "NODE_ENV">> &
+  // Optional in the type (always set by `loadConfig`); read through `abuseSettings`.
+  Partial<AbuseEnv>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -176,6 +186,7 @@ export function loadConfig(
     reviewAccountEnvSchema,
     sentryEnvSchema,
     googleImportEnvSchema,
+    abuseEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];
@@ -273,5 +284,19 @@ export function googleImportSettings(
       config.GOOGLE_IMPORT_FAKE_URL ?? GOOGLE_IMPORT_DEFAULTS.GOOGLE_IMPORT_FAKE_URL,
     GOOGLE_IMPORT_FAKE_PUBLIC_URL:
       config.GOOGLE_IMPORT_FAKE_PUBLIC_URL ?? GOOGLE_IMPORT_DEFAULTS.GOOGLE_IMPORT_FAKE_PUBLIC_URL,
+  };
+}
+
+/**
+ * Family-start safeguard settings with the shared defaults filled in (`abuseEnvSchema`, step-11
+ * plan 2.3, 2.5). The domain lists are already normalised by the schema (lowercase, no trailing
+ * dots, de-duplicated; `NEVER_BLOCKED_EMAIL_DOMAINS` dropped from the deny list).
+ */
+export function abuseSettings(config: Partial<AbuseEnv>): AbuseEnv {
+  return {
+    FAMILIES_PER_IP_PER_DAY: config.FAMILIES_PER_IP_PER_DAY ?? FAMILIES_PER_IP_PER_DAY_DEFAULT,
+    BLOCK_DISPOSABLE_EMAIL: config.BLOCK_DISPOSABLE_EMAIL ?? true,
+    EMAIL_DOMAIN_DENYLIST: config.EMAIL_DOMAIN_DENYLIST ?? [],
+    EMAIL_DOMAIN_ALLOWLIST: config.EMAIL_DOMAIN_ALLOWLIST ?? [],
   };
 }

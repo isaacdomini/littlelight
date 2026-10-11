@@ -40,6 +40,49 @@ export const en = {
   "welcome.captcha": "Please confirm you're not a robot.",
   "welcome.oauthFailed": "Couldn't start sign-in. Please try again.",
 
+  "signin.when.minutes.one": "{n} minute",
+  "signin.when.minutes.other": "{n} minutes",
+  "signin.when.hours.one": "{n} hour",
+  "signin.when.hours.other": "{n} hours",
+  "suspended.title": "This account is suspended",
+  "suspended.body": "This account has been suspended. Contact {support}.",
+  "suspended.contact": "Email support",
+  "suspended.signOut": "Sign out",
+  "freeTier.usage.one": "Your family's free photos: {used} of {limit} ({n} album)",
+  "freeTier.usage.other": "Your family's free photos: {used} of {limit} (across {n} albums)",
+  "freeTier.usageGuest": "This family's free photos: {used} of {limit}",
+  "freeTier.near": "Almost full: {left} free photos left.",
+  "freeTier.nearHint": "Delete photos you don't need to make room.",
+  "freeTier.nearUpgrade": " Upgrade to Plus for more room.",
+  "freeTier.over":
+    "Your family's free albums are full ({used} of {limit}). Upgrade to Plus or delete photos to add more.",
+  "freeTier.full.native":
+    "This family's free albums are full. Delete photos or ask a parent to make room.",
+  "freeTier.overParent.native":
+    "This family's free albums are full ({used} of {limit}). Delete photos to make room.",
+  "freeTier.overMember":
+    "This family's free albums are full ({used} of {limit}). Ask a parent to make room.",
+  "accept.useDifferentAccount": "Sign out and use a different account",
+  "family.err.email_not_allowed":
+    "Temporary or disposable email addresses can't start a family. Use your regular email address, or join a family as a guest.",
+  "family.err.inbox_has_family":
+    "Another Tinyglow account for this inbox ({masked}) already has a family. Sign in with that account to add an album, or use a different email.",
+  "family.err.inbox_has_family.nohint":
+    "Another Tinyglow account for this inbox already has a family. Sign in with that account to add an album, or use a different email.",
+  "family.err.family_limited":
+    "Too many new families were started from your network today. Try again tomorrow, or join a family as a guest.",
+  "family.err.family_limited.when":
+    "Too many new families were started from your network today. You can try again in about {when}, or join a family as a guest.",
+  "family.err.already_parent_elsewhere.invitee":
+    "You're already a parent in another family. To be a parent here, sign in with a different account — or ask for a guest invite instead.",
+  "family.err.already_parent_elsewhere.promoter":
+    "That person is already a parent in another family. They can join as a guest, or accept a parent invite from a different account.",
+  "family.err.already_parent_elsewhere.promoter.named":
+    "{name} is already a parent in another family and can stay as a guest here.",
+  "approve.err.free_tier_limit":
+    "This family's free albums are full (1,000 photos). Make room or upgrade to Plus before approving more photos.",
+  "approve.err.free_tier_limit.native":
+    "This family's free albums are full (1,000 of 1,000). Delete photos to make room.",
   "verify.title": "Enter your code",
   "verify.sent": "If this email is valid, we sent a code to {email}.",
   "verify.codeLabel": "6-digit code",
@@ -195,6 +238,12 @@ export const en = {
   "upload.dropActive": "Drop photos to upload",
   "upload.limitHint": "Up to 500 photos at a time. JPEG, PNG, HEIC and WebP, up to 100 MB each.",
   "upload.reviewNote": "Photos you add are reviewed by an admin before they appear in the album.",
+  "upload.guestNote":
+    "Photos you add wait for a parent's approval and count toward the family's free photos once approved.",
+  "upload.err.pending_limit":
+    "You have the most photos allowed waiting for approval in this family. Wait for a parent to review them before adding more.",
+  "upload.err.pending_limit.counts":
+    "You have {pending} photos waiting for approval in this family (the most is {limit}). Wait for a parent to review them before adding more.",
   "upload.resumeTitle": "Resume previous upload",
   "upload.resumeBody":
     "An upload didn't finish. Choose the same photos again and we'll continue where it stopped.",
@@ -236,7 +285,10 @@ export const en = {
   "upload.err.unsupported_media_type": "Unsupported file type",
   "upload.err.file_too_large": "Too large (100 MB max)",
   "upload.err.decode_failed": "This photo couldn't be read",
-  "upload.err.free_tier_limit": "The free plan holds 1,000 photos",
+  "upload.err.free_tier_limit":
+    "Your family's free albums are full: free albums hold 1,000 photos per family. Upgrade to Plus or delete photos to add more.",
+  "upload.err.free_tier_limit.native":
+    "This family's free albums are full. Delete photos or ask a parent to make room.",
   "upload.err.rejected": "Rejected",
   "upload.err.expired": "Upload expired. Try again.",
   "upload.err.storage_error": "Upload failed. Try again.",
@@ -844,7 +896,8 @@ export const en = {
   "sync.status.lastSync": "Last sync {when}",
   "sync.status.counts":
     "{imported} added · {duplicate} already there · {failed} failed · {skipped} skipped",
-  "sync.error.free_tier_limit": "Free album is full ({n} photos)",
+  "sync.error.free_tier_limit": "Your family's free albums are full ({n} photos in total)",
+  "sync.error.pending_limit": "Too many photos waiting for approval",
   "sync.error.permission_denied": "Allow full photo access in Settings",
   "sync.error.album_missing": "That album no longer exists",
   "sync.error.network": "Couldn't reach Tinyglow. It will try again later.",

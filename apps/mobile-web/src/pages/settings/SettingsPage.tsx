@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../../auth/AuthProvider";
 import { useSignOut } from "../../auth/useSignOut";
 import { AppHeader } from "../../components/AppHeader";
+import { FreeTierNotice } from "../../components/FreeTierNotice";
 import { Button } from "../../components/ui";
 import { t } from "../../i18n";
 import { useGoogleConnection } from "../../lib/googleImport";
@@ -47,6 +48,7 @@ export function SettingsPage() {
       <AppHeader title={t("settings.title")} />
       <IonContent className="ion-padding">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-6" data-testid="settings">
+          {baby ? <FreeTierNotice baby={baby} /> : null}
           <ul className="ll-list">
             {rows.map(([testId, to, label]) => (
               <li key={testId} className="!p-0">

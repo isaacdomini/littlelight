@@ -177,6 +177,41 @@ describe.skipIf(!databaseUrl)("members", () => {
       expect(await roleOf(babyId, c as TestUser)).toBe("contributor");
     });
 
+    it("promoting a guest who is a parent in another family is 409 already_parent_elsewhere; nothing changes", async () => {
+      const { a, c, babyId } = await album({ contributor: true });
+      const carol = c as TestUser;
+      const hers = await h.baby(carol, "Carol's own"); // Carol is a parent elsewhere, a guest here
+      const res = await h.inject(a, "PATCH", `/babies/${babyId}/members/${carol.id}`, {
+        role: "admin",
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("already_parent_elsewhere");
+      expect(res.json().message).toContain("already a parent in another family");
+      expect(res.body).not.toContain(carol.email);
+      expect(await roleOf(babyId, carol)).toBe("contributor");
+      expect(await h.audit({ event: "member.role_changed", baby: babyId })).toHaveLength(0);
+      expect((await h.inject(carol, "GET", `/babies/${hers}`)).json().role).toBe("admin");
+    });
+
+    it("promoting a guest who is only a guest elsewhere, or a parent of a sibling album of this family, is fine", async () => {
+      const { a, c, babyId } = await album({ contributor: true });
+      const carol = c as TestUser;
+      const other = await h.user();
+      const otherBaby = await h.baby(other);
+      await h.member(otherBaby, carol, "contributor");
+      expect(
+        (await h.inject(a, "PATCH", `/babies/${babyId}/members/${carol.id}`, { role: "admin" }))
+          .statusCode,
+      ).toBe(200);
+      // a sibling album of A's family: Carol (already a parent of the family) is promoted there too
+      const sibling = await h.baby(a, "Twin");
+      await h.member(sibling, carol, "contributor");
+      const res = await h.inject(a, "PATCH", `/babies/${sibling}/members/${carol.id}`, {
+        role: "admin",
+      });
+      expect(res.statusCode, res.body).toBe(200);
+    });
+
     it("a no-op (same role) is 200 and writes no audit row", async () => {
       const { a, c, babyId } = await album({ contributor: true });
       const res = await h.inject(a, "PATCH", `/babies/${babyId}/members/${(c as TestUser).id}`, {

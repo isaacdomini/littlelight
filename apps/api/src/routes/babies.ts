@@ -6,6 +6,8 @@ import {
   babyCreateSchema,
   babySchema,
   babyUpdateSchema,
+  FREE_TIER_PHOTO_LIMIT,
+  type FreeTier,
   idParamsSchema,
   type Plan,
 } from "@tinyglow/shared";
@@ -19,7 +21,22 @@ import {
   type Tx,
   withClaims,
 } from "../auth";
-import { ApiError, forbidden, notFound } from "../lib/errors";
+import {
+  callerFamilyId,
+  familyHolderEmailHint,
+  familyStartGuards,
+  recordFamilyStart,
+  releaseFamilyStart,
+} from "../auth/family-guards";
+import {
+  ApiError,
+  forbidden,
+  inboxHasFamily,
+  isPgError,
+  notFound,
+  safeErrorLog,
+} from "../lib/errors";
+import { clientCountry, clientIp, clientKind } from "../lib/request";
 
 // `/babies` routes (docs/plans/step-3.md 2.4; PRD FR-1.2, FR-1.4, "Roles and permissions").
 // Authorization is Postgres RLS (packages/db/migrations/1791520000200_identity.sql): a user sees
@@ -29,10 +46,22 @@ import { ApiError, forbidden, notFound } from "../lib/errors";
 // an admin). Every query names its columns (column-level grants: `SELECT *` on `babies` fails).
 // Calendar dates leave Postgres as `YYYY-MM-DD` text (a JS Date would shift with the TZ).
 
-const BABY_COLUMNS = `
+const SUMMARY_COLUMNS = `
   b.id, b.name, b.nickname, to_char(b.birth_date, 'YYYY-MM-DD') AS birth_date,
   b.birth_date_is_due_date, b.birth_weight_g, b.birth_length_mm, b.avatar_photo_id, b.plan,
   m.role, b.created_at, b.deleted_at`;
+
+/**
+ * Full `Baby` columns: the summary plus the free-tier pool (docs/plans/step-11.md 2.2 B, 2.5).
+ * The two SECURITY DEFINER functions count the approved photos and the free, live albums of the
+ * album's family (member-gated: the caller is a member of every row RLS shows). NULL for Plus or
+ * trashed albums. `GET /me` (`listBabySummaries`) does not pay for the count.
+ */
+const BABY_COLUMNS = `${SUMMARY_COLUMNS},
+  CASE WHEN b.plan = 'free' AND b.deleted_at IS NULL
+       THEN public.free_tier_pool_used(b.id) END AS pool_used,
+  CASE WHEN b.plan = 'free' AND b.deleted_at IS NULL
+       THEN public.free_tier_pool_albums(b.id) END AS pool_albums`;
 
 /** The caller's babies with their role; RLS filters out trashed babies for non-admins. */
 const BABY_FROM = `
@@ -52,6 +81,20 @@ interface BabyRow {
   role: BabyRole;
   created_at: Date;
   deleted_at: Date | null;
+  /** Only in `BABY_COLUMNS` queries; null for Plus or trashed albums. */
+  pool_used?: number | null;
+  pool_albums?: number | null;
+}
+
+/** The pool numbers of a free, live album; `null` for Plus or trashed ones. */
+function toFreeTier(r: BabyRow): FreeTier | null {
+  if (r.plan !== "free" || r.deleted_at !== null) return null;
+  return {
+    used: Math.max(0, r.pool_used ?? 0),
+    limit: FREE_TIER_PHOTO_LIMIT,
+    // ≥ 1: this album is in its family's pool (the function answers 0 only for a non-member).
+    familyAlbums: Math.max(1, r.pool_albums ?? 1),
+  };
 }
 
 function toBaby(r: BabyRow): Baby {
@@ -68,13 +111,14 @@ function toBaby(r: BabyRow): Baby {
     role: r.role,
     createdAt: r.created_at.toISOString(),
     deletedAt: r.deleted_at?.toISOString() ?? null,
+    freeTier: toFreeTier(r),
   };
 }
 
 /** Live babies of `uid` for `GET /me` and the header switcher, oldest first. */
 export async function listBabySummaries(client: Tx, uid: string): Promise<BabySummary[]> {
   const { rows } = await client.query<BabyRow>(
-    `SELECT ${BABY_COLUMNS} ${BABY_FROM} WHERE b.deleted_at IS NULL ORDER BY b.created_at, b.id`,
+    `SELECT ${SUMMARY_COLUMNS} ${BABY_FROM} WHERE b.deleted_at IS NULL ORDER BY b.created_at, b.id`,
     [uid],
   );
   return rows.map((r) => ({
@@ -144,38 +188,131 @@ export function babiesRoutes(app: FastifyInstance): void {
     preHandler: requireAuth,
     handler: async (request, reply) => {
       const body = request.body;
-      const baby = await withClaims(request, async (client, ctx) => {
-        await requireConsent(client, ctx);
-        // created_by = auth_uid() is required by the INSERT policy; the
-        // babies_add_creator_admin trigger then makes the caller the first admin.
-        const { rows } = await client.query<{ id: string }>(
-          `INSERT INTO public.babies
-             (name, nickname, birth_date, birth_date_is_due_date, birth_weight_g, birth_length_mm, created_by)
-           VALUES ($1, $2, $3::date, $4, $5, $6, $7)
-           RETURNING id`,
-          [
-            body.name,
-            body.nickname ?? null,
-            body.birthDate,
-            body.birthDateIsDueDate ?? false,
-            body.birthWeightG ?? null,
-            body.birthLengthMm ?? null,
-            ctx.uid,
-          ],
-        );
-        const id = rows[0]?.id;
-        const created = id ? await findBaby(client, ctx.uid, id) : null;
-        // Unreachable unless the creator-admin trigger is missing: fail rather than return a
-        // baby the caller cannot see.
-        if (!created) throw new ApiError(500, "internal", "Something went wrong");
-        await audit(client, "baby.created", {
-          babyId: created.id,
-          actorUserId: ctx.uid,
-          metadata: { role: created.role, client: request.auth?.clientKind ?? "web" },
-        });
-        return created;
+      const app = request.server;
+      const email = request.auth?.email ?? null;
+      const client = clientKind(request);
+
+      // Family start (docs/plans/step-11.md 2.1, 2.5, D-J): a caller who is a parent nowhere
+      // starts a family with this album, so the abuse checks run first, as service_role and
+      // outside the insert transaction (they read other accounts' rows). Later albums join the
+      // caller's family (`babies_set_family`) with no check.
+      const before = await withClaims(request, async (tx, ctx) => {
+        await requireConsent(tx, ctx);
+        return { familyId: await callerFamilyId(tx), uid: ctx.uid };
       });
-      return reply.code(201).send(baby);
+      const familyStart = before.familyId === null;
+      let guards: Awaited<ReturnType<typeof familyStartGuards>> | null = null;
+      if (familyStart) {
+        const { blocklist, abuse } = app.authRuntime;
+        try {
+          guards = await familyStartGuards(app, blocklist, abuse.FAMILIES_PER_IP_PER_DAY, {
+            email,
+            // Hashed inside the guards; never logged, never stored raw.
+            ip: clientIp(request),
+            country: clientCountry(request),
+            client,
+            userId: before.uid,
+          });
+        } catch (err) {
+          if (err instanceof ApiError) request.log.info({ outcome: err.code }, "family start");
+          throw err;
+        }
+      }
+      // The guards reserved a ledger row (hard per-network cap); drop it when no family was
+      // started after all. Best effort: a leftover reservation only counts against the network.
+      const releaseReservation = async () => {
+        if (!guards) return;
+        try {
+          await releaseFamilyStart(app, guards.reservationId);
+        } catch (err) {
+          request.log.warn({ err: safeErrorLog(err) }, "family-start reservation not released");
+        }
+      };
+
+      let created: { baby: Baby; startedFamilyId: string | null; uid: string };
+      try {
+        created = await withClaims(request, async (tx, ctx) => {
+          await requireConsent(tx, ctx);
+          // created_by = auth_uid() is required by the INSERT policy; `babies_set_family` puts
+          // the album in the caller's family (or a new one), then `babies_add_creator_admin`
+          // makes the caller its first admin.
+          const { rows } = await tx.query<{ id: string }>(
+            `INSERT INTO public.babies
+               (name, nickname, birth_date, birth_date_is_due_date, birth_weight_g, birth_length_mm, created_by)
+             VALUES ($1, $2, $3::date, $4, $5, $6, $7)
+             RETURNING id`,
+            [
+              body.name,
+              body.nickname ?? null,
+              body.birthDate,
+              body.birthDateIsDueDate ?? false,
+              body.birthWeightG ?? null,
+              body.birthLengthMm ?? null,
+              ctx.uid,
+            ],
+          );
+          const id = rows[0]?.id;
+          const baby = id ? await findBaby(tx, ctx.uid, id) : null;
+          // Unreachable unless the creator-admin trigger is missing: fail rather than return a
+          // baby the caller cannot see.
+          if (!baby) throw new ApiError(500, "internal", "Something went wrong");
+          // Did this insert found the family? `families.created_at` defaults to now(), the
+          // transaction start: equal only for a row created in this transaction. Exact even when
+          // two first albums of one caller race (the second joins the first one's family).
+          let startedFamilyId: string | null = null;
+          if (familyStart) {
+            const fam = await tx.query<{ family_id: string; fresh: boolean }>(
+              `SELECT b.family_id, (f.created_at = now()) AS fresh
+                 FROM public.babies b JOIN public.families f ON f.id = b.family_id
+                WHERE b.id = $1`,
+              [baby.id],
+            );
+            const row = fam.rows[0];
+            startedFamilyId = row?.fresh ? row.family_id : null;
+          }
+          await audit(tx, "baby.created", {
+            babyId: baby.id,
+            actorUserId: ctx.uid,
+            metadata: {
+              role: baby.role,
+              client: request.auth?.clientKind ?? "web",
+              ...(startedFamilyId ? { family_start: true } : {}),
+            },
+          });
+          return { baby, startedFamilyId, uid: ctx.uid };
+        });
+      } catch (err) {
+        await releaseReservation();
+        // `babies_set_family` inbox arbiter (D-B): another account for this inbox is already a
+        // parent. Add the masked hint here; the generic mapper has none.
+        if (
+          isPgError(err) &&
+          err.code === "23514" &&
+          err.message.startsWith("another account for this inbox")
+        ) {
+          request.log.info({ outcome: "inbox_has_family" }, "family start");
+          const hint = email ? await familyHolderEmailHint(app, email).catch(() => null) : null;
+          throw inboxHasFamily(hint);
+        }
+        throw err;
+      }
+
+      if (guards && created.startedFamilyId) {
+        try {
+          await recordFamilyStart(app, {
+            reservationId: guards.reservationId,
+            familyId: created.startedFamilyId,
+          });
+          request.log.info({ outcome: "started" }, "family start");
+        } catch (err) {
+          // The album exists; the reservation stays (family_id NULL) and still counts.
+          request.log.warn({ err: safeErrorLog(err) }, "family-start ledger row not filled");
+        }
+      } else {
+        // A concurrent first album of this account started the family: this one joined it.
+        await releaseReservation();
+      }
+      return reply.code(201).send(created.baby);
     },
   });
 

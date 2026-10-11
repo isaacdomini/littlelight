@@ -143,7 +143,12 @@ interface ItemRow {
 /** Why the item loop stopped early. */
 type Stop =
   | { kind: "cancel" }
-  | { kind: "free_tier" }
+  /**
+   * A cap refused the booking: the family's free pool (`free_tier_limit`) or, for a guest, their
+   * pending queue in this family (`pending_limit`, step 11). Either way the run stops as `done`
+   * and the untouched items are marked with that error.
+   */
+  | { kind: "cap"; itemError: "free_tier_limit" | "pending_limit" }
   | { kind: "reconnect" }
   | { kind: "fail"; error: ImportBatchError; itemError: ImportItemError }
   | { kind: "transient"; category: string };
@@ -562,9 +567,10 @@ export async function runImportGoogle(
           await markItem(item.id, "duplicate", null);
           break;
         case "free_tier_limit":
+        case "pending_limit":
           await dropObject(item.storage_key, item.id);
-          await markItem(item.id, "failed", "free_tier_limit");
-          setStop({ kind: "free_tier" });
+          await markItem(item.id, "failed", outcome);
+          setStop({ kind: "cap", itemError: outcome });
           break;
         case "not_member":
           await dropObject(item.storage_key, item.id);
@@ -632,8 +638,8 @@ export async function runImportGoogle(
   switch (s.kind) {
     case "cancel":
       return finish("cancelled", null, overflow);
-    case "free_tier":
-      await q(MARK_PENDING_SQL, [batchId, "free_tier_limit"]);
+    case "cap":
+      await q(MARK_PENDING_SQL, [batchId, s.itemError]);
       return finish("done", null, overflow);
     case "reconnect":
       await q(MARK_RECONNECT_SQL, [batchId]);

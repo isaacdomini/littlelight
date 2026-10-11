@@ -42,6 +42,7 @@
   --on-accent: #1c1c1e; /* text on accent fills (6.5:1) */
   --accent-tint: color-mix(in srgb, var(--accent) 16%, var(--bg));
   --border: #eceae7; /* hairline dividers */
+  --logo-glow: 0.45; /* outer glow of the logo mark (stronger on dark) */
   --control-border: #8c8c92; /* form control boundaries (3:1) */
   --success: #3c9d6e;
   --success-text: #23744d;
@@ -88,6 +89,7 @@
     --accent-text: #f0957f;
     --on-accent: #1c1c1e;
     --border: #26272b;
+    --logo-glow: 0.7;
     --control-border: #6e6f76;
     --success: #3c9d6e;
     --success-text: #4cb883;

@@ -20,6 +20,7 @@ import {
 } from "../components/ui";
 import { t } from "../i18n";
 import { apiRequest, errorMessage } from "../lib/api";
+import { memberError } from "../lib/familyErrors";
 import { membersKey, useMembers } from "../lib/queries";
 
 const roleLabel = (r: BabyRole) => t(r === "admin" ? "role.adminLabel" : "role.contributorLabel");
@@ -52,7 +53,7 @@ export function FamilyPage() {
       setNotice(msg);
       void refresh();
     },
-    onError: (e) => setError(errorMessage(e)),
+    onError: (e) => setError(memberError(e, "promoter")),
   });
 
   const act = (job: () => Promise<string | null>) => run.mutate(job);

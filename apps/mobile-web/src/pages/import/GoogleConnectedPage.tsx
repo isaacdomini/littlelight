@@ -38,7 +38,7 @@ export function GoogleConnectedPage() {
     ok && native ? t("google.connected.body.okNative") : t(`google.connected.body.${q.status}`);
 
   return (
-    <FlowPage title={title} subtitle={body} testId="google-connected-page">
+    <FlowPage title={title} subtitle={body} testId="google-connected-page" brand>
       <div className="flex flex-col items-start gap-3">
         <span
           aria-hidden

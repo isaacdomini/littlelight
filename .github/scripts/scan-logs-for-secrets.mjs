@@ -5,7 +5,7 @@
 // captured across the push gate's and the export gate's container recreations/restarts;
 // runnable locally on any saved log files:
 //
-//   node .github/scripts/scan-logs-for-secrets.mjs [--require <regex>]... <file|dir>...
+//   node .github/scripts/scan-logs-for-secrets.mjs [--pii] [--require <regex>]... <file|dir>...
 //
 // Directories are read for *.log files (not recursive). The gate itself also checks the exact
 // random tokens it generated; this scan has no access to those, so it looks for anything
@@ -46,6 +46,13 @@
 //   picker-uri-field      a `pickerUri` / `baseUrl` field with a real value (a "[redacted]" censor,
 //                         null or empty is fine)
 //   native-upload-path    `ll-uploads/<file>` (the iOS upload cache)
+// Personal data, opt-in with `--pii` (docs/plans/step-11.md 4.3 / 4.4 step 8, task 11.9b; the
+// abuse gate's api + worker logs). Not on by default: the other gates' logs were never held to it.
+//   email     an email address `local@domain.tld` (alphabetic TLD of 2+ letters, so package
+//             specifiers such as `pino@9.1.0` do not match; `[redacted]` is fine)
+//   ipv4      a free-standing dotted quad (each octet 0-255, no digit, letter or dot either side)
+//             other than 0.0.0.0 and 127.x.x.x, on a line that is not a server's "listening"
+//             line (Fastify prints its bind addresses at start-up; no request is behind those)
 // Only file:line and the pattern name are printed, never the matching text. `--require` makes the
 // scan non-vacuous: each regex must match somewhere in the scanned logs (e.g. `push\.notify`
 // proves the worker's push jobs ran while the tap was on). ANSI colour codes are stripped first.
@@ -56,8 +63,10 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const required = [];
 const inputs = [];
+let pii = false;
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--require") {
+  if (args[i] === "--pii") pii = true;
+  else if (args[i] === "--require") {
     const re = args[++i];
     if (!re) usage();
     required.push(new RegExp(re));
@@ -66,7 +75,7 @@ for (let i = 0; i < args.length; i++) {
 if (inputs.length === 0) usage();
 
 function usage() {
-  console.error("usage: scan-logs-for-secrets.mjs [--require <regex>]... <file|dir>...");
+  console.error("usage: scan-logs-for-secrets.mjs [--pii] [--require <regex>]... <file|dir>...");
   process.exit(2);
 }
 
@@ -119,6 +128,28 @@ const PATTERNS = [
   ["native-upload-path", /(?<![\w-])ll-uploads\/[^\s"'<>]+/],
 ];
 
+const IPV4 = /(?<![\w.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\w|\.\w)/g;
+/** True when `row` holds a client-IP-shaped dotted quad (see the header). */
+function ipv4(row) {
+  if (/listening/i.test(row)) return false;
+  for (const m of row.matchAll(IPV4)) {
+    const o = m.slice(1, 5).map(Number);
+    if (o.some((x) => x > 255)) continue;
+    if (o[0] === 127 || o.every((x) => x === 0)) continue;
+    return true;
+  }
+  return false;
+}
+if (pii) {
+  PATTERNS.push(
+    [
+      "email",
+      /(?<![\w.%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])/,
+    ],
+    ["ipv4", { test: ipv4 }],
+  );
+}
+
 const files = [];
 for (const p of inputs) {
   let st;
@@ -161,7 +192,7 @@ let fail = false;
 if (hits.length > 0) {
   for (const h of hits.slice(0, 50)) console.error(h);
   console.error(
-    `::error::${hits.length} token-shaped value(s) in the logs (locations above; values not printed)`,
+    `::error::${hits.length} ${pii ? "sensitive" : "token-shaped"} value(s) in the logs (locations above; values not printed)`,
   );
   fail = true;
 }
@@ -173,5 +204,5 @@ required.forEach((re, k) => {
 });
 if (fail) process.exit(1);
 console.log(
-  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL or upload-cache path in the logs`,
+  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL or upload-cache path${pii ? ", email address or IPv4 address" : ""} in the logs`,
 );

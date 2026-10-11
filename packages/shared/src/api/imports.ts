@@ -56,9 +56,11 @@ export const syncTriggerSchema = z.enum(SYNC_TRIGGERS);
 export type SyncTrigger = z.infer<typeof syncTriggerSchema>;
 
 /**
- * `import_sources.last_error`: `free_tier_limit` (the free album is full; the run stopped),
- * `permission_denied` (Photos access is not "Full"), `album_missing` (the album was deleted),
- * `network`, `storage_error`, `baby_trashed`, `signed_out` (written by the sign-out hook).
+ * `import_sources.last_error`: `free_tier_limit` (the family's free albums are full; the run
+ * stopped), `permission_denied` (Photos access is not "Full"), `album_missing` (the album was
+ * deleted), `network`, `storage_error`, `baby_trashed`, `signed_out` (written by the sign-out
+ * hook), `pending_limit` (step 11: the guest's pending queue in this family is full; the run
+ * stopped).
  */
 export const IMPORT_SOURCE_ERRORS = [
   "free_tier_limit",
@@ -68,6 +70,7 @@ export const IMPORT_SOURCE_ERRORS = [
   "storage_error",
   "baby_trashed",
   "signed_out",
+  "pending_limit",
 ] as const;
 export const importSourceErrorSchema = z.enum(IMPORT_SOURCE_ERRORS);
 export type ImportSourceError = z.infer<typeof importSourceErrorSchema>;
@@ -289,7 +292,10 @@ export const IMPORT_ITEM_STATUSES = [
 export const importItemStatusSchema = z.enum(IMPORT_ITEM_STATUSES);
 export type ImportItemStatus = z.infer<typeof importItemStatusSchema>;
 
-/** `import_items.error`. */
+/**
+ * `import_items.error`; step 11 appends `pending_limit` (`import_book_photo()` outcome when the
+ * requester's pending queue in this family is full).
+ */
 export const IMPORT_ITEM_ERRORS = [
   "unsupported_media_type",
   "file_too_large",
@@ -298,6 +304,7 @@ export const IMPORT_ITEM_ERRORS = [
   "storage_error",
   "not_member",
   "baby_trashed",
+  "pending_limit",
 ] as const;
 export const importItemErrorSchema = z.enum(IMPORT_ITEM_ERRORS);
 export type ImportItemError = z.infer<typeof importItemErrorSchema>;

@@ -514,7 +514,7 @@ export class PhotoSyncManager {
     if (trigger !== "manual") {
       if (s.lastRunAt !== null && now() - s.lastRunAt < SYNC_MIN_INTERVAL_SEC * 1000) return true;
       if (
-        s.lastError === "free_tier_limit" &&
+        (s.lastError === "free_tier_limit" || s.lastError === "pending_limit") &&
         s.lastRunAt !== null &&
         now() - s.lastRunAt < COOLDOWN_FREE_LIMIT_MS
       ) {
@@ -663,6 +663,9 @@ export class PhotoSyncManager {
         if (code === "free_tier_limit") {
           // Leave it pending (no attempt used): a later run after an upgrade retries it.
           stop = "free_tier_limit";
+        } else if (code === "pending_limit") {
+          // Guest's pending queue is full: leave it pending, no attempt used; retry after approvals.
+          stop ??= "pending_limit";
         } else if (code && UNSUPPORTED_CODES.has(code)) {
           outcomes.push({ id: f.id, outcome: "skipped" });
         } else {

@@ -5,9 +5,12 @@ import {
   EXPORTS_PER_BABY_PER_DAY,
   IMPORT_BATCHES_PER_BABY_PER_DAY,
   IMPORT_SOURCES_PER_BABY_MAX,
+  type InboxHasFamilyDetails,
   type PasscodeInvalidDetails,
+  type PendingLimitDetails,
   SHARE_EXPIRED_MESSAGE,
   SHARE_LINKS_PER_BABY_MAX,
+  SUPPORT_EMAIL,
 } from "@tinyglow/shared";
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
@@ -270,8 +273,19 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
     "invite is no longer valid",
     () => new ApiError(410, "invite_expired", "This invite is no longer valid"),
   ],
-  // Step 4 (packages/db/migrations/1791700000100_uploads-and-ingest.sql, 1791520000300_photos.sql).
+  // Step 4 (packages/db/migrations/1791700000100_uploads-and-ingest.sql, 1791520000300_photos.sql);
+  // per family and approved-only from step 11 (`photos_free_tier_cap`, migration 21): raised by
+  // admin uploads, approve, restore and import booking alike.
   ["free tier photo limit reached", () => freeTierLimit()],
+  // Step 11 (docs/plans/step-11.md 2.2 A–C, 2.5; packages/db/migrations/1792400000100_free-tier-abuse.sql).
+  // `baby_members_one_family`: accepting an admin invite or a promotion while a parent elsewhere.
+  ["user is already a parent in another family", () => alreadyParentElsewhere()],
+  // `photos_pending_cap`: the uploader's pending queue in this family is full. Routes that know
+  // the counts throw `pendingLimit({ pending, limit })` themselves; this fallback omits them.
+  ["pending photo limit reached", () => pendingLimit()],
+  // `babies_set_family` inbox arbiter. `POST /babies` catches it first to add the masked hint;
+  // anywhere else it maps without one.
+  ["another account for this inbox already has a family", () => inboxHasFamily(null)],
   [
     "upload session is full",
     () =>
@@ -558,9 +572,97 @@ const UNIQUE_VIOLATIONS: ReadonlyMap<string, () => ApiError> = new Map([
   ["import_batches_one_active_per_baby", () => importInProgress()],
 ]);
 
-/** 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). */
+/**
+ * 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). From step 11
+ * (docs/plans/step-11.md 2.2 B, 2.9) the 1,000 photos are a per-family pool of approved photos
+ * shared by every free, live album of the family (pending photos never count).
+ */
 export const freeTierLimit = () =>
-  new ApiError(409, "free_tier_limit", "This album is on the free plan, which holds 1,000 photos");
+  new ApiError(
+    409,
+    "free_tier_limit",
+    "Your family's free albums are full: free albums hold 1,000 photos per family. Upgrade to Plus or delete photos to add more.",
+  );
+
+// Step 11 (docs/plans/step-11.md 2.4, 2.5, 2.9, D-B, D-J): family-start refusals, the
+// one-family-per-parent rule, the guest pending cap and suspension. Messages name no address
+// except the masked hint of `inboxHasFamily`.
+
+/**
+ * 409 `inbox_has_family` at family start (`POST /babies`, `babies_set_family` inbox arbiter):
+ * another live account with the same canonical address is already a parent. `existingEmailMasked`
+ * must already be masked (`maskEmail`); it is the only address ever echoed. `null` (hint
+ * unreadable, or the generic trigger mapping) omits it from both the message and `details`.
+ */
+export const inboxHasFamily = (existingEmailMasked: string | null) =>
+  existingEmailMasked
+    ? new ApiError(
+        409,
+        "inbox_has_family",
+        `Another Tinyglow account for this inbox (${existingEmailMasked}) already has a family. Sign in with that account to add an album, or use a different email.`,
+        { existingEmailMasked } satisfies InboxHasFamilyDetails,
+      )
+    : new ApiError(
+        409,
+        "inbox_has_family",
+        "Another Tinyglow account for this inbox already has a family. Sign in with that account to add an album, or use a different email.",
+      );
+
+/** 400 `email_not_allowed`: starting a family (first album) from a disposable domain. */
+export const emailNotAllowed = () =>
+  new ApiError(
+    400,
+    "email_not_allowed",
+    "Temporary or disposable email addresses can't start a family. Use your regular email address, or join a family as a guest.",
+  );
+
+/** 429 `family_limited` + `Retry-After`: `FAMILIES_PER_IP_PER_DAY` reached for this network. */
+export const familyLimited = (retryAfterSec: number) =>
+  new ApiError(
+    429,
+    "family_limited",
+    "Too many new families were started from your network today. Try again tomorrow, or join a family as a guest.",
+    undefined,
+    { retryAfterSec },
+  );
+
+/**
+ * 409 `already_parent_elsewhere` (`baby_members_one_family`): an admin-invite accept or a
+ * promotion would make the account a parent in a second family.
+ */
+export const alreadyParentElsewhere = () =>
+  new ApiError(
+    409,
+    "already_parent_elsewhere",
+    "This account is already a parent in another family. Use a different account to be a parent here, or join as a guest.",
+  );
+
+/**
+ * 409 `pending_limit` (`photos_pending_cap` and the upload/import pre-checks): the caller's live
+ * pending photos in this family reached `public.pending_photo_limit()`. `details` only when the
+ * caller knows the counts.
+ */
+export const pendingLimit = (counts?: PendingLimitDetails) =>
+  counts
+    ? new ApiError(
+        409,
+        "pending_limit",
+        `You have ${counts.pending} photos waiting for approval in this family (the most is ${counts.limit}). Wait for a parent to review them before adding more.`,
+        { pending: counts.pending, limit: counts.limit } satisfies PendingLimitDetails,
+      )
+    : new ApiError(
+        409,
+        "pending_limit",
+        "You have the most photos waiting for approval in this family. Wait for a parent to review them before adding more.",
+      );
+
+/** 403 `account_suspended`: an operator suspended the account (`admin:suspend`). */
+export const accountSuspended = () =>
+  new ApiError(
+    403,
+    "account_suspended",
+    `This account has been suspended. Contact ${SUPPORT_EMAIL}.`,
+  );
 
 function isInputCheck(err: PgErrorLike): boolean {
   if (SHAPE_MESSAGE.test(err.message)) return true;

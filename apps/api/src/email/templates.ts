@@ -1,9 +1,10 @@
 import type { BabyRole } from "@tinyglow/shared";
 import type { MailMessage } from "./mailer";
 
-// API email templates (docs/plans/step-3.md 2.7). Plain, branded, no images, no trackers, no
-// remote content. Every interpolated value is HTML-escaped; links are http(s) only. Pair with
-// `Mailer.send({ to, ...content })`.
+// API email templates (docs/plans/step-3.md 2.7). Plain and branded: the only image is the brand
+// logo, served by web at `${PUBLIC_URL}/email/logo.png` (alt text "Tinyglow" when images are
+// blocked). No trackers, no other remote content. Every interpolated value is HTML-escaped; links
+// are http(s) only. Pair with `Mailer.send({ to, ...content })`.
 
 export type EmailContent = Required<Omit<MailMessage, "to">>;
 
@@ -46,13 +47,24 @@ const ROLE_LABEL: Readonly<Record<BabyRole, string>> = {
   contributor: "a contributor",
 };
 
-function layout(title: string, bodyHtml: string): string {
+/** Path of the email logo under `PUBLIC_URL` (apps/mobile-web/public/email/logo.png, 480x108). */
+export const EMAIL_LOGO_PATH = "/email/logo.png";
+
+/**
+ * The logo URL for an email whose link is `link`. Every link in these emails is built from
+ * `PUBLIC_URL`, the browser origin, so the link's origin is `PUBLIC_URL`.
+ */
+function logoUrl(link: string): string {
+  return `${new URL(link).origin}${EMAIL_LOGO_PATH}`;
+}
+
+function layout(title: string, bodyHtml: string, logoSrc: string): string {
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head>
 <body style="margin:0;padding:24px;background:#faf7f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#2b2b2b;">
 <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
-<p style="margin:0 0 24px;font-size:20px;font-weight:600;">Tinyglow</p>
+<p style="margin:0 0 24px;"><img src="${escapeHtml(logoSrc)}" alt="Tinyglow" width="240" height="54" style="display:block;border:0;outline:none;text-decoration:none;font-size:20px;font-weight:600;color:#2b2b2b;"></p>
 ${bodyHtml}
 <p style="margin:32px 0 0;font-size:12px;color:#777;">You're receiving this because someone used this address on Tinyglow, a private baby photo album.</p>
 </div>
@@ -86,6 +98,7 @@ export function inviteEmail(input: InviteEmailInput): EmailContent {
     `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(inviter)} invited you to join <strong>${escapeHtml(baby)}</strong>'s album as ${escapeHtml(role)}.</p>
 ${button(url, "Accept invite")}
 <p style="margin:0;font-size:14px;color:#555;">This invite expires in 7 days (${escapeHtml(expires)}); accept it by signing in with this email address.</p>`,
+    logoUrl(url),
   );
   const text = `${inviter} invited you to join ${baby}'s album on Tinyglow as ${role}.
 
@@ -119,6 +132,7 @@ export function newDeviceEmail(input: NewDeviceEmailInput): EmailContent {
 <p style="margin:0 0 16px;font-size:15px;"><strong>${escapeHtml(details)}</strong></p>
 <p style="margin:0 0 8px;font-size:14px;">If this was you, there's nothing to do. If not, sign that device out and check your email account's security.</p>
 ${button(url, "Review devices")}`,
+    logoUrl(url),
   );
   const text = `Your Tinyglow account was just signed in on a new device:
 

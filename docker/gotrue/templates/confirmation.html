@@ -13,20 +13,27 @@
     token_hash in the URL FRAGMENT (never sent to nginx/server logs); the SPA posts it to
     /api/auth/verify. Do not use {{ .ConfirmationURL }}: it points at GoTrue's /verify, which
     nginx and the Vite proxy no longer expose.
-    No images, trackers or external resources.
+    The only external resource is the brand logo, loaded from {{ .SiteURL }}/email/logo.png
+    (GOTRUE_SITE_URL = PUBLIC_URL in both compose files; the file is
+    apps/mobile-web/public/email/logo.png, 480x108 shown at 240x54 for 2x screens). No query
+    string, no per-recipient URL, no tracking pixels. Colours follow brand/README.md: Ink #1C1C1E
+    text, Coral #E8836B accent rule. The link stays Ink and underlined because coral on white is
+    below WCAG AA contrast for 14px text.
   -->
-  <body style="margin:0;padding:0;background:#f7f5f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#2b2b2b;">
+  <body style="margin:0;padding:0;background:#f7f5f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1C1C1E;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f5f2;padding:32px 16px;">
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:12px;padding:32px;">
             <tr>
               <td>
+                <img src="{{ .SiteURL }}/email/logo.png" alt="Tinyglow" width="240" height="54" style="display:block;width:240px;height:54px;border:0;outline:none;text-decoration:none;margin:0 0 20px;" />
+                <div style="height:3px;width:48px;background:#E8836B;border-radius:2px;margin:0 0 24px;font-size:0;line-height:0;">&nbsp;</div>
                 <h1 style="margin:0 0 16px;font-size:20px;font-weight:600;">Welcome to Tinyglow</h1>
                 <p style="margin:0 0 24px;font-size:16px;line-height:1.5;">Enter this code in the app to confirm your email and finish signing up:</p>
                 <p style="margin:0 0 24px;font-size:32px;font-weight:700;letter-spacing:8px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;">{{ .Token }}</p>
                 <p style="margin:0 0 24px;font-size:14px;line-height:1.5;color:#555;">The code expires in 10 minutes and can be used once.</p>
-                <p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#555;">On a computer, open this link to confirm your email and sign in instead:<br /><a href="{{ .SiteURL }}/signin/callback#token_hash={{ .TokenHash }}&amp;type=email" style="color:#7a4fd6;word-break:break-all;">Confirm and sign in</a></p>
+                <p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:#555;">On a computer, open this link to confirm your email and sign in instead:<br /><a href="{{ .SiteURL }}/signin/callback#token_hash={{ .TokenHash }}&amp;type=email" style="color:#1C1C1E;font-weight:600;text-decoration:underline;word-break:break-all;">Confirm and sign in</a></p>
                 <p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#888;">If you didn't sign up for Tinyglow, you can ignore this email; nobody can use this address without the code.</p>
               </td>
             </tr>

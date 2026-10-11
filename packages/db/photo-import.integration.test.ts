@@ -523,6 +523,11 @@ describe.skipIf(!databaseUrl)("photo import (migration 20)", () => {
     it("demotion from admin deletes the user's apple sources of that baby only", async () => {
       await sandbox(async () => {
         await addSource(U.adminA2);
+        // One family per parent (step 11): fold B into A's family so adminA2 may administer both.
+        await q(
+          "UPDATE babies SET family_id = (SELECT family_id FROM babies WHERE id = $1) WHERE id = $2",
+          [BABY.A, BABY.B],
+        );
         await q("INSERT INTO baby_members (baby_id, user_id, role) VALUES ($1, $2, 'admin')", [
           BABY.B,
           U.adminA2,
@@ -1518,8 +1523,8 @@ describe.skipIf(!databaseUrl)("photo import (migration 20)", () => {
       await sandbox(async () => {
         const baby = randomUUID();
         await q(
-          "INSERT INTO babies (id, name, birth_date, plan) VALUES ($1, 'Free', '2025-06-30', 'free')",
-          [baby],
+          "INSERT INTO babies (id, name, birth_date, plan, family_id) VALUES ($1, 'Free', '2025-06-30', 'free', (SELECT family_id FROM babies WHERE id = $2))",
+          [baby, BABY.A],
         );
         await q("INSERT INTO baby_members (baby_id, user_id, role) VALUES ($1, $2, 'admin')", [
           baby,

@@ -525,6 +525,107 @@ describe.skipIf(!databaseUrl)("invites", () => {
     });
   });
 
+  describe("one family per parent (step 11)", () => {
+    it("an admin invite accepted by a parent elsewhere is 409 already_parent_elsewhere and the invite is not consumed", async () => {
+      const { admin, babyId } = await setup();
+      const partner = await h.user({ displayName: "Dad" });
+      const partnersOwn = await h.baby(partner, "Dad's album"); // partner is a parent of their own family
+      const { invite: inv, token } = await invite(admin, babyId, partner.email, "admin");
+      const res = await accept(partner, token);
+      expect(res.statusCode).toBe(409);
+      const body = res.json();
+      expect(body.error).toBe("already_parent_elsewhere");
+      expect(body.message).toBe(
+        "This account is already a parent in another family. Use a different account to be a parent here, or join as a guest.",
+      );
+      expect(res.body).not.toContain(partner.email);
+      expect(
+        (
+          await h.admin.query(
+            "SELECT 1 FROM public.baby_members WHERE baby_id = $1 AND user_id = $2",
+            [babyId, partner.id],
+          )
+        ).rows,
+      ).toHaveLength(0);
+      const row = (
+        await h.admin.query("SELECT accepted_at, accepted_by FROM public.invites WHERE id = $1", [
+          inv.id,
+        ])
+      ).rows[0];
+      expect(row).toEqual({ accepted_at: null, accepted_by: null });
+      expect(await h.audit({ event: "invite.accepted", baby: babyId })).toHaveLength(0);
+      // the failed accept did not burn the invite or change the partner's own family
+      expect((await h.inject(partner, "GET", `/babies/${partnersOwn}`)).json().role).toBe("admin");
+      expect((await h.inject(partner, "GET", `/babies/${babyId}`)).statusCode).toBe(404);
+      expect(h.gotrue.calls.adminDeleteUser).toHaveLength(0);
+    });
+
+    it("the same person accepts a contributor invite (a guest in any number of families): 200", async () => {
+      const { admin, babyId } = await setup();
+      const partner = await h.user();
+      await h.baby(partner, "Dad's album");
+      const { token } = await invite(admin, babyId, partner.email, "contributor");
+      const res = await accept(partner, token);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(inviteAcceptResponseSchema.parse(res.json())).toEqual({ babyId, role: "contributor" });
+      // revoking the refused admin invite and inviting as a guest instead also works
+      const { admin: a2, babyId: b2 } = await setup();
+      const admInvite = await invite(a2, b2, partner.email, "admin");
+      expect((await accept(partner, admInvite.token)).statusCode).toBe(409);
+      expect(
+        (await h.inject(a2, "DELETE", `/babies/${b2}/invites/${admInvite.invite.id}`)).statusCode,
+      ).toBe(204);
+      const guestInvite = await invite(a2, b2, partner.email, "contributor");
+      expect((await accept(partner, guestInvite.token)).statusCode).toBe(200);
+    });
+
+    it("a parent whose only album is in the trash is still a parent elsewhere (409)", async () => {
+      const { admin, babyId } = await setup();
+      const partner = await h.user();
+      const own = await h.baby(partner);
+      await h.admin.query("UPDATE public.babies SET deleted_at = now() WHERE id = $1", [own]);
+      const { token } = await invite(admin, babyId, partner.email, "admin");
+      const res = await accept(partner, token);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("already_parent_elsewhere");
+    });
+
+    it("a guest elsewhere, or a co-parent of the same family's other album, accepts an admin invite", async () => {
+      const { admin, babyId } = await setup();
+      const guest = await h.user();
+      const elsewhere = await h.user();
+      const elsewhereBaby = await h.baby(elsewhere);
+      await h.member(elsewhereBaby, guest, "contributor");
+      const { token } = await invite(admin, babyId, guest.email, "admin");
+      expect((await accept(guest, token)).statusCode).toBe(200);
+      // same family: the admin's second album (a sibling) can take the same co-parent
+      const sibling = await h.baby(admin, "Twin");
+      const second = await invite(admin, sibling, guest.email, "admin");
+      const res = await accept(guest, second.token);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toEqual({ babyId: sibling, role: "admin" });
+    });
+
+    it("two admin invites accepted at once by one user for two different families admit exactly one", async () => {
+      const one = await setup();
+      const two = await setup();
+      const x = await h.user();
+      const i1 = await invite(one.admin, one.babyId, x.email, "admin");
+      const i2 = await invite(two.admin, two.babyId, x.email, "admin");
+      const results = await Promise.all([accept(x, i1.token), accept(x, i2.token)]);
+      const codes = results.map((r) => r.statusCode).sort();
+      expect(codes).toEqual([200, 409]);
+      expect(results.find((r) => r.statusCode === 409)?.json().error).toBe(
+        "already_parent_elsewhere",
+      );
+      const admins = await h.admin.query(
+        "SELECT baby_id FROM public.baby_members WHERE user_id = $1 AND role = 'admin'",
+        [x.id],
+      );
+      expect(admins.rows).toHaveLength(1);
+    });
+  });
+
   describe("resend", () => {
     it("rotates the token: the old link dies, the new one works, the expiry is renewed, mail goes out", async () => {
       const { admin, babyId } = await setup();

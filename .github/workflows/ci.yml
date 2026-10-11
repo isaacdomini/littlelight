@@ -18,12 +18,19 @@
 #                    logs a baseUrl/pickerUri/token/code, the worker never reads google_accounts
 #                    nor inserts into photos, the URL guard precedes every media fetch, the fake
 #                    Google provider is refused in production (static + runtime), no AI-path
-#                    change and no new dependency but @capacitor/browser since eb9343e),
-#                    typecheck (workspace + e2e/, incl. e2e/native, e2e/export and e2e/import), unit tests
+#                    change and no new dependency but @capacitor/browser since eb9343e), the
+#                    step-11 free-tier abuse hygiene (.github/scripts/abuse-hygiene.sh: the
+#                    family_starts ledger has no email/user-agent/raw-IP column, the vendored
+#                    disposable-domain list keeps its CC0 license and its generated module is
+#                    current, no email/IP/IP hash/token in the sign-in and family-start code's
+#                    log lines, no cross-account photo comparison in the abuse report),
+#                    typecheck (workspace + e2e/ via `pnpm typecheck:e2e`, incl. e2e/native,
+#                    e2e/export, e2e/import, e2e/abuse and e2e/family), unit tests
 #                    (incl. packages/ai adapters against local mock servers), integration tests
 #                    (db-integration: RLS matrix, search + chat + sharing tables etc.;
 #                    api-integration: auth, invites, babies, uploads, photos, search, chat, share
-#                    links + viewer, data exports via Fastify inject with a stubbed GoTrue and S3
+#                    links + viewer, data exports, family start + the family photo pool via
+#                    Fastify inject with a stubbed GoTrue and S3
 #                    and the fake chat model / embedder; worker-integration: ingest, purge, sweep,
 #                    the AI batch pipeline, the search indexer, the auto-sharer, the data-export
 #                    ZIP job and the Google Photos import job against an in-process fake Google
@@ -62,7 +69,12 @@
 #                    the step-10 Google import gate (docs/plans/step-10.md 4.3: `pnpm
 #                    e2e:import-gate` against the `google-fake` service, GOOGLE_IMPORT_PROVIDER=fake)
 #                    with a log tap on api, worker and google-fake and a scan of those logs for
-#                    Google/fake tokens and codes, media and picker URLs, JWTs and presign parts.
+#                    Google/fake tokens and codes, media and picker URLs, JWTs and presign parts;
+#                    then the step-11 free-tier abuse gate (docs/plans/step-11.md 4.4: `pnpm
+#                    e2e:abuse-gate`; it recreates api with FAMILIES_PER_IP_PER_DAY=2 and restores
+#                    it) on freshly recreated api + worker, with a log tap and a scan of those
+#                    logs for email addresses, IPv4 addresses, bearer values, JWTs and presign
+#                    parts. The Playwright suite includes the step-11 e2e/family/guards.spec.ts.
 #   android-debug    step-9 Android debug build on every push/PR (docs/plans/step-9.md 2.14):
 #                    JDK 21 and the Android SDK from the runner image, `native:sync:android`,
 #                    `android:build:debug` (assembleDebug) + lintDebug, then the merged-manifest
@@ -214,26 +226,37 @@ jobs:
       - name: Import hygiene (logging, worker grants, URL guard, fake refused in production, drift)
         run: bash .github/scripts/import-hygiene.sh
 
+      # docs/plans/step-11.md 2.10 / 4.1 (family model; tasks 11.7b, 11.9b): static
+      # (.github/scripts/abuse-hygiene.mjs) - (a) every CREATE/ALTER TABLE family_starts in
+      # packages/db/migrations has no email / user-agent / raw-IP column and ip_hash is a 32-byte
+      # bytea digest; (c) apps/api/src/auth/disposable keeps its CC0 LICENSE.txt, the vendored
+      # .conf, build.ts and the generated module; (d) no logger call in apps/api/src/auth/
+      # {family-guards,session,routes,ip-hash,context}.ts or apps/api/src/routes/babies.ts carries
+      # an email, canonical email, IP, IP hash, a clientIp()/familyStartGuards() result or a
+      # token, and no console.*; (e) no sha256 / phash / content_hash / embedding in the abuse
+      # report. Then (b) blocklist.generated.ts equals a fresh `disposable:build` (needs the
+      # install above; the committed file is put back). Every path it reads must exist, so a
+      # rename fails the step. Same script runs locally.
+      - name: Abuse hygiene (family_starts privacy, disposable list, no PII in guard logs, report)
+        run: bash .github/scripts/abuse-hygiene.sh
+
       - name: Typecheck
         run: pnpm typecheck
 
-      # e2e/ is not a workspace package and has no tsconfig, so `pnpm typecheck` skips it. Same
+      # e2e/ is not a workspace package and has no tsconfig, so `pnpm typecheck` skips it. The
+      # root `typecheck:e2e` script holds the file list (one place for CI and local runs). Same
       # module settings as the workspace packages; `--types node` because the specs read
       # process.env. Shell globs: a renamed folder fails loudly (tsc: file not found).
       # e2e/helpers/*.ts covers e2e/helpers/native.ts and e2e/helpers/reset.ts; e2e/native/*.ts
       # are the step-9 push, Android and invite-link gate scripts (the XCUITest project under
       # e2e/native/ios-uitest is Swift and is built by Xcode, not here); e2e/export/*.ts is the
       # review-fix data-export gate; e2e/import/*.ts is the step-10 Google import gate (the iOS
-      # album sync gate's helper is e2e/native/ios-sync-helper.ts). global-setup/teardown are the Playwright
-      # globalSetup/globalTeardown hooks referenced by playwright.config.ts.
+      # album sync gate's helper is e2e/native/ios-sync-helper.ts); e2e/abuse/*.ts is the step-11
+      # free-tier abuse gate and e2e/family/*.ts its Playwright spec (guards.spec.ts).
+      # global-setup/teardown are the Playwright globalSetup/globalTeardown hooks referenced by
+      # playwright.config.ts.
       - name: Typecheck e2e
-        run: >-
-          pnpm exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler
-          --target es2022 --strict --types node
-          e2e/auth/*.ts e2e/upload/*.ts e2e/helpers/*.ts e2e/timeline/*.ts e2e/perf/*.ts e2e/ai/*.ts
-          e2e/search/*.ts e2e/chat/*.ts e2e/sharing/*.ts e2e/fixtures/*.ts e2e/native/*.ts
-          e2e/export/*.ts e2e/import/*.ts e2e/playwright.config.ts e2e/playwright.perf.config.ts
-          e2e/global-setup.ts e2e/global-teardown.ts
+        run: pnpm typecheck:e2e
 
       - name: Unit tests
         run: pnpm test
@@ -324,6 +347,9 @@ jobs:
           # and the api suite injects its fetch into the Google client, so no google-fake service
           # and no OAuth client is needed. GOOGLE_IMPORT_PROVIDER stays unset (default `none`)
           # for any config read from process.env.
+          # Step-11 free-tier abuse suites (docs/plans/step-11.md 11.8b): the api harness's
+          # testConfig() sets FAMILIES_PER_IP_PER_DAY 100000 (every request comes from one
+          # address) and the family-start tests lower it themselves; nothing reads it from here.
           REPORT: ${{ runner.temp }}/integration-report.json
         run: |
           set -euo pipefail
@@ -332,8 +358,9 @@ jobs:
             --reporter=json --outputFile.json="$REPORT"
           # Project dirs, plus the step-6 AI, step-7 search/chat, step-8 sharing, step-9
           # push / review-account / demo-media, the review-fix (migrations 18-19, data
-          # export api + worker) and the step-10 photo-import (migration 20, import api, Google
-          # import worker) suites by name so a rename cannot drop them silently.
+          # export api + worker), the step-10 photo-import (migration 20, import api, Google
+          # import worker) and the step-11 free-tier abuse (migration 21 families / pool / ledger,
+          # family start, family photo pool) suites by name so a rename cannot drop them silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
@@ -360,7 +387,10 @@ jobs:
             apps/worker/src/export/export.integration.test.ts \
             packages/db/photo-import.integration.test.ts \
             apps/api/src/imports/imports.integration.test.ts \
-            apps/worker/src/import/google/import.integration.test.ts
+            apps/worker/src/import/google/import.integration.test.ts \
+            packages/db/free-tier-abuse.integration.test.ts \
+            apps/api/src/routes/family-start.integration.test.ts \
+            apps/api/src/photos/family-pool.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -511,8 +541,9 @@ jobs:
     # + log scan (~1-2 min, capped at 15), export gate + log scan (~30 s locally; four exports,
     # each polled to ready within 120 s, one api restart, a purge job; capped at 15), push
     # gate + log scan (~3-5 min, capped at 15), Google import gate + log scan (~20-30 s
-    # locally, capped at 15).
-    timeout-minutes: 160
+    # locally, capped at 15), api + worker recreate, abuse gate + log scan (two api recreates
+    # and several `compose run migrate` report/suspend calls; capped at 15).
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -638,7 +669,10 @@ jobs:
       - name: Reset API rate limits (restart api)
         run: bash .github/scripts/restart-api.sh
 
-      - name: e2e (Playwright, PRD step-3..8 specs)
+      # Includes the step-11 e2e/family/guards.spec.ts (+twin and disposable addresses sign in,
+      # creating an album is refused inline, the disposable account joins as a guest) at the
+      # dev default FAMILIES_PER_IP_PER_DAY=1000.
+      - name: e2e (Playwright, PRD step-3..8 + step-11 specs)
         env:
           # e2e/playwright.config.ts: retries 1 and HTML report on CI.
           CI: "1"
@@ -980,6 +1014,103 @@ jobs:
           --require 'google import started'
           --require 'google-fake listening'
           "$RUNNER_TEMP/import-logs"
+
+      # Fresh api + worker containers before the abuse gate: resets the in-memory sign-in-code
+      # counter (the gate signs in ~10 fresh accounts) and starts both logs empty, so the scan
+      # below sees only what this gate made them print (a `restart` would keep, and the tap
+      # would replay, everything since the push gate). Same compose project, so the CI project
+      # .env (VISION_PROVIDER=fake) still applies; FAMILIES_PER_IP_PER_DAY is not set here, so
+      # api runs the dev default 1000. The web proxy is polled as in restart-api.sh.
+      - name: Recreate api + worker before the abuse gate
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.dev.yml up -d --no-deps --force-recreate \
+            --wait --wait-timeout 180 api worker
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://localhost:${WEB_PORT:-8080}/api/healthz" && exit 0
+            sleep 2
+          done
+          echo "::error::api not reachable through the web proxy after the recreate"
+          exit 1
+
+      # The gate recreates api twice (FAMILIES_PER_IP_PER_DAY=2, then back to the stack default,
+      # followed by restart-api.sh), so `docker compose logs` afterwards would only show the
+      # restored container. The tap follows every api/worker container while it runs (raw logs in
+      # $RUNNER_TEMP, scanned below, never uploaded).
+      - name: Start api/worker log tap (abuse gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/abuse-logs" api worker
+
+      # Step-11 free-tier abuse gate (docs/plans/step-11.md 4.4, e2e/abuse/gate.ts), keyless, no
+      # model (free-tier photos are never analysed): A's two albums are one family with a 1,000
+      # approved-photo pool (upload past it => failed/free_tier_limit); a guest's uploads stay
+      # pending and approving into the full family is 409 until a photo is trashed; the
+      # 200-pending cap (failed/pending_limit) and the guest's own family; one family per parent
+      # (admin invite => 409 already_parent_elsewhere, contributor invite fine); api recreated
+      # with FAMILIES_PER_IP_PER_DAY=2 => third first album 429 + Retry-After, guest joins still
+      # work, disposable / +twin accounts get 400 / 409 on create album; the operator report
+      # (`compose run migrate pnpm admin:abuse-report`, no '@' without --show-emails) and
+      # `admin:suspend` / --lift; its own api log probe. Restores api in a finally (env without
+      # FAMILIES_PER_IP_PER_DAY, so the compose default 1000, then .github/scripts/restart-api.sh)
+      # and deletes its albums (family_starts rows stay: 30-day retention). Prints PASS/FAIL per
+      # check and `PASS n/n`, exits 1 on any miss.
+      - name: Abuse gate (step-11 free-tier abuse, family model)
+        id: abuse-gate
+        timeout-minutes: 15
+        env:
+          ABUSE_GATE_LOG: ${{ runner.temp }}/abuse-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$ABUSE_GATE_LOG")"
+          rc=0
+          pnpm e2e:abuse-gate 2>&1 | tee "$ABUSE_GATE_LOG" || rc=$?
+          {
+            echo '### Abuse gate (free tier, family model)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$ABUSE_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |^(PASS|FAIL) [0-9]+/[0-9]+$' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      # The restored api must run the dev default again whatever the gate did: a leftover
+      # FAMILIES_PER_IP_PER_DAY=2 would break every later family start on this runner.
+      - name: api restored to FAMILIES_PER_IP_PER_DAY=1000 after the abuse gate
+        if: ${{ !cancelled() && steps.abuse-gate.outcome != 'skipped' }}
+        run: |
+          set -euo pipefail
+          v="$(docker compose -f docker-compose.dev.yml exec -T api printenv FAMILIES_PER_IP_PER_DAY | tr -d '[:space:]')"
+          [ "$v" = "1000" ] || { echo "::error::api FAMILIES_PER_IP_PER_DAY=$v after the abuse gate (expected 1000)"; exit 1; }
+          echo "api FAMILIES_PER_IP_PER_DAY=1000"
+
+      - name: Stop api/worker log tap (abuse gate)
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/abuse-logs"
+
+      # docs/plans/step-11.md 4.3 / 4.4 step 8: nothing api or worker printed during the abuse gate
+      # (every container, incl. the FAMILIES_PER_IP_PER_DAY=2 one) holds an email address (the
+      # gate's e2e-…@example.com, +twin and @mailinator.com accounts), a client IPv4 address (the
+      # gate's CF-Connecting-IP 198.18.x.x network; Fastify's "listening" lines, loopback and
+      # 0.0.0.0 excepted), a bearer value, JWT or presign part (`--pii` adds the email and IPv4
+      # patterns to the default set). Prints file:line + pattern name only. The `--require`s make
+      # it non-vacuous: the api logged family starts with the refusal outcomes the gate provokes
+      # (429 family_limited, 400 email_not_allowed, 409 inbox_has_family).
+      - name: No email addresses, IPs, bearer values or JWTs in api/worker logs (abuse gate)
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs --pii
+          --require 'family start'
+          --require 'family_limited'
+          --require 'email_not_allowed'
+          --require 'inbox_has_family'
+          "$RUNNER_TEMP/abuse-logs"
+
+      - name: Upload abuse gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: abuse-gate
+          path: ${{ runner.temp }}/abuse-gate
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload import gate output
         if: failure()

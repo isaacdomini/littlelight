@@ -11,6 +11,7 @@ import {
   DUE_EXPORTS_SQL,
   DUE_PHOTOS_SQL,
   FAIL_STALE_EXPORT_SQL,
+  FAMILY_STARTS_PRUNE_SQL,
   HELD_BABIES_SQL,
   LEFTOVER_DUPLICATES_SQL,
   MARK_EXPORT_PURGED_SQL,
@@ -210,9 +211,38 @@ describe("purgeTrash", () => {
       exportsPurged: 0,
       exportRowsDeleted: 0,
       versionsDeleted: 0,
+      familyStartsPruned: 0,
       errors: 0,
     });
     expect(storage.calls).toEqual([]);
+  });
+
+  it("step 8 prunes the family-start ledger as pipeline and reports the count (a count only)", async () => {
+    const pool = scriptedPool({
+      [HELD_BABIES_SQL]: () => ({ rows: [{ n: 0 }] }),
+      [FAMILY_STARTS_PRUNE_SQL]: () => ({ rows: [{ n: 4 }] }),
+    });
+    const log = recordingLog();
+    const res = await purgeTrash({ pool, storage: memoryStorage(), log });
+    expect(res.familyStartsPruned).toBe(4);
+    expect(res.errors).toBe(0);
+    expect(pool.log.filter(([sql]) => sql === FAMILY_STARTS_PRUNE_SQL)).toHaveLength(1);
+    expect(FAMILY_STARTS_PRUNE_SQL).toMatch(/family_starts_prune\(\)/);
+    expect(JSON.stringify(log.lines)).toContain("familyStartsPruned");
+  });
+
+  it("a failing family-start prune counts one error, never aborts the purge, and logs the category only", async () => {
+    const pool = scriptedPool({
+      [HELD_BABIES_SQL]: () => ({ rows: [{ n: 0 }] }),
+      [FAMILY_STARTS_PRUNE_SQL]: () => {
+        throw new Error("boom with secret detail");
+      },
+    });
+    const log = recordingLog();
+    const res = await purgeTrash({ pool, storage: memoryStorage(), log });
+    expect(res.errors).toBe(1);
+    expect(res.familyStartsPruned).toBe(0);
+    expect(JSON.stringify(log.lines)).not.toContain("secret detail");
   });
 
   it("runs as pipeline in short transactions: no storage call happens inside an open transaction", async () => {

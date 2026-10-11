@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   googleConnectedQuerySchema,
@@ -178,6 +179,7 @@ describe("import source and batch responses are strict", () => {
       "storage_error",
       "baby_trashed",
       "signed_out",
+      "pending_limit",
     ]);
     expect(IMPORT_BATCH_STATUSES).toEqual([
       "picking",
@@ -191,6 +193,23 @@ describe("import source and batch responses are strict", () => {
     expect(IMPORT_BATCH_ACTIVE_STATUSES).toEqual(["picking", "queued", "running"]);
     expect(IMPORT_BATCH_ERRORS).toContain("too_many_items");
     expect(IMPORT_ITEM_ERRORS).toContain("file_too_large");
+  });
+
+  it("source and item error enums match migration 21's CHECKs (value and order)", () => {
+    const sql = readFileSync(
+      new URL("../../../db/migrations/1792400000100_free-tier-abuse.sql", import.meta.url),
+      "utf8",
+    ).split("-- Down Migration")[0] as string;
+    const values = (constraint: string, column: string): string[] => {
+      const m = new RegExp(`${constraint}\\s+CHECK \\(${column} IN \\(([^)]*)\\)`, "s").exec(sql);
+      return [...(m?.[1] ?? "").matchAll(/'([^']+)'/g)].map((x) => x[1] as string);
+    };
+    expect([...IMPORT_SOURCE_ERRORS]).toEqual(
+      values("import_sources_last_error_check", "last_error"),
+    );
+    expect([...IMPORT_ITEM_ERRORS]).toEqual(values("import_items_error_check", "error"));
+    expect(IMPORT_SOURCE_ERRORS).toContain("pending_limit");
+    expect(IMPORT_ITEM_ERRORS).toContain("pending_limit");
   });
 
   it("pollIntervalSec is 1..60", () => {

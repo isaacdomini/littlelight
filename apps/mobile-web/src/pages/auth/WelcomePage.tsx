@@ -5,10 +5,11 @@ import { FlowPage } from "../../components/Page";
 import { Turnstile } from "../../components/Turnstile";
 import { Button, Message, TextField } from "../../components/ui";
 import { t } from "../../i18n";
-import { errorMessage, isApiError } from "../../lib/api";
+import { isApiError } from "../../lib/api";
 import { requestCode } from "../../lib/authApi";
 import { useAuthConfig } from "../../lib/queries";
 import { createPkceChallenge, pendingEmail, pendingInvite } from "../../lib/session";
+import { signInError } from "../../lib/signInErrors";
 import { isNative } from "../../platform/platform";
 
 const OAUTH_REDIRECT = `${window.location.origin}/signin/callback`;
@@ -57,7 +58,7 @@ export function WelcomePage() {
         setCaptchaToken(undefined);
         setError(t("welcome.captcha"));
       } else {
-        setError(errorMessage(err));
+        setError(signInError(err).message);
       }
     } finally {
       setBusy(false);

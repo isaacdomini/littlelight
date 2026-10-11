@@ -178,8 +178,8 @@ export const TELEMETRY_SCRUB_PATTERNS = Object.freeze({
   queryOrFragment: /([A-Za-z0-9_.\-\]])([?#])(?!\[redacted\])[^\s"'<>(){}]+/,
   /** An OAuth `code=…` or `state=…` parameter outside a URL (`code=4/0A… state=eyJ…`). */
   oauthParam: /\b(code|state)=(?!\[)[^\s"'&,;)}\]]+/,
-  /** An email address. */
-  email: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}/,
+  /** An email address, also masked ones (`m***@gmail.com`, `maskEmail`; step 11). */
+  email: /[A-Za-z0-9._%+*-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}/,
   /** A decimal coordinate pair: `47.6062, -122.3321`. */
   coordinatePair: /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/,
   /** A WKT point: `POINT(-122.3321 47.6062)`. */
@@ -382,6 +382,11 @@ const SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   "remoteaddress",
   "xforwardedfor",
   "cfconnectingip",
+  // Family-start safeguards (step 11): HMAC'd IPs, canonical and masked addresses.
+  "iphash",
+  "emailcanonical",
+  "canonicalemail",
+  "existingemailmasked",
   "phone",
   "displayname",
   "babyname",

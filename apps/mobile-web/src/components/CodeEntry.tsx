@@ -8,9 +8,10 @@ import {
   useState,
 } from "react";
 import { t } from "../i18n";
-import { errorMessage, isApiError } from "../lib/api";
+import { isApiError } from "../lib/api";
 import { requestCode, verifyCode } from "../lib/authApi";
 import { useAuthConfig } from "../lib/queries";
+import { type SignInError, signInError } from "../lib/signInErrors";
 import { Turnstile } from "./Turnstile";
 import { Button, Message, TextField } from "./ui";
 
@@ -32,7 +33,7 @@ export function CodeEntry({
   onVerified: () => void | Promise<void>;
 }) {
   const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SignInError | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(COOLDOWN_SEC);
@@ -63,7 +64,7 @@ export function CodeEntry({
           setNeedCaptcha(true);
           setCaptchaToken(undefined);
         }
-        setError(errorMessage(e));
+        setError(signInError(e));
       }
     },
     [email],
@@ -86,7 +87,7 @@ export function CodeEntry({
         await verifyCode(email, value);
         await onVerified();
       } catch (e) {
-        setError(errorMessage(e));
+        setError(signInError(e));
         setCode("");
         submitted.current = null;
         inputRef.current?.focus();
@@ -134,7 +135,7 @@ export function CodeEntry({
         className="text-center text-2xl font-semibold tracking-[0.5em]"
       />
       <div aria-live="polite">
-        {error ? <Message data-testid="verify-error">{error}</Message> : null}
+        {error ? <Message data-testid="verify-error">{error.message}</Message> : null}
         {!error && info ? <Message kind="info">{info}</Message> : null}
       </div>
       <Button

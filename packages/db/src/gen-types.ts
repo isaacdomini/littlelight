@@ -6,8 +6,8 @@
  *   DATABASE_URL=postgres://postgres:dev@localhost:5432/tinyglow pnpm --filter @tinyglow/db db:types
  *
  * Per table: `<PascalTable>Row` (every column; nullable → `T | null`) and `<PascalTable>Insert`
- * (NOT NULL without default → required; generated/identity-always columns omitted; the rest
- * optional). `text` columns with a `CHECK (col IN (...))` constraint become string-literal unions.
+ * (NOT NULL without default → required, unless a BEFORE INSERT trigger fills it (see
+ * `TRIGGER_FILLED`); generated/identity-always columns omitted; the rest optional). `text` columns with a `CHECK (col IN (...))` constraint become string-literal unions.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -22,6 +22,11 @@ const { Client } = pg;
 export const GENERATED_DIR = fileURLToPath(new URL("./generated", import.meta.url));
 /** Tables that are tooling, not application data. */
 const EXCLUDED_TABLES = new Set(["pgmigrations"]);
+/**
+ * NOT NULL columns without a default that a BEFORE INSERT trigger always fills, so an insert may
+ * omit them (optional in `<Table>Insert`). `babies.family_id`: `babies_set_family` (step 11).
+ */
+const TRIGGER_FILLED = new Set(["babies.family_id"]);
 
 interface ColumnInfo {
   table: string;
@@ -195,7 +200,11 @@ export function renderTables(columns: readonly ColumnInfo[], checks: readonly Ch
       if (col.generated === "s" || col.identity === "a") continue;
       const base = enums.get(`${table}.${col.column}`);
       const type = base ? literalUnion(base) : tsType(col.type);
-      const required = col.notNull && !col.hasDefault && col.identity === "";
+      const required =
+        col.notNull &&
+        !col.hasDefault &&
+        col.identity === "" &&
+        !TRIGGER_FILLED.has(`${table}.${col.column}`);
       out.push(member(col.column, !required, type, !col.notNull));
     }
     out.push("}", "");

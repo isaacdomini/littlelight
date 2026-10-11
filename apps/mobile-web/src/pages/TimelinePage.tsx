@@ -21,6 +21,7 @@ import { PhotoViewer, ViewerEmpty } from "../components/viewer/PhotoViewer";
 import { useViewerParam } from "../components/viewer/useViewerParam";
 import { t, tn } from "../i18n";
 import { apiFetch, errorMessage } from "../lib/api";
+import { approveError } from "../lib/familyErrors";
 import { FEATURES } from "../lib/features";
 import { useMilestones } from "../lib/queries/milestones";
 import {
@@ -42,6 +43,7 @@ import {
 } from "../lib/queries/search";
 import { useProfileTimeZone } from "../lib/units";
 import { uploadManager } from "../lib/upload/manager";
+import { isNative } from "../platform/platform";
 
 /** Age-grouped, virtualized timeline with scrubber, select mode, viewer and responsive panes. */
 export function TimelinePage() {
@@ -168,7 +170,7 @@ export function TimelinePage() {
   const approveAsync = approve.mutateAsync;
   const rejectAsync = reject.mutateAsync;
   const onApprove = useCallback(
-    (id: string) => void approveAsync(id).catch((e) => setActionError(errorMessage(e))),
+    (id: string) => void approveAsync(id).catch((e) => setActionError(approveError(e, isNative()))),
     [approveAsync],
   );
   const onReject = useCallback(
@@ -321,7 +323,7 @@ export function TimelinePage() {
           </Message>
         ) : null}
         {notice ? <Message kind="info">{notice}</Message> : null}
-        {actionError ? <Message>{actionError}</Message> : null}
+        {actionError ? <Message data-testid="action-error">{actionError}</Message> : null}
         {timeline.isError ? <Message>{t("timeline.loadError")}</Message> : null}
         {!baby ? (
           <EmptyState

@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import type { ItemErrorCode, UploadItem } from "../lib/upload/manager";
+import { isNative } from "../platform/platform";
 import { Button } from "./ui";
 
 export function formatBytes(n: number): string {
@@ -15,6 +16,7 @@ const ERR_KEYS = {
   file_too_large: "upload.err.file_too_large",
   decode_failed: "upload.err.decode_failed",
   free_tier_limit: "upload.err.free_tier_limit",
+  pending_limit: "upload.err.pending_limit",
   rejected: "upload.err.rejected",
   expired: "upload.err.expired",
   storage_error: "upload.err.storage_error",
@@ -24,7 +26,13 @@ const ERR_KEYS = {
 } as const satisfies Record<ItemErrorCode, `upload.err.${string}`>;
 
 function stateLabel(item: UploadItem): string {
-  if (item.state === "failed") return t(ERR_KEYS[item.error ?? "unknown"]);
+  if (item.state === "failed") {
+    // No purchase prompts in the app: the native wording drops "Upgrade to Plus".
+    if (item.error === "free_tier_limit" && isNative())
+      return t("upload.err.free_tier_limit.native");
+    if (item.error === "pending_limit" && item.errorDetail) return item.errorDetail;
+    return t(ERR_KEYS[item.error ?? "unknown"]);
+  }
   if (item.state === "uploading") {
     return t("upload.state.uploading", { pct: Math.round(item.progress * 100) });
   }

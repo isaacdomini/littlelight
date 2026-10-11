@@ -31,8 +31,8 @@ import {
   assertMilestoneUsable,
   babyAccess,
   batchDetailsSql,
-  countLivePhotos,
   countPending,
+  countPoolPhotos,
   decodeCursor,
   detailsUpsertSql,
   groupCounts,
@@ -86,6 +86,11 @@ async function explainNoRow(
   if (!visibleToCaller(photo)) throw photoNotFound();
   if (photo.role !== "admin") throw adminOnly();
   throw new ApiError(409, "conflict", conflictMessage);
+}
+
+/** `photos_free_tier_cap` refused the write (the family's free pool is full). */
+function isFreeTierCap(err: unknown): boolean {
+  return isPgError(err) && err.code === "23514" && err.message.startsWith("free tier photo limit");
 }
 
 const RETURNING_SUMMARY = `
@@ -398,15 +403,24 @@ export function photosRoutes(app: FastifyInstance): void {
       const row = await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
         // RLS: only an admin's UPDATE can produce `approval = 'approved'` (a contributor's own
-        // pending row fails WITH CHECK ⇒ 42501 ⇒ 403).
-        const { rows } = await client.query<PhotoSummaryRow>(
-          `UPDATE public.photos p
-              SET approval = 'approved', approved_by = $2, approved_at = now()
-            WHERE p.id = $1 AND p.approval = 'pending' AND p.deleted_at IS NULL
-                  AND p.status NOT IN ('failed', 'duplicate')
-           ${RETURNING_SUMMARY}`,
-          [id, ctx.uid],
-        );
+        // pending row fails WITH CHECK ⇒ 42501 ⇒ 403). No pool pre-check (step 11, 2.5): the
+        // `photos_free_tier_cap` trigger counts approved photos only and raises inside this
+        // UPDATE when the family is full, so a refusal is a thrown 23514, never "0 rows": it is
+        // mapped here and `explainNoRow` below is only reached for a genuinely unmatched row.
+        let rows: PhotoSummaryRow[];
+        try {
+          ({ rows } = await client.query<PhotoSummaryRow>(
+            `UPDATE public.photos p
+                SET approval = 'approved', approved_by = $2, approved_at = now()
+              WHERE p.id = $1 AND p.approval = 'pending' AND p.deleted_at IS NULL
+                    AND p.status NOT IN ('failed', 'duplicate')
+             ${RETURNING_SUMMARY}`,
+            [id, ctx.uid],
+          ));
+        } catch (err) {
+          if (isFreeTierCap(err)) throw freeTierLimit();
+          throw err;
+        }
         const updated = rows[0];
         if (!updated) {
           return explainNoRow(client, ctx.uid, id, "This photo isn't waiting for approval");
@@ -510,10 +524,14 @@ export function photosRoutes(app: FastifyInstance): void {
         if (access?.deletedAt) {
           throw new ApiError(409, "conflict", "This album is in the trash");
         }
-        // The cap trigger only fires on INSERT; restoring past the free limit is checked here.
+        // Friendly pre-check (step 11, 2.5): only an approved photo comes back into the family's
+        // pool (approved photos only count); a rejected one returns to the approval queue and
+        // draws nothing from it. The `photos_free_tier_cap` / `photos_pending_cap` triggers
+        // (BEFORE UPDATE OF deleted_at) are the hard stops and are mapped below.
         if (
           access?.plan === "free" &&
-          (await countLivePhotos(client, photo.baby_id)) >= FREE_TIER_PHOTO_LIMIT
+          photo.approval === "approved" &&
+          (await countPoolPhotos(client, photo.baby_id)) >= FREE_TIER_PHOTO_LIMIT
         ) {
           throw freeTierLimit();
         }
@@ -533,6 +551,21 @@ export function photosRoutes(app: FastifyInstance): void {
           // photos_baby_id_sha256_key: the same bytes are live in the album again.
           if (isPgError(err) && err.code === "23505") {
             throw new ApiError(409, "conflict", "The same photo is already in the album");
+          }
+          if (isFreeTierCap(err)) throw freeTierLimit();
+          // A rejected photo returns to the queue, but its uploader's pending queue in this
+          // family is full (`photos_pending_cap`). The admin is not the uploader, so the
+          // generic "you have …" wording would be wrong here.
+          if (
+            isPgError(err) &&
+            err.code === "23514" &&
+            err.message.startsWith("pending photo limit")
+          ) {
+            throw new ApiError(
+              409,
+              "pending_limit",
+              "The person who added this photo already has the most photos waiting for approval in this family. Review some of them first.",
+            );
           }
           throw err;
         }

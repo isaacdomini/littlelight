@@ -543,6 +543,55 @@ describe("a sync run", () => {
     expect(h.plugin.listPendingAssets.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("a guest's pending queue being full stops the run with pending_limit; the asset is NOT recorded and no attempt is spent", async () => {
+    const h = make({ pending: [[asset(1), asset(2)], [asset(3)]] });
+    h.states.set("c2", "failed");
+    h.errors.set("c2", "pending_limit");
+    await h.m.runSync("manual");
+    const outcomes = recorded(h);
+    expect(outcomes.map((o) => o.id)).toEqual(["ASSET-1/L0/001"]); // asset 2 stays pending
+    expect(outcomes.some((o) => o.outcome === "failed")).toBe(false);
+    expect(patchBodies(h)[0]).toMatchObject({
+      lastError: "pending_limit",
+      importedDelta: 1,
+      failedDelta: 0,
+    });
+    expect(h.plugin.listPendingAssets).toHaveBeenCalledTimes(1); // the run stopped
+    expect(h.m.getStatus()).toMatchObject({ phase: "error", lastError: "pending_limit" });
+  });
+
+  it("after a pending_limit stop, automatic triggers wait out the cooldown; manual retries at once", async () => {
+    const h = make({ pending: [[asset(1)], [asset(1)], [asset(1)], [asset(1)]] });
+    h.states.set("c1", "failed");
+    h.errors.set("c1", "pending_limit");
+    await h.m.runSync("manual");
+    expect(h.plugin.listPendingAssets).toHaveBeenCalledTimes(1);
+    h.clock.t += 2 * 3_600_000;
+    await h.m.runSync("resume");
+    expect(h.plugin.listPendingAssets).toHaveBeenCalledTimes(1); // still cooling down
+    await h.m.runSync("manual");
+    expect(h.plugin.listPendingAssets.mock.calls.length).toBeGreaterThanOrEqual(2); // manual runs
+    h.clock.t += 5 * 3_600_000;
+    await h.m.runSync("resume");
+    expect(h.plugin.listPendingAssets.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("when both caps appear in one run, free_tier_limit wins whatever the order", async () => {
+    for (const order of [
+      ["free_tier_limit", "pending_limit"],
+      ["pending_limit", "free_tier_limit"],
+    ] as const) {
+      const h = make({ pending: [[asset(1), asset(2)], []] });
+      h.states.set("c1", "failed");
+      h.errors.set("c1", order[0]);
+      h.states.set("c2", "failed");
+      h.errors.set("c2", order[1]);
+      await h.m.runSync("manual");
+      expect(h.m.getStatus().lastError, order.join(",")).toBe("free_tier_limit");
+      expect(recorded(h)).toEqual([]);
+    }
+  });
+
   it("when every upload failed on the network, nothing is recorded (no attempt burned) and the run stops with network", async () => {
     const h = make({ pending: [[asset(1), asset(2)], [asset(3)]] });
     for (const id of ["c1", "c2"]) {

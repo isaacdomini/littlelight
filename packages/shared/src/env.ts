@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { emailSchema } from "./auth";
+import { emailSchema, FAMILIES_PER_IP_PER_DAY_DEFAULT, NEVER_BLOCKED_EMAIL_DOMAINS } from "./auth";
 import { EXPORT_MAX_BYTES_DEFAULT } from "./constants";
 import type { MediaUrlGuardOptions } from "./google-photos";
 import { GOOGLE_ENDPOINTS, GOOGLE_MEDIA_HOST_SUFFIX_DEFAULT } from "./imports";
@@ -785,3 +785,70 @@ export function googleImportMediaAllowList(
     exactOrigins: Object.freeze(exactOrigins),
   });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Family-start safeguards (docs/plans/step-11.md 2.3, 2.4, 2.10, D-H, D-J). api only. The
+// disposable-domain list itself is vendored and compiled into the api
+// (`apps/api/src/auth/disposable/`); these vars only tune it. Errors name the field, never the value.
+// ---------------------------------------------------------------------------------------------
+
+/** Most entries accepted in `EMAIL_DOMAIN_DENYLIST` / `EMAIL_DOMAIN_ALLOWLIST` each. */
+export const EMAIL_DOMAIN_LIST_MAX = 1000;
+
+const NEVER_BLOCKED: ReadonlySet<string> = new Set(NEVER_BLOCKED_EMAIL_DOMAINS);
+
+/**
+ * A comma-separated domain list → lowercase, trimmed, leading/trailing dots removed,
+ * de-duplicated array (empty or unset ⇒ `[]`). Each entry must be a DNS name of ≥ 2 labels with
+ * an alphabetic last label (the media host-suffix rule). With `dropNeverBlocked`, entries of
+ * `NEVER_BLOCKED_EMAIL_DOMAINS` are removed (they always win over the deny list).
+ */
+function domainListSchema(dropNeverBlocked: boolean) {
+  return z.preprocess(
+    emptyAsUndefined,
+    z
+      .string()
+      .default("")
+      .transform((v) => [
+        ...new Set(
+          v
+            .split(",")
+            .map((d) =>
+              d
+                .trim()
+                .toLowerCase()
+                .replace(/^\.+|\.+$/g, ""),
+            )
+            .filter((d) => d !== "" && !(dropNeverBlocked && NEVER_BLOCKED.has(d))),
+        ),
+      ])
+      .pipe(
+        z
+          .array(z.string().max(253).regex(MEDIA_HOST_SUFFIX_RE, "each entry must be a domain"))
+          .max(EMAIL_DOMAIN_LIST_MAX),
+      ),
+  );
+}
+
+/**
+ * Family-start safeguards (api), checked when an account creates its first album:
+ * - `FAMILIES_PER_IP_PER_DAY` (1..100000, default `FAMILIES_PER_IP_PER_DAY_DEFAULT` = 5): new
+ *   families per client IP per rolling 24 h, counted in `family_starts`; guests start nothing and
+ *   never count. Dev Compose sets 1000 (seed and e2e start many families from one IP).
+ * - `BLOCK_DISPOSABLE_EMAIL` (stringbool, default true): refuse starting a family from an address
+ *   on the vendored disposable-domain list (`EMAIL_DOMAIN_DENYLIST` additions apply even when
+ *   false). Signing in and joining as a guest are never blocked.
+ * - `EMAIL_DOMAIN_DENYLIST`: extra domains treated as disposable (subdomains match too);
+ *   `NEVER_BLOCKED_EMAIL_DOMAINS` entries are dropped from it.
+ * - `EMAIL_DOMAIN_ALLOWLIST`: domains removed from the block (operator override, exact match).
+ */
+export const abuseEnvSchema = z.object({
+  FAMILIES_PER_IP_PER_DAY: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(100_000).default(FAMILIES_PER_IP_PER_DAY_DEFAULT),
+  ),
+  BLOCK_DISPOSABLE_EMAIL: z.preprocess(emptyAsUndefined, z.stringbool().default(true)),
+  EMAIL_DOMAIN_DENYLIST: domainListSchema(true),
+  EMAIL_DOMAIN_ALLOWLIST: domainListSchema(false),
+});
+export type AbuseEnv = z.infer<typeof abuseEnvSchema>;

@@ -29,7 +29,10 @@ describe("inviteEmail", () => {
       babyName: '<img src=x onerror="alert(1)">\r\nBcc: evil@example.com',
       inviterName: "<b>Eve</b>",
     });
-    expect(m.html).not.toContain("<img");
+    // The template's own logo is an <img>; the injected markup must never appear unescaped.
+    expect(m.html).not.toContain("<img src=x");
+    expect(m.html).not.toContain('onerror="alert(1)"');
+    expect(m.html).toContain("&lt;img src=x");
     expect(m.html).not.toContain("<b>Eve</b>");
     expect(m.html).toContain("&lt;b&gt;Eve&lt;/b&gt;");
     expect(m.subject).not.toMatch(/[\r\n]/);

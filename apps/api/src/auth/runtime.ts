@@ -1,3 +1,4 @@
+import type { AbuseEnv } from "@tinyglow/shared";
 import {
   INVITE_LOOKUPS_PER_IP_PER_HOUR,
   OTP_MAX_ATTEMPTS,
@@ -5,8 +6,10 @@ import {
   OTP_PER_IP_PER_HOUR,
   OTP_TTL_MIN,
 } from "@tinyglow/shared";
-import type { ApiConfig } from "../config";
+import type { FastifyBaseLogger } from "fastify";
+import { type ApiConfig, abuseSettings } from "../config";
 import type { Mailer } from "../email/mailer";
+import { createDomainBlocklist, type DomainBlocklist } from "./disposable";
 import type { GoTrueClient } from "./gotrue";
 import { loadReviewAccount, type ReviewAccount } from "./review";
 import { createThrottle, type Throttle } from "./throttle";
@@ -41,6 +44,10 @@ export interface AuthRuntime {
    * `REVIEW_ACCOUNT_EMAIL` and `REVIEW_ACCOUNT_CODE_HASH` are set. Holds a hash: never log it.
    */
   review: ReviewAccount | null;
+  /** Family-start safeguard settings with defaults filled (step 11: `abuseSettings`). */
+  abuse: AbuseEnv;
+  /** Disposable-domain check for family starts (step 11, `disposable/index.ts`). */
+  blocklist: DomainBlocklist;
   close(): void;
 }
 
@@ -62,23 +69,38 @@ export function createAuthThrottles(): AuthThrottles {
   };
 }
 
+/** Logged once at boot in production when Turnstile is off (docs/plans/step-11.md 2.9, D12). */
+export const TURNSTILE_OFF_WARNING =
+  "turnstile is off: set TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY (recommended in production)";
+
 export function createAuthRuntime(deps: {
   config: ApiConfig;
   gotrue: GoTrueClient;
   mailer: Mailer;
   /** Tests inject the review account; default: from `config` only (`loadReviewAccount`). */
   review?: ReviewAccount | null;
+  /** Boot-time warnings (the Turnstile recommendation); `app.log` in `registerAuth`. */
+  log?: Pick<FastifyBaseLogger, "warn">;
 }): AuthRuntime {
   // Before the throttles: a bad review config fails boot without leaving timers behind.
   const review = deps.review !== undefined ? deps.review : loadReviewAccount(deps.config);
+  const abuse = abuseSettings(deps.config);
+  const blocklist = createDomainBlocklist(abuse);
+  const turnstile = createTurnstile(deps.config.TURNSTILE_SECRET_KEY);
+  // The site key alone does nothing (the secret verifies); either missing means no captcha.
+  if (deps.config.NODE_ENV === "production" && (!turnstile || !deps.config.TURNSTILE_SITE_KEY)) {
+    deps.log?.warn(TURNSTILE_OFF_WARNING);
+  }
   const throttles = createAuthThrottles();
   return {
     config: deps.config,
     gotrue: deps.gotrue,
     mailer: deps.mailer,
-    turnstile: createTurnstile(deps.config.TURNSTILE_SECRET_KEY),
+    turnstile,
     throttles,
     review,
+    abuse,
+    blocklist,
     close() {
       for (const t of Object.values(throttles)) t.close();
     },

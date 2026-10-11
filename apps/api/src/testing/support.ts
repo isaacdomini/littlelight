@@ -35,6 +35,8 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     SMTP_PORT: 1025,
     SMTP_SECURE: false,
     MAIL_FROM: "noreply@tinyglow.test",
+    // Every first album is a family start from 127.0.0.1: never trip the network cap by accident.
+    FAMILIES_PER_IP_PER_DAY: 100000,
     ...overrides,
   };
 }

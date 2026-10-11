@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<title>Tinyglow</title>
+<defs>
+<linearGradient id="mwarm" x1="430" y1="137" x2="640" y2="887" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#FCE29D"/><stop offset=".22" stop-color="#FBDA93"/><stop offset=".55" stop-color="#F2B47F"/><stop offset="1" stop-color="#E8907A"/></linearGradient>
+<radialGradient id="mcore" cx="512" cy="502" r="375" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#C38E57"/><stop offset=".45" stop-color="#94694F"/><stop offset=".8" stop-color="#7A5A4E"/><stop offset="1" stop-color="#835A57"/></radialGradient>
+<linearGradient id="mfeet" x1="0" y1="340" x2="0" y2="700" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#FAE597"/><stop offset=".55" stop-color="#F9D88A"/><stop offset="1" stop-color="#F3B776"/></linearGradient>
+<filter id="mglow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="26"/></filter>
+<filter id="msoft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="9"/></filter>
+<path id="mblade" d="M612.2 262.4Q575.1 198.1 525.5 144.2A368 368 0 0 0 228.9 276.9Q303.4 262.4 378.9 262.4Z" transform="rotate(-3 512 512)"/>
+<mask id="mblades" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+<g fill="#fff" stroke="#fff" stroke-width="14" stroke-linejoin="round"><use href="#mblade"/><use href="#mblade" transform="rotate(60 512 512)"/><use href="#mblade" transform="rotate(120 512 512)"/><use href="#mblade" transform="rotate(180 512 512)"/><use href="#mblade" transform="rotate(240 512 512)"/><use href="#mblade" transform="rotate(300 512 512)"/></g></mask>
+<mask id="mrim" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+<g fill="#000" stroke="#fff" stroke-width="22" stroke-linejoin="round" filter="url(#msoft)"><use href="#mblade"/><use href="#mblade" transform="rotate(60 512 512)"/><use href="#mblade" transform="rotate(120 512 512)"/><use href="#mblade" transform="rotate(180 512 512)"/><use href="#mblade" transform="rotate(240 512 512)"/><use href="#mblade" transform="rotate(300 512 512)"/></g></mask>
+</defs>
+<g transform="translate(512 512) scale(0.8) translate(-512 -512)"><rect width="1024" height="1024" fill="#fff" mask="url(#mblades)"/><g fill="#fff" transform="translate(1.5 2)">
+<g id="mfoot"><path d="M428 470C439 469.7 452.2 476.7 460 481C467.8 485.3 471.8 489.8 475 496C478.2 502.2 479 510.2 479 518C479 525.8 476.8 535 475 543C473.2 551 468.8 558.2 468 566C467.2 573.8 467.7 582.2 470 590C472.3 597.8 478.3 605.2 482 613C485.7 620.8 490.3 629.5 492 637C493.7 644.5 494 651.8 492 658C490 664.2 486.7 669.3 480 674C473.3 678.7 461.3 685.5 452 686C442.7 686.5 432.5 681.5 424 677C415.5 672.5 407.5 666.2 401 659C394.5 651.8 390.2 643.8 385 634C379.8 624.2 374.5 610.8 370 600C365.5 589.2 360.8 578.5 358 569C355.2 559.5 353.2 551.8 353 543C352.8 534.2 354 523.5 357 516C360 508.5 364.8 503.5 371 498C377.2 492.5 384.5 487.7 394 483C403.5 478.3 417 470.3 428 470Z" fill="none" stroke="#fff" stroke-width="15"/><ellipse cx="462" cy="429" rx="22.5" ry="26"/><ellipse cx="412" cy="433" rx="16.5" ry="19.5"/><ellipse cx="374" cy="448" rx="14.5" ry="16"/><ellipse cx="346" cy="472" rx="13.5" ry="14.5"/><ellipse cx="327" cy="503" rx="12" ry="12.5"/></g>
+<use href="#mfoot" transform="translate(1019 -60.5) scale(-1 1)"/></g></g>
+</svg>

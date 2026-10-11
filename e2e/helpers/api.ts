@@ -17,6 +17,8 @@ export function masked(email: string): string {
 export interface Res<T = unknown> {
   status: number;
   body: T;
+  /** Response headers, lowercased names (e.g. `retry-after`). */
+  headers?: Record<string, string>;
 }
 
 /** Cookie-jar API client for the web client kind (sends the CSRF client header). */
@@ -26,13 +28,18 @@ export class ApiClient {
     readonly email: string,
   ) {}
 
+  /**
+   * `extraHeaders` ride on every request, e.g. a `CF-Connecting-IP` to give one account its own
+   * "network" (nginx passes it through unchanged in the dev stack).
+   */
   static async create(
     email: string,
     storageState?: Awaited<ReturnType<APIRequestContext["storageState"]>>,
+    extraHeaders: Record<string, string> = {},
   ): Promise<ApiClient> {
     const ctx = await request.newContext({
       baseURL: BASE,
-      extraHTTPHeaders: { "X-Tinyglow-Client": "web" },
+      extraHTTPHeaders: { "X-Tinyglow-Client": "web", ...extraHeaders },
       ...(storageState ? { storageState } : {}),
     });
     return new ApiClient(ctx, email);
@@ -56,7 +63,7 @@ export class ApiClient {
     } catch {
       /* empty body */
     }
-    return { status: r.status(), body: body as T };
+    return { status: r.status(), body: body as T, headers: r.headers() };
   }
 
   /** Sign in and finish consent + profile (no baby). */

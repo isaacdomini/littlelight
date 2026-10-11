@@ -19,6 +19,7 @@ import {
   type Uploader,
 } from "../../platform/uploader";
 import { ApiError, apiFetch, isApiError } from "../api";
+import { pendingLimitMessage } from "../familyErrors";
 import { readCaptureHint } from "./exif";
 import { sha256Hex } from "./hash";
 import { acceptedMime, validateFile } from "./validate";
@@ -49,6 +50,7 @@ export type ItemErrorCode =
   | "file_too_large"
   | "decode_failed"
   | "free_tier_limit"
+  | "pending_limit"
   | "rejected"
   | "expired"
   | "storage_error"
@@ -74,6 +76,8 @@ export interface UploadItem {
   /** 0..1 while uploading. */
   progress: number;
   error: ItemErrorCode | null;
+  /** Counts-bearing text for `pending_limit` when the server sent them. */
+  errorDetail?: string;
   /** True when "Retry" can succeed (transport/storage failures, not rejected files). */
   retryable: boolean;
 }
@@ -181,6 +185,7 @@ function isAbort(e: unknown): boolean {
 function errorCodeFor(e: unknown): { code: ItemErrorCode; retryable: boolean } {
   if (e instanceof ApiError) {
     if (e.code === "free_tier_limit") return { code: "free_tier_limit", retryable: false };
+    if (e.code === "pending_limit") return { code: "pending_limit", retryable: false };
     if (e.code === "file_too_large") return { code: "file_too_large", retryable: false };
     if (e.code === "unsupported_media_type") {
       return { code: "unsupported_media_type", retryable: false };
@@ -278,11 +283,17 @@ export class UploadManager {
     return this.snapshot.find((i) => i.clientId === clientId);
   }
 
-  private fail(clientId: string, code: ItemErrorCode, retryable: boolean) {
+  private fail(clientId: string, code: ItemErrorCode, retryable: boolean, cause?: unknown) {
     // Sync items are never retried in place: the sync run records the failure in its ledger and
     // the asset is offered again by a later run (up to the attempt limit).
     if (this.item(clientId)?.lane === "sync") retryable = false;
-    this.patch(clientId, { state: "failed", error: code, retryable, progress: 0 });
+    this.patch(clientId, {
+      state: "failed",
+      error: code,
+      errorDetail: (code === "pending_limit" && pendingLimitMessage(cause)) || undefined,
+      retryable,
+      progress: 0,
+    });
     const r = this.rt.get(clientId);
     if (r) r.abort = null;
     this.afterChange(clientId);
@@ -620,7 +631,7 @@ export class UploadManager {
       info = await this.ensureSession(babyId, detailsKey, details);
     } catch (e) {
       const { code, retryable } = errorCodeFor(e);
-      for (const g of group) this.fail(g.clientId, code, retryable);
+      for (const g of group) this.fail(g.clientId, code, retryable, e);
       return;
     }
     const room = UPLOAD_MAX_FILES_PER_SESSION - info.count;
@@ -661,7 +672,7 @@ export class UploadManager {
         return;
       }
       const { code, retryable } = errorCodeFor(e);
-      for (const g of batch) this.fail(g.clientId, code, retryable);
+      for (const g of batch) this.fail(g.clientId, code, retryable, e);
     }
     // Anything that didn't fit stays "registering" and is picked up by the next loop pass.
   }
@@ -808,7 +819,7 @@ export class UploadManager {
         return;
       }
       const { code, retryable } = errorCodeFor(e);
-      this.fail(clientId, code, retryable);
+      this.fail(clientId, code, retryable, e);
     } finally {
       r.abort = null;
     }

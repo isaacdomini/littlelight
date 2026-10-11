@@ -6,7 +6,8 @@ import { ME_KEY, useAuth } from "../../auth/AuthProvider";
 import { FlowPage } from "../../components/Page";
 import { Button, CheckField, Message, TextField } from "../../components/ui";
 import { t } from "../../i18n";
-import { apiFetch, errorMessage } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
+import { familyStartError } from "../../lib/familyErrors";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -57,7 +58,7 @@ export function BabyPage() {
       setCurrentBabyId(baby.id);
       navigate(another ? "/timeline" : "/onboarding/invite", { replace: true });
     } catch (err) {
-      setError(errorMessage(err));
+      setError(familyStartError(err));
     } finally {
       setBusy(false);
     }

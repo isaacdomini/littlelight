@@ -1,19 +1,30 @@
 import { type ApiErrorCode, apiErrorSchema } from "@tinyglow/shared";
 import type { ZodType } from "zod";
+import { t } from "../i18n";
 import { apiUrl } from "../platform/apiBase";
 import { clientKind, isNative } from "../platform/platform";
 import { getTokenStore } from "../platform/tokenStore";
+import { markSuspended } from "./suspended";
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: ApiErrorCode | "network" | "unknown";
   readonly details: unknown;
-  constructor(status: number, code: ApiError["code"], message: string, details?: unknown) {
+  /** Seconds from a `Retry-After` header (429s), when the server sent one. */
+  readonly retryAfterSec: number | null;
+  constructor(
+    status: number,
+    code: ApiError["code"],
+    message: string,
+    details?: unknown,
+    retryAfterSec: number | null = null,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.details = details;
+    this.retryAfterSec = retryAfterSec;
   }
 }
 
@@ -66,8 +77,17 @@ export async function parseError(res: Response): Promise<ApiError> {
     body = undefined;
   }
   const parsed = apiErrorSchema.safeParse(body);
+  const retry = Number(res.headers.get("Retry-After"));
+  const retryAfterSec = Number.isFinite(retry) && retry > 0 ? Math.ceil(retry) : null;
   if (parsed.success) {
-    return new ApiError(res.status, parsed.data.error, parsed.data.message, parsed.data.details);
+    if (parsed.data.error === "account_suspended") markSuspended();
+    return new ApiError(
+      res.status,
+      parsed.data.error,
+      parsed.data.message,
+      parsed.data.details,
+      retryAfterSec,
+    );
   }
   return new ApiError(res.status, "unknown", `Request failed (${res.status})`);
 }
@@ -157,6 +177,10 @@ export async function apiFetch<T = void>(path: string, opts: RequestOptions<T> =
 
 /** Message safe to show: server messages are user-safe by contract; anything else is generic. */
 export function errorMessage(e: unknown): string {
+  // The app never prompts to buy Plus (store billing rules): the server's wording says "Upgrade".
+  if (e instanceof ApiError && e.code === "free_tier_limit" && isNative()) {
+    return t("freeTier.full.native");
+  }
   if (e instanceof ApiError) return e.message;
   return "Something went wrong. Please try again.";
 }

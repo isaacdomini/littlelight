@@ -7,7 +7,8 @@ import { z } from "zod";
 // SPA can key the Plus upsell and the budget notice on a code, not on a message.
 // Step 8 (docs/plans/step-8.md 2.4) adds the share-link viewer codes. The review-fixes batch
 // (docs/plans/review-fixes.md 2.5) adds the data export codes; step 10 (docs/plans/step-10.md
-// 2.6) the photo import codes.
+// 2.6) the photo import codes; step 11 (docs/plans/step-11.md 2.3, 2.9) the family-start,
+// one-family-per-parent, pending-queue and suspension codes.
 
 export const apiErrorCodeSchema = z.enum([
   "unauthorized",
@@ -80,6 +81,27 @@ export const apiErrorCodeSchema = z.enum([
   "import_source_exists",
   /** 409: the album has the most sync rows allowed (`IMPORT_SOURCES_PER_BABY_MAX`). */
   "import_source_limit",
+  // Free-tier abuse safeguards, family model (docs/plans/step-11.md 2.3, 2.4, 2.5, 2.9). Sign-in
+  // is never refused (only suspension); the family-start checks run on an account's first album.
+  /** 400 at family start (`POST /babies`, first album): the address is on a disposable domain. */
+  "email_not_allowed",
+  /**
+   * 409 at family start: another account for the same inbox (`canonicalEmail`) is already a parent;
+   * `details: { existingEmailMasked }` (`inboxHasFamilyDetailsSchema`), omitted when unknown.
+   */
+  "inbox_has_family",
+  /** 429 + `Retry-After` at family start: too many new families from this network in 24 h. */
+  "family_limited",
+  /** 409 at admin-invite accept or promote: the account is already a parent in another family. */
+  "already_parent_elsewhere",
+  /**
+   * 409 at upload/import: the caller has the most pending (unapproved) photos allowed in this
+   * family (`PENDING_PHOTOS_PER_GUEST_PER_FAMILY` by default); `details: { pending, limit }`
+   * (`pendingLimitDetailsSchema`) when known.
+   */
+  "pending_limit",
+  /** 403 on every request and at sign-in: an operator suspended the account (message names `SUPPORT_EMAIL`). */
+  "account_suspended",
   "internal",
 ]);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;

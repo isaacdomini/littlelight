@@ -12,6 +12,7 @@ import { settingsOutline } from "ionicons/icons";
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { t } from "../i18n";
+import { LogoMark } from "./Logo";
 
 const ADD_BABY = "__add_baby__";
 
@@ -23,6 +24,9 @@ export function AppHeader({ title }: { title: string }) {
   return (
     <IonHeader>
       <IonToolbar>
+        <IonButtons slot="start" className="pl-3">
+          <LogoMark className="h-7 w-7" />
+        </IonButtons>
         <IonTitle>{title}</IonTitle>
         <IonButtons slot="end">
           <IonSelect

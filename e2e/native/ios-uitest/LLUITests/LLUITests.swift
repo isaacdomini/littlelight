@@ -113,6 +113,38 @@ final class LLUITests: XCTestCase {
         dump("share-done")
     }
 
+    /// Drag up inside the web view from (0.5, LL_FROM) to (0.5, LL_TO), fractions of the screen
+    /// height (defaults 0.80 -> 0.64). Used by the store-screenshot script to scroll the viewer's
+    /// details panel.
+    func testDragUp() throws {
+        app.activate()
+        let from = Double(env("LL_FROM") ?? "0.80") ?? 0.80
+        let to = Double(env("LL_TO") ?? "0.64") ?? 0.64
+        let win = app.windows.firstMatch
+        let a = win.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+        let b = win.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
+        a.press(forDuration: 0.1, thenDragTo: b)
+    }
+
+    /// Chat: type LL_ASK into the "Ask about your photos" field, send it, wait for LL_EXPECT in the
+    /// answer, then put the keyboard away (store screenshots).
+    func testAsk() throws {
+        let ask = try XCTUnwrap(env("LL_ASK"), "LL_ASK not set")
+        let expect = try XCTUnwrap(env("LL_EXPECT"), "LL_EXPECT not set")
+        app.activate()
+        let field = app.webViews.textViews.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 30), "chat input not found")
+        enter(ask, in: field)
+        let send = app.webViews.buttons["Send"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "Send not found")
+        send.tap()
+        XCTAssertTrue(element(containing: expect).waitForExistence(timeout: 90), "answer text not found: \(expect)")
+        let win = app.windows.firstMatch
+        win.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+        sleep(2)
+        dump("ask")
+    }
+
     /// Dump the accessibility tree (debugging aid).
     func testDump() throws {
         app.activate()

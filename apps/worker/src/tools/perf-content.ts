@@ -19,6 +19,21 @@ import {
 // every run (and every machine) produces identical rows. Nothing here is real: names are a fixed
 // pool, notes are lorem-like, there is no GPS and no home location.
 
+/**
+ * Dedicated owner of "Pixel" (step 11, migration 21): its creator and only parent, so Pixel is a
+ * family of its own and the 10,000 photos fill that family's free pool, never the demo family's
+ * (demo-mom and demo-dad are guests of Pixel). A GoTrue user that never signs in
+ * (no password, no sessions); it exists only while the perf seed is present and `--remove`
+ * deletes it. Ids sit in the perf range next to `PERF_IDS.baby` (…900); `@tinyglow/shared`'s
+ * `PERF_IDS` does not list them.
+ */
+export const PERF_OWNER = {
+  userId: "00000000-0000-4000-8000-000000000901",
+  identityId: "00000000-0000-4000-8000-000000000902",
+  email: "perf-owner@tinyglow.local",
+  displayName: "Perf owner",
+} as const;
+
 /** "Pixel" was born on this date (local calendar date). */
 export const PERF_BIRTH_DATE = "2024-10-01";
 export const PERF_BABY_NAME = "Pixel";

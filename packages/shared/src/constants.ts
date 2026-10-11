@@ -31,8 +31,20 @@ export const AI_COST_PER_PHOTO_ESTIMATE_USD = 0.00017;
 /** Share links expire after 24 hours by default (`share_links.expires_at` default, CLAUDE.md). */
 export const SHARE_LINK_DEFAULT_TTL_HOURS = 24;
 
-/** Free-tier photo cap per baby space. */
+/**
+ * Free-tier photo cap, per family (step 11): the approved photos of all free, live albums of one
+ * family (`babies.family_id`) share it; pending photos, Plus albums and trashed albums do not
+ * count. Mirrored by the hard-coded 1000 in the SQL `photos_free_tier_cap()` trigger.
+ */
 export const FREE_TIER_PHOTO_LIMIT = 1000;
+
+/**
+ * Default most live pending (unapproved) photos one uploader may have across one family, every
+ * plan (step 11, D-C, D-D). Mirror of the SQL default in `public.pending_photo_limit()`; the
+ * operator overrides the database value with `ALTER DATABASE … SET app.pending_photo_limit`, so
+ * the API reads the effective limit from the database, never from this constant.
+ */
+export const PENDING_PHOTOS_PER_GUEST_PER_FAMILY = 200;
 
 /** At most two admins per baby (enforced by the `baby_members_max_two_admins` trigger). */
 export const MAX_ADMINS_PER_BABY = 2;

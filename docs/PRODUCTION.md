@@ -8,7 +8,8 @@ This guide takes Tinyglow from this repo to a running production server. It assu
   port **16987**.
 
 Work through the parts in order. Parts A–F get the web app live. Parts G–I are optional features
-and the phone apps, and you can do them later.
+and the phone apps, and you can do them later. Part J is the routine for spotting and stopping
+free-tier abuse once families start using it.
 
 ---
 
@@ -22,9 +23,11 @@ You need these before the first start:
 | **Email sending (SMTP)** | Sign-in codes and invite emails. Without it nobody can sign in. | [Postmark](https://postmarkapp.com) or [Resend](https://resend.com), with a verified sender such as `noreply@tinyglow.app` |
 | **OpenAI API key** | AI descriptions, search and chat (paid tier only) | platform.openai.com → API keys. Optional: without it the app runs with AI turned off. |
 | **Off-site backup bucket** | A copy of photos and database dumps off the server | Backblaze B2 (or any S3), with an application key scoped to one bucket |
+| **Support mailbox `support@tinyglow.app`** | Suspended accounts are told "This account has been suspended. Contact support@tinyglow.app." (the address is built into the app), and a suspended person who wants their account deleted has to write there (Part J). Mail sent there must reach you. | A mailbox or a forwarding alias at your mail host for `tinyglow.app`. Send it a test message before launch. |
+| **Cloudflare Turnstile widget** (strongly recommended) | Bot protection on sign-in. Without it, nothing but the per-network cap on new families slows down scripted accounts (Part C2). | Cloudflare → Turnstile → Add widget, hostname `tinyglow.app`. You get a site key and a secret key. |
 
-Optional, any time later: Cloudflare Turnstile, Sentry, Google Photos import, Apple and Google
-sign-in, and the push notification keys. See Part G.
+Optional, any time later: Sentry, Google Photos import, Apple and Google sign-in, and the push
+notification keys. See Part G.
 
 ---
 
@@ -173,8 +176,29 @@ Never change **`S3_ROOT_PASSWORD`** once photos exist.
 - **On another machine:** use the server's LAN IP and firewall the ports to that machine.
 
 Anything that can reach these ports bypasses Cloudflare, so keep them closed to everything else.
+This also keeps the per-network limits honest: they trust the client address Cloudflare sends
+(Part J, "The per-network checks need the tunnel to be the only way in").
 
-### C2. AI (recommended)
+### C2. Bot protection (strongly recommended)
+
+```dotenv
+TURNSTILE_SITE_KEY=<site key>       # Cloudflare → Turnstile → your tinyglow.app widget
+TURNSTILE_SECRET_KEY=<secret key>
+```
+
+After 3 sign-in code requests from one network in an hour, the sign-in form asks for a Turnstile
+challenge. With the keys empty this check is off, and scripted accounts are slowed down only by
+the per-network cap on new families (Part J). The app still starts, but the api logs this
+warning once at every start in production:
+
+```
+turnstile is off: set TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY (recommended in production)
+```
+
+Check for it after the first start (Part E) with
+`docker compose logs api | grep -i "turnstile is off"`: no output means Turnstile is on.
+
+### C3. AI (recommended)
 
 ```dotenv
 OPENAI_API_KEY=sk-...             # empty = AI features off
@@ -185,11 +209,14 @@ OPENAI_API_KEY=sk-...             # empty = AI features off
 
 Free-tier photos are never sent to a model, whatever you set here.
 
-### C3. Leave these as they are (defaults are correct)
+### C4. Leave these as they are (defaults are correct)
 
 `NODE_ENV`, `API_HOST` and `API_PORT` are fixed in compose. The S3 endpoint, region and path
 style, all AI and search tuning, and the backup retention (35 days at 03:00) also have the right
-defaults.
+defaults. So do the family-start safeguards (`FAMILIES_PER_IP_PER_DAY=5`, `BLOCK_DISPOSABLE_EMAIL=true`,
+empty `EMAIL_DOMAIN_DENYLIST` and `EMAIL_DOMAIN_ALLOWLIST`); Part G says when to change them. The
+cap of 200 photos waiting for approval per guest is a database setting, not a `.env` value
+(Part J).
 
 Never set:
 - `GOOGLE_IMPORT_PROVIDER=fake` or `PUSH_PROVIDER=fake`; production refuses fake providers.
@@ -330,7 +357,9 @@ Other commands also run from `~/servers/tinyglow`:
 
 | Feature | `.env` values | How to get them |
 | --- | --- | --- |
-| **Bot protection on sign-in** | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Cloudflare → Turnstile → Add widget, hostname `tinyglow.app` |
+| **Bot protection on sign-in (strongly recommended)** | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Not really optional: see Part C2. Cloudflare → Turnstile → Add widget, hostname `tinyglow.app`. Without the keys the api logs `turnstile is off: …` at every start in production. |
+| **New families per network** | `FAMILIES_PER_IP_PER_DAY` (default `5`, range 1–100000) | New families (an account creating its first album) allowed from one network (IP address) per rolling 24 hours. Signing in, joining a family as a guest and adding more albums to an existing family never count, so the usual "one parent starts the family and invites the rest" flow never hits it. Raise it if a support email shows people behind one connection (an office, a campus) being refused ("Too many new families were started from your network today"). |
+| **Throwaway email domains** | `BLOCK_DISPOSABLE_EMAIL` (default `true`), `EMAIL_DOMAIN_DENYLIST`, `EMAIL_DOMAIN_ALLOWLIST` (comma lists) | Addresses on about 3,500 disposable-mail domains can't start a family ("Temporary or disposable email addresses can't start a family…"); they can still sign in and join a family as a guest. Add a domain to refuse with the deny list. If a real provider is wrongly blocked, put it on the allow list: no code change, just `docker compose up -d api`. Apple "Hide My Email" addresses are never blocked. The list itself is updated by a code change (`app/apps/api/src/auth/disposable/README.md`). |
 | **Error reporting** | `SENTRY_DSN` (server), `SENTRY_WEB_DSN` (web), `WEB_CSP_CONNECT_EXTRA=https://oNNN.ingest.<region>.sentry.io` | sentry.io → project → Client Keys. After changing `SENTRY_WEB_DSN`, run `docker compose build web && docker compose up -d web`. |
 | **Enforce the security policy** | `WEB_CSP_HEADER=Content-Security-Policy` | Only after a week or two in report-only mode with no reported violations |
 | **Google Photos import** | `GOOGLE_IMPORT_PROVIDER=live`, `GOOGLE_IMPORT_CLIENT_ID`, `GOOGLE_IMPORT_CLIENT_SECRET` | See G1 |
@@ -400,6 +429,9 @@ The phone apps use the same server. Shipping them needs your developer accounts:
 ## Part I: Before you invite family
 
 - [ ] Sign-in emails arrive and don't land in spam.
+- [ ] Turnstile keys are set: `docker compose logs api | grep -i "turnstile is off"` prints nothing.
+- [ ] A test message to `support@tinyglow.app` reaches you (suspended people write there, also to
+      have their account deleted: Part J).
 - [ ] Uploads work from a phone browser over mobile data.
 - [ ] The cache rule is verified (Part E, step 4).
 - [ ] `https://files.tinyglow.app/` returns 404.
@@ -411,13 +443,231 @@ The phone apps use the same server. Shipping them needs your developer accounts:
 
 ---
 
+## Part J: Watching for free-tier abuse
+
+### How the free limit works
+
+The free tier is **1,000 photos per family**, not per album and not per person. A family is a
+set of albums (twins, siblings) with the same parents. Every free album of a family draws from
+that one pool, whoever created it, so making a second album does not give anyone more space:
+- **One family per parent.** An account is a parent (admin) in at most one family. Its first
+  album starts its family; every later album it creates joins that same family. To be a parent
+  of a second family, a person needs a second account, and that account has to pass the checks
+  below. Making someone a co-parent (accepting an admin invite, or being promoted to admin) is
+  refused when that account is already a parent in another family: "This account is already a
+  parent in another family. Use a different account to be a parent here, or join as a guest."
+- **The founder stays with the family.** The account that started a family (created its first
+  album) stays tied to it as long as the family has a live album (one that isn't in the trash).
+  Adding a co-parent and then leaving, stepping down to guest or being removed does not free the
+  founder to start a new family: it can't hand the family to someone else and start over. A new
+  family needs a separate account, and that account has to pass the checks below.
+- **Guests are free.** An account can be a guest (contributor) in any number of families. Being
+  a guest gives nothing and costs nothing: a guest's photos count against **that** family's
+  limit, and only once a parent approves them.
+- **Which photos count:** approved photos in the family's free albums that aren't in the trash.
+  Photos waiting for approval don't count. Approving a photo into a full family is refused with
+  the "full" message, so a parent makes room first. Photos in the trash don't count, so moving
+  photos to the trash frees room at once. An approved photo restored from the trash counts
+  again, and that restore is refused when the family is full.
+- **Pending photos are capped:** at most **200 photos waiting for approval per guest per family**,
+  so a guest cannot fill the server through the approval queue. The guest then sees "You have
+  200 photos waiting for approval in this family (the most is 200). Wait for a parent to review
+  them before adding more." The cap applies to Plus families too (it protects storage, not the
+  free tier). To change it, see "Changing the pending-photo cap" below.
+- **The family stays with its albums.** If a parent leaves an album, is removed, stops being an
+  admin, or deletes their account, the album stays in its family and keeps drawing from the
+  same pool.
+- **Plus albums don't count.** Plus is per album: granting Plus to one album (`db:plan`, below)
+  takes all its photos out of the family's pool, which frees room in the family's other free
+  albums.
+- **Albums in the trash don't count** toward the pool either.
+- **Already over 1,000?** (photos from before this limit existed, or two sets of albums that the
+  upgrade merged into one family because they shared a parent) Nothing is deleted. The family
+  just accepts no new approved photos until it is below 1,000 again (photos moved to the trash)
+  or albums become Plus.
+
+Parents see "Your family's free photos: 640 of 1,000 (across 2 albums)" and guests "This
+family's free photos: 640 of 1,000". When an upload, approval, restore or import is refused:
+"Your family's free albums are full: free albums hold 1,000 photos per family. Upgrade to Plus or
+delete photos to add more." The limit and the pending cap are enforced by the database for every
+way a photo can arrive (upload, Google Photos import, iPhone album sync, approval, restore).
+
+Starting a second family is made harder on purpose. **The checks run when an account starts a
+family** (creates its first album), never at sign-in: anyone can sign in with any address and
+join a family as a guest.
+- **One inbox, one family.** `Maria.Rossi+baby@gmail.com`, `mariarossi@gmail.com` and
+  `maria.rossi@googlemail.com` are the same inbox. Each can have an account, but only one of them
+  can be a parent: starting a family is refused when another account for the same inbox already
+  has one, with a masked hint ("Another Tinyglow account for this inbox (m•••@gmail.com) already
+  has a family. Sign in with that account to add an album, or use a different email."). (Dots
+  are ignored for Gmail only; `+tags` are ignored for every domain.)
+- **Throwaway email domains** can't start a family (`BLOCK_DISPOSABLE_EMAIL`, Part G). They can
+  still sign in and join a family as a guest.
+- **At most `FAMILIES_PER_IP_PER_DAY` new families per network per day** (default 5, counted over
+  the last 24 hours). This is a hard cap: once a network has reached it, its next family start is
+  refused until the oldest one is 24 hours old, even when several start at the same moment. Guests
+  and later albums of an existing family never count.
+- **Turnstile** on the sign-in form (Part C2).
+
+None of these compares photos between accounts or families: no one's photos are ever matched
+against anyone else's.
+
+**The per-network checks need the tunnel to be the only way in.** "Network" means the address in
+the `CF-Connecting-IP` header, which Cloudflare sets on every request it forwards. The api takes
+the client's address from that header, so the family-start cap, the sign-in throttles and the
+Turnstile trigger (Part C2), and the network column of the abuse report (sections 1 and 4 below)
+all rely on it. Anyone who can reach port 6987 or 16987 without going through Cloudflare can write
+any address they like into that header and get a fresh "network" on every request. Keep the
+ports bound to `127.0.0.1`, or firewalled so only cloudflared can reach them, as set up in Part C
+("Which bind address?"). Check after any change to the server's network or firewall:
+
+```sh
+ss -ltn | grep -E ':(6987|16987) '   # expect 127.0.0.1 (or only your LAN IP, firewalled)
+```
+
+### Changing the pending-photo cap
+
+The cap of 200 photos waiting for approval per guest per family is a database setting, not a
+`.env` value, so the database trigger and the api always agree. From `~/servers/tinyglow`:
+
+```sh
+docker compose exec db psql -U postgres tinyglow -c "alter database tinyglow set app.pending_photo_limit = '500'"
+docker compose restart api worker        # their open database connections pick up the new value
+docker compose exec db psql -U postgres tinyglow -c "select pending_photo_limit()"   # 500
+```
+
+Back to the default (200): `alter database tinyglow reset app.pending_photo_limit`, then the same
+restart. Photos already waiting above a lowered cap stay; the guest just can't add more until the
+queue is below it.
+
+### Weekly check: the abuse report
+
+Run from `~/servers/tinyglow`:
+
+```sh
+docker compose run --rm migrate pnpm admin:abuse-report               # last 7 days
+docker compose run --rm migrate pnpm admin:abuse-report --days 30     # up to 30 (family-start records are kept 30 days)
+docker compose run --rm migrate pnpm admin:abuse-report --limit 50    # longer "top storage" lists (default 20)
+docker compose run --rm migrate pnpm admin:abuse-report --json        # the same, as JSON for scripts
+```
+
+The report only reads; it never changes anything. It prints IDs, counts and sizes, never email
+addresses or IP addresses. Everything is per family. Its six sections:
+
+1. **Family starts per network.** Networks that started 3 or more families in the window, most
+   first, with the first and last start. A network is shown as the first 12 characters of a
+   keyed hash of its IP address (the IP itself is never stored).
+2. **Families near or over the limit.** Families whose free pool holds 800 approved photos or
+   more (80 %), fullest first: the number of parents, free albums, approved photos, photos
+   waiting for approval, size of the originals and the percentage. `OVER` marks families above
+   1,000 (photos from before this limit existed, or albums merged into one family by the
+   upgrade).
+3. **Top storage.** The albums (with their family, plan, approved and pending photos, and whether
+   they are in the trash) and the families (parents, albums, photos) using the most space, Plus
+   and trashed albums included (trashed albums use space until they are purged). Sizes are the
+   originals; thumbnails and previews add roughly 10–15 %.
+4. **Recent family starts.** Families started in the window, by whom and from which app (web or
+   native), with flags: `plus_tag` (the address had a `+tag`), `dots_folded` (Gmail dots were
+   removed), `canonical_dup` (another account shares the founder's inbox; it may be a guest
+   somewhere, which is allowed), `suspended` (a parent of the family is suspended). `purged`
+   means the family has since been deleted, `deleted` that the founder's account has.
+5. **Pending queues.** Guests holding at least half of the pending cap (100 of 200 by default) in
+   one family: the family, the guest and how many of their photos wait for approval. A long
+   queue is usually a busy grandparent and a parent who hasn't reviewed yet; it is also the only
+   intake that isn't metered by the free limit, which is why it is listed.
+6. **Canonical-inbox clusters.** Inboxes that have two or more live accounts (for example
+   `mariarossi@gmail.com` and `maria.rossi+baby@gmail.com`), up to `--limit`: how many accounts,
+   how many of them are a parent, in how many families, when the first and last were created,
+   and the account IDs, oldest first. Only account IDs are printed; the inbox address itself is
+   never shown, not even with `--show-emails` (which adds each account's own address). Several
+   accounts with **0 or 1** parent is normal: the same person joined someone's family as a guest
+   with a different spelling of their address. Two or more parents in two or more families means
+   one inbox is a parent in several families. Starting a second family that way is refused, so
+   this comes from accounts that were parents before this limit existed, or from a second
+   account of the inbox accepting a co-parent invite in another family.
+
+**When to act.** A full family, by itself, is normal: it is a family that likes photos, and the
+right answer is Plus, not a suspension. Look closer when several signals line up:
+- a network in section 1 with many family starts, **and** starts from the same days in section 4
+  with `plus_tag`, `dots_folded` or `canonical_dup`, whose families then show up in section 2 or
+  3;
+- one account that is a guest in many families, especially families started from the same
+  network in section 1 (one person running several families and uploading through guest roles).
+  Grandparents and nannies can be guests in a few families; many more is unusual:
+  ```sh
+  docker compose exec db psql -U postgres tinyglow -c "select m.user_id, count(distinct b.family_id) as families from baby_members m join babies b on b.id = m.baby_id where m.role = 'contributor' and b.deleted_at is null group by m.user_id having count(distinct b.family_id) >= 5 order by 2 desc"
+  ```
+- the same guests at the top of section 5 week after week in different families;
+- one family or album in section 3 far above everyone else;
+- an inbox in section 6 that is a parent in several families, especially when those families
+  also appear in section 2 or 3.
+
+A busy network on its own (a school, an office, a phone carrier) is not abuse. When you are not
+sure, do nothing and check again next week.
+
+**Seeing who it is.** Add `--show-emails` to add an `emails` column to sections 2–6: the
+parents' addresses in sections 2 and 3, the founder's in section 4, the guest's in section 5 and
+each account's own address in section 6. Section 1 never shows addresses.
+
+```sh
+docker compose run --rm migrate pnpm admin:abuse-report --show-emails
+```
+
+The output then contains personal data, and the report says so. Read it on the server only:
+don't paste it into tickets or chats, and never save it under `~/servers` (that repo is public).
+To look up one account instead:
+
+```sh
+docker compose exec db psql -U postgres tinyglow -c "select id, email, created_at from auth.users where id = '<userId>'"
+docker compose exec db psql -U postgres tinyglow -c "select id from auth.users where email = lower('<address>')"
+```
+
+### Taking action
+
+**Suspend an account** (it keeps its data):
+
+```sh
+docker compose run --rm migrate pnpm admin:suspend <userId> --i-know-this-is-production
+docker compose run --rm migrate pnpm admin:suspend <userId> --reason other --i-know-this-is-production   # reason: abuse (default) or other
+```
+
+At once, every device of that account is signed out and every request is refused with "This
+account has been suspended. Contact support@tinyglow.app." Signing in again is refused with the
+same message, and sign-in codes for that address are no longer sent. Its family, albums and
+photos, the other parents and guests of those albums, and their family share links are **not**
+touched, so a co-parent keeps full access. The suspension is recorded in the audit log.
+
+**Lift it** (for example after a reply to the support mailbox):
+
+```sh
+docker compose run --rm migrate pnpm admin:suspend <userId> --lift --i-know-this-is-production
+```
+
+The person signs in again as usual.
+
+**A suspended person who wants their account deleted** has to email support@tinyglow.app: they
+can't open the app, so they can't use Settings → Delete account themselves. Check that the mail
+comes from the account's own address (the `auth.users` lookup above), lift the suspension, and
+reply that they can now delete it in the app (Settings → Delete account). If it isn't deleted
+within a few days, suspend it again. Don't delete it for them by hand (see below).
+
+**Give a family more room** instead: grant Plus to an album (see "Billing" under Known limits).
+This is also how you settle a support request from a family with a real need.
+
+**Don't delete accounts by hand** (for example `delete from auth.users`): it breaks the "every
+album keeps an admin" rule and leaves photos behind in storage. Deletion goes through the app's
+own account deletion only.
+
+---
+
 ## Known limits right now
 
 - **Billing:** there is no in-app purchase or Stripe yet, so you grant Plus by hand for now. Find
   the album's ID in the address bar when the album is open, or with
   `docker compose exec db psql -U postgres tinyglow -c "select id, name from babies"`. Then run:
   `docker compose run --rm migrate pnpm db:plan <babyId> plus --i-know-this-is-production`.
-  Use `free` instead of `plus` to remove it. In-app purchase is a later step.
+  Use `free` instead of `plus` to remove it. In-app purchase is a later step. A Plus album
+  leaves its family's free pool (Part J), so this is also how you give a family more room.
 - **AI:** AI features need `OPENAI_API_KEY`. Without it the app works with AI off.
 - **CI:** GitHub Actions has never run. The first push will show whether the hosted runners are
   happy.

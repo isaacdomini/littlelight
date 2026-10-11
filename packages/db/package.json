@@ -17,6 +17,8 @@
     "db:migrate:down": "tsx src/migrate.ts down",
     "db:seed": "tsx src/seed.ts",
     "db:plan": "tsx src/tools/set-plan.ts",
+    "admin:abuse-report": "tsx src/tools/abuse-report.ts",
+    "admin:suspend": "tsx src/tools/suspend.ts",
     "db:review-family": "tsx src/review-family.ts",
     "db:types": "tsx src/gen-types.ts",
     "db:migrate:create": "node-pg-migrate create --migrations-dir migrations --migration-file-language sql"

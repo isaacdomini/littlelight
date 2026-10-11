@@ -18,6 +18,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { ApiError, forbidden, rateLimited, safeErrorLog } from "../lib/errors";
 import { clientIp, clientKindHeader, upstreamClientHeaders } from "../lib/request";
 import { audit, withClaims } from "./context";
+import { isSuspendedEmail } from "./family-guards";
 import { GoTrueError, type GoTrueSession, hasReviewLinks } from "./gotrue";
 import { csrfRejected, requireAuth } from "./plugin";
 import { countOtherFamilies, isReviewEmail, type ReviewAccount, verifyReviewCode } from "./review";
@@ -72,7 +73,7 @@ async function logoutPresentedSession(
 }
 
 interface SignInOptions {
-  /** Audit `method` (store-review sign-in only). */
+  /** `review`: the store-review sign-in, recorded in the audit metadata (D4). */
   method?: IssueOptions["method"];
   /** The exchange must yield this user (store-review sign-in: the id `generate_link` returned). */
   expectUserId?: string;
@@ -214,6 +215,21 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
       // Store-review account (D4): its code is static, so no email goes out (same 202).
       if (isReviewEmail(review, email)) {
         request.log.debug("otp request for the review account: nothing sent");
+        return reply.code(202).send({ ok: true });
+      }
+      // Step 11 (amended): any address may sign in (the abuse checks run when an account starts
+      // a family, family-guards.ts). Only a suspended account is special: the same 202, and
+      // nothing is sent. Fails open on a database error: suspension is enforced again at verify
+      // time (the liveness check, fail closed), and a database blip must not stop sign-in codes
+      // for everyone.
+      let suspended = false;
+      try {
+        suspended = await isSuspendedEmail(request.server, email);
+      } catch (err) {
+        request.log.warn({ err: safeErrorLog(err) }, "otp pre-check failed; sending");
+      }
+      if (suspended) {
+        request.log.info({ outcome: "suspended" }, "otp request: nothing sent");
         return reply.code(202).send({ ok: true });
       }
       try {

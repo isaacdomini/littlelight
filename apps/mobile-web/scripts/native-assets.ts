@@ -79,7 +79,7 @@ async function ios(): Promise<void> {
     rmSync(join(sp, old), { force: true });
   }
   out(join(sp, "splash-light.png"), await splash("splash-mark.svg", "#FFFFFF"));
-  out(join(sp, "splash-dark.png"), await splash("splash-mark-dark.svg", "#0E0F11"));
+  out(join(sp, "splash-dark.png"), await splash("splash-mark-dark.svg", "#1D1829"));
   out(
     join(sp, "Contents.json"),
     `${JSON.stringify(
@@ -133,11 +133,14 @@ async function android(): Promise<void> {
           .toBuffer(),
       );
     }
-    // Adaptive layers are 108dp with the mark inside the central 66dp safe zone (it is: 58% wide).
+    // Adaptive layers are 108dp with the mark inside the central 66dp safe zone (mark scaled to 0.8 in the source).
     const layer = await raster(fg, adaptive).png(png).toBuffer();
     out(join(dir, "ic_launcher_foreground.png"), layer);
-    // Themed icon: only the alpha channel matters; the system tints it.
-    out(join(dir, "ic_launcher_monochrome.png"), layer);
+    // Themed icon (Android 13+): the system forces one colour, so this is the single-colour aperture + feet cut.
+    out(
+      join(dir, "ic_launcher_monochrome.png"),
+      await raster(res("icon-monochrome.svg"), adaptive).png(png).toBuffer(),
+    );
 
     const stat = Math.round(24 * scale);
     out(
@@ -181,7 +184,7 @@ async function android(): Promise<void> {
   out(
     join(root, "fastlane/metadata/android/en-US/images/icon.png"),
     await raster(res("icon.svg"), 512)
-      .flatten({ background: "#E8836B" })
+      .flatten({ background: "#231B2E" })
       .removeAlpha()
       .png(png)
       .toBuffer(),

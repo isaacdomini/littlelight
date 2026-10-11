@@ -9,7 +9,7 @@ import {
   uploadFileSchema,
   uploadSessionSchema,
 } from "@tinyglow/shared";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { JobQueue } from "../plugins/jobs";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
 import { seedManyPhotos, seedPhoto } from "../testing/photos";
@@ -137,8 +137,24 @@ describe.skipIf(!databaseUrl)("uploads (api + db, stubbed S3 and jobs)", () => {
     ).rows[0] as
       | { approval: string; status: string; bytes: number; mime: string | null }
       | undefined;
-  /** A fresh baby (free plan) for the cap tests, owned by mom. */
-  const freshBaby = () => h.baby(mom, "Cap");
+  /**
+   * A fresh free baby for the cap tests, owned by mom. Step 11: mom's albums share ONE family
+   * pool, so the base album is made Plus (outside the pool) while a cap album exists, and the
+   * cap albums are hard-deleted afterwards (afterEach): each cap test sees an empty pool.
+   */
+  const capBabies: string[] = [];
+  async function freshBaby() {
+    await h.admin.query("UPDATE public.babies SET plan = 'plus' WHERE id = $1", [baby]);
+    const b = await h.baby(mom, "Cap");
+    capBabies.push(b);
+    return b;
+  }
+  afterEach(async () => {
+    if (capBabies.length === 0) return;
+    await h.admin.query("DELETE FROM public.babies WHERE id = ANY($1::uuid[])", [capBabies]);
+    capBabies.length = 0;
+    await h.admin.query("UPDATE public.babies SET plan = 'free' WHERE id = $1", [baby]);
+  });
 
   // ---- sessions -----------------------------------------------------------------------------
 
@@ -180,13 +196,16 @@ describe.skipIf(!databaseUrl)("uploads (api + db, stubbed S3 and jobs)", () => {
       expect(c.statusCode).toBeLessThan(500);
     });
 
-    it("free tier: refuses a new session at the 1000-photo cap, counting pending but not failed photos", async () => {
+    it("free tier: refuses a new session at the 1000-photo cap, counting approved but not pending or failed photos", async () => {
       const b = await freshBaby();
       await seedManyPhotos(h.admin, b, FREE_TIER_PHOTO_LIMIT - 1);
       await seedPhoto(h.admin, b, { status: "failed" });
       await seedPhoto(h.admin, b, { trashedAgo: "1 hour" });
       expect((await h.inject(mom, "POST", `/babies/${b}/uploads`, {})).statusCode).toBe(201);
+      // a pending photo (a guest's, awaiting approval) is not counted (step 11)
       await seedPhoto(h.admin, b, { approval: "pending", status: "uploaded" });
+      expect((await h.inject(mom, "POST", `/babies/${b}/uploads`, {})).statusCode).toBe(201);
+      await seedPhoto(h.admin, b, { approval: "approved", status: "uploaded" });
       const full = await h.inject(mom, "POST", `/babies/${b}/uploads`, {});
       expect(full.statusCode).toBe(409);
       expect(err(full).error).toBe("free_tier_limit");
@@ -743,6 +762,121 @@ describe.skipIf(!databaseUrl)("uploads (api + db, stubbed S3 and jobs)", () => {
       const s = await newSession(mom);
       const ev = await h.audit({ event: "upload.session_created", actor: mom.id, baby });
       expect(ev.some((e) => e.metadata.session_id === s.id)).toBe(true);
+    });
+  });
+  // ---- step 11: the family pool and the pending queue --------------------------------------
+
+  describe("guests and the pending queue (family model)", () => {
+    const PENDING_LIMIT = 200;
+    async function guestOf(babyId: string) {
+      const g = await h.user({ displayName: "Guest" });
+      await h.member(babyId, g, "contributor");
+      return g;
+    }
+    const seedPending = (babyId: string, guest: TestUser, n: number) =>
+      h.admin.query(
+        `INSERT INTO public.photos (baby_id, uploaded_by, storage_key_original, status, approval)
+         SELECT $1::uuid, $2::uuid, 'pend/' || gen_random_uuid()::text, 'ingested', 'pending' FROM generate_series(1, $3::int)`,
+        [babyId, guest.id, n],
+      );
+
+    it("a guest uploads into a full family: the photo waits as pending, the pool is unchanged, the admin is refused", async () => {
+      const b = await freshBaby();
+      await seedManyPhotos(h.admin, b, FREE_TIER_PHOTO_LIMIT);
+      const guest = await guestOf(b);
+      const s = await newSession(guest, b);
+      const f = await registerOne(guest, s.id, 10);
+      await putAll(f.id, 10);
+      const done = await complete(guest, s.id, f.id);
+      expect(done.statusCode, done.body).toBe(200);
+      expect(await photoRow(f.id)).toMatchObject({ approval: "pending" });
+      expect(enqueued).toHaveLength(1);
+      const used = await h.inject(mom, "GET", `/babies/${b}`);
+      expect(used.json().freeTier).toMatchObject({ used: FREE_TIER_PHOTO_LIMIT });
+      const refused = await h.inject(mom, "POST", `/babies/${b}/uploads`, {});
+      expect(refused.statusCode).toBe(409);
+      expect(err(refused).error).toBe("free_tier_limit");
+    });
+
+    it("session pre-check: a guest at the pending cap is 409 pending_limit with the counts; others are unaffected", async () => {
+      const b = await freshBaby();
+      const guest = await guestOf(b);
+      const other = await guestOf(b);
+      await seedPending(b, guest, PENDING_LIMIT);
+      const res = await h.inject(guest, "POST", `/babies/${b}/uploads`, {});
+      expect(res.statusCode).toBe(409);
+      const body = err(res);
+      expect(body.error).toBe("pending_limit");
+      expect(body.details).toEqual({ pending: PENDING_LIMIT, limit: PENDING_LIMIT });
+      expect(body.message).toContain("waiting for approval");
+      expect((await h.inject(other, "POST", `/babies/${b}/uploads`, {})).statusCode).toBe(201);
+      expect((await h.inject(mom, "POST", `/babies/${b}/uploads`, {})).statusCode).toBe(201);
+    });
+
+    it("the pending cap counts across the family's albums, not per album", async () => {
+      const b1 = await freshBaby();
+      const b2 = await h.baby(mom, "Twin");
+      capBabies.push(b2);
+      const guest = await guestOf(b1);
+      await h.member(b2, guest, "contributor");
+      await seedPending(b2, guest, PENDING_LIMIT);
+      const res = await h.inject(guest, "POST", `/babies/${b1}/uploads`, {});
+      expect(res.statusCode).toBe(409);
+      expect(err(res).error).toBe("pending_limit");
+    });
+
+    it("a guest's pending photos in a different family do not count here", async () => {
+      const b = await freshBaby();
+      const guest = await guestOf(b);
+      const elsewhere = await h.baby(await h.user(), "Elsewhere");
+      await h.member(elsewhere, guest, "contributor");
+      await seedPending(elsewhere, guest, PENDING_LIMIT);
+      expect((await h.inject(guest, "POST", `/babies/${b}/uploads`, {})).statusCode).toBe(201);
+      await h.admin.query("DELETE FROM public.babies WHERE id = $1", [elsewhere]);
+    });
+
+    it("register headroom for a guest: files beyond the queue room fail with pending_limit; the rest upload", async () => {
+      const b = await freshBaby();
+      const guest = await guestOf(b);
+      await seedPending(b, guest, PENDING_LIMIT - 2);
+      const s = await newSession(guest, b);
+      const res = await register(
+        guest,
+        s.id,
+        [1, 2, 3].map((i) => ({ clientId: `g${i}`, bytes: 100 })),
+      );
+      expect(res.statusCode, res.body).toBe(200);
+      const files = res.json().files as { state: string; error: string | null }[];
+      expect(files.map((f) => f.state)).toEqual(["registered", "registered", "failed"]);
+      expect(files[2]?.error).toBe("pending_limit");
+      expect(s3.count("CreateMultipartUpload")).toBe(2);
+    });
+
+    it("complete: the trigger refusing a pending booking is 409 pending_limit, the file fails, no job is sent", async () => {
+      const b = await freshBaby();
+      const guest = await guestOf(b);
+      await seedPending(b, guest, PENDING_LIMIT - 1);
+      const s = await newSession(guest, b);
+      const f = await registerOne(guest, s.id, 10);
+      await putAll(f.id, 10);
+      await seedPending(b, guest, 1); // the queue fills up before this file is booked
+      const r = await complete(guest, s.id, f.id);
+      expect(r.statusCode).toBe(409);
+      expect(err(r).error).toBe("pending_limit");
+      expect(await fileRow(f.id)).toMatchObject({ state: "failed", error: "pending_limit" });
+      expect(await photoRow(f.id)).toBeUndefined();
+      expect(enqueued).toEqual([]);
+    });
+
+    it("an admin's upload ignores the pending queue and the admin is checked against the pool only", async () => {
+      const b = await freshBaby();
+      await seedPending(b, mom, PENDING_LIMIT); // admins never have pending rows; even so, no pre-check
+      const s = await newSession(mom, b);
+      const f = await registerOne(mom, s.id, 10);
+      await putAll(f.id, 10);
+      const done = await complete(mom, s.id, f.id);
+      expect(done.statusCode, done.body).toBe(200);
+      expect(await photoRow(f.id)).toMatchObject({ approval: "approved" });
     });
   });
 });

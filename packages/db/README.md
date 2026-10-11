@@ -37,8 +37,8 @@ db ─► db-init (pnpm db:bootstrap) ─► auth (GoTrue migrates auth.*, then 
 | `tinyglow_worker` | yes, NOINHERIT | Worker connection role. Owns `pgboss`; `worker_heartbeats` directly; `SET LOCAL ROLE pipeline` for app tables. |
 | `authenticated` | no | Signed-in user. Policies read `request.jwt.claims` through `auth_uid()` / `auth_email()` and membership through `is_baby_member()` / `is_baby_admin()` (SECURITY DEFINER, read `baby_members`, never trust claims beyond `sub`). Reads only its **own** `profiles` row; co-members' names come from the `member_profiles` view (see "Review hardening and data exports"). |
 | `viewer` | no | Share-link viewer. Can read only: `shared_photos` of its link (no parent user ids), the allow-listed columns of `photos`, `photo_derivatives` (thumb/display, and never those of a hidden sensitive photo), `photo_details` (milestone only), `babies` (id, name, nickname, birth_date), `milestones`, `share_links` (own, no hashes). Its only writes go through `viewer_session_check()`. Nothing else, and nothing once the link is expired/revoked or the baby is deleted (see "Sharing (step 8)"). |
-| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables; for the FR-10.1 export: `data_exports` progress/result/purge columns, the `babies` profile columns (no billing), `baby_members (baby_id, user_id, role, joined_at)` read-only, EXECUTE on `export_requester_is_admin` / `export_requester_email`; for step-10 Google imports: `import_batches` read + progress/result columns, `import_items` insert/read/progress columns and 30-day retention delete, EXECUTE on `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo`, and no grant on `import_sources` or `google_accounts`). Never invites, tokens, chat, removal requests or `invited_by`, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
-| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes, Google connections (`google_accounts`, `encrypt_secret`/`decrypt_secret`). Reachable from `tinyglow_api` only, never from the worker. `audit_log` is append-only even for this role. |
+| `pipeline` | no | Worker job role: cross-baby, but only photo-pipeline tables/columns (`photos` status/metadata/`quarantined_at`, `photo_exif` incl. encrypted GPS, `photo_derivatives`, `photo_ai`, `photo_search`, `ai_batches`, `ai_batch_items`, `upload_files` state, read-only `profiles`/`babies`/`milestones`, `share_rules` (+ `evaluated_at`), `shared_photo_exclusions`, insert/delete of its own `rule` rows in `shared_photos`, liveness columns of `upload_sessions`; EXECUTE on the four push functions `push_targets`, `push_photos_analyzed_count`, `push_link_baby`, `push_record_delivery` and no grant on the push tables; for the FR-10.1 export: `data_exports` progress/result/purge columns, the `babies` profile columns (no billing), `baby_members (baby_id, user_id, role, joined_at)` read-only, EXECUTE on `export_requester_is_admin` / `export_requester_email`; for step-10 Google imports: `import_batches` read + progress/result columns, `import_items` insert/read/progress columns and 30-day retention delete, EXECUTE on `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo`, and no grant on `import_sources` or `google_accounts`; step 11: EXECUTE on `free_tier_pool_used` / `free_tier_pool_albums`, `pending_photo_limit` / `my_pending_photo_count` and `family_starts_prune()` only, no grant on `families`, `babies.family_id` or `family_starts`). Never invites, tokens, chat, removal requests or `invited_by`, viewer sessions, passcode failures, batch-upload notes. Hard-deletes only rows trashed > 30 days (never quarantined ones) and `status = 'duplicate'` markers. |
+| `service_role` | no, **BYPASSRLS** | API-internal, no user context: share-token exchange, viewer sessions, passcode failures, invite redemption, billing, account deletion, audit writes, Google connections (`google_accounts`, `encrypt_secret`/`decrypt_secret`), family-start guards (`family_starts` SELECT/INSERT/DELETE, `families` SELECT, `account_state_for_email`, `family_holder_email_for_canonical`; step 11). Reachable from `tinyglow_api` only, never from the worker. `audit_log` is append-only even for this role. |
 | `anon` | no | No grants (exists only because GoTrue mints the claim). |
 
 Only `postgres` can read `pgmigrations` or `auth.*` (see "Session functions" and "Native push" for
@@ -120,7 +120,9 @@ Notes for API/worker code:
   `authenticated` actor can `UPDATE` (demote) or `DELETE` an **admin** row only when it is their
   own; another admin's row affects 0 rows (no error), so the API must check the row count.
 - Business rules enforced by triggers (all raise `check_violation`, SQLSTATE 23514): max two
-  admins, last admin stays, 20 invites/baby/day, free-tier 1,000-photo cap, AI queue and
+  admins, last admin stays, 20 invites/baby/day, free-tier 1,000-photo cap (per family, approved photos
+  only, since step 11), one family per parent, the pending cap per guest per family (see
+  "Families and the free-tier pool (step 11)"), AI queue and
   `photo_ai` only for approved photos of a paid-tier baby, `shared_photos` only approved live
   unquarantined photos of the link's baby and never sensitive, unanalysed or admin-excluded ones
   by rule (a photo that later becomes sensitive loses its rule-added shares at once; hand-picked
@@ -154,7 +156,7 @@ return nothing). Each function filters by `auth_uid()`, pins `search_path = pg_c
 
 | Function | Returns | Use |
 | --- | --- | --- |
-| `auth_session_info(p_session_id uuid)` | `(created_at, refreshed_at timestamptz)` for that session **only if** it belongs to `auth_uid()` and its timebox (`not_after`) has not passed; else no row | First statement of every `withClaims` transaction with the JWT's `session_id`; no row ⇒ 401 `session_revoked`. `created_at` ≤ 10 min ago = fresh sign-in; `refreshed_at` is NULL until the first refresh (`coalesce(refreshed_at, created_at)` for "last active") |
+| `auth_session_info(p_session_id uuid)` | `(created_at, refreshed_at timestamptz, suspended boolean)` for that session **only if** it belongs to `auth_uid()` and its timebox (`not_after`) has not passed; else no row (`suspended` since step 11: the account's `profiles.suspended_at` is set) | First statement of every `withClaims` transaction with the JWT's `session_id`; no row ⇒ 401 `session_revoked`; `suspended` ⇒ 403 `account_suspended`. `created_at` ≤ 10 min ago = fresh sign-in; `refreshed_at` is NULL until the first refresh (`coalesce(refreshed_at, created_at)` for "last active") |
 | `list_user_sessions()` | `(id, created_at, updated_at, refreshed_at, user_agent)`, newest first, **no `ip`** | `GET /api/auth/sessions` (the API reduces `user_agent` to a label) |
 | `delete_user_session(p_session_id uuid)` | `boolean` | `DELETE /api/auth/sessions/:id`; deletes only the caller's own row (GoTrue cascades `auth.refresh_tokens`, `auth.mfa_amr_claims`); false for a missing or someone else's session, indistinguishably |
 | `count_user_sessions()` | `integer` | New-device detection at sign-in |
@@ -266,7 +268,9 @@ quarantine) keeps its `photos` row so the uploader sees why, but never eats the 
 pending (unapproved) photos do count. The `photos_free_tier_cap` trigger applies the same
 predicate unconditionally (hard stop, `check_violation` `free tier photo limit reached`); the API
 should call the helper for its friendly pre-check and headroom instead of counting
-`deleted_at IS NULL` itself. SECURITY DEFINER: exact for contributors too (RLS would hide other
+`deleted_at IS NULL` itself. **Since step 11 the cap is a per-family pool of approved photos** (`free_tier_pool_used`,
+over every free live album of the family; pending photos no longer count; see "Families and the
+free-tier pool (step 11)"); `free_tier_photo_count` stays as the per-album "N photos" number. SECURITY DEFINER: exact for contributors too (RLS would hide other
 contributors' pending photos from them); returns 0 for a non-member of the baby and the full
 count in a transaction without claims (`pipeline` / `service_role`); `viewer` cannot call it.
 
@@ -1042,6 +1046,172 @@ and `babies (id, deleted_at)` were already readable by `pipeline`).
 | `import_items` | 30 days after the last change once terminal / the batch finished (`import.sweep`); with the batch or the baby |
 
 
+## Families and the free-tier pool (step 11)
+
+Migration `1792400000100_free-tier-abuse.sql` (docs/plans/step-11.md, amended: 2.2 A–G, decisions
+D-A…D-I). The user's model: **1,000 free photos per family; an account is a parent in at most one
+family; guests are free; their photos count only once approved; the abuse checks run when an
+account starts a family**. RLS stays ENABLE + FORCE everywhere (two new tables, `families` and
+`family_starts`). Every RAISE is fixed text: no email, IP, id or row value.
+
+**Families (D-A).** `families (id, created_by → profiles ON DELETE SET NULL, created_at)`; every
+album has `babies.family_id` (NOT NULL, FK `ON DELETE RESTRICT`). Rows are trigger-maintained: no
+user role can INSERT/UPDATE/DELETE `families` or write `babies.family_id` (authenticated may
+SELECT both; service_role SELECT on `families` and ALL on `babies` as before; `viewer` and
+`pipeline` nothing). `families_authenticated_select` = `is_family_member(id)`: a member of a live
+album of the family, or an admin of any album of it (trashed included).
+
+| Event | Effect |
+| --- | --- |
+| `INSERT INTO babies` | `babies_set_family` (BEFORE INSERT, SECURITY DEFINER): an explicit `family_id` (service_role / seeds) is kept; an upsert of an existing album id keeps that album's family; else the creator's family (`parent_family_of(created_by)`), or within one multi-row INSERT the family of the creator's earlier row (its creator-admin row only lands at the end of the statement); else **a new family** (founder = creator). Lock **1012** on the creator first, so two concurrent first albums of one account land in one family. Starting a family takes lock **1013** on the creator's canonical address and raises **`another account for this inbox already has a family`** when another account with the same `email_canonical` is already a parent anywhere, an account in its deletion window (`profiles.deleted_at` set, GoTrue delete pending or being retried) included: it holds the inbox until it is hard-deleted (D-B: two concurrent starts for one inbox admit exactly one). `created_by NULL` (fixtures) ⇒ a family of its own |
+| an account becomes admin (invite accept, direct insert, upsert, promotion) | `baby_members_one_family` (BEFORE INSERT OR UPDATE OF role, SECURITY DEFINER): lock **1012** on the user, then raises **`user is already a parent in another family`** if they are admin of any album (trashed included) in a different family, **or founded a different family that still has a live album**. Two admin accepts at once serialise; the second is refused. The creator's own first row always passes. Guest (contributor) joins are never checked |
+| `UPDATE babies SET family_id` (service_role / operator tools only) | `babies_family_guard` (BEFORE UPDATE OF family_id): every admin of the album must be a parent in the target family only, founder ties included (same message, lock 1012 per admin); `babies_release_family` drops the old family if it became empty |
+| an admin leaves, is removed or demoted; an account is deleted | nothing: `family_id` lives on the album, so the family survives with its remaining parent(s); `families.created_by` goes NULL when the founder is deleted. **The founder stays bound** (`parent_family_of`, branch 2) after stepping down or leaving, as long as the family has a live album: their next album joins it (no family start) and they cannot become a parent elsewhere, so "start F1, hand it to a co-parent, start F2" does not double the free photos. The tie ends when every album of the family is trashed or purged, or the founder's account is deleted. `baby_members_keep_last_admin` and the API's `sole_admin` rule are unchanged |
+| hard delete of an album (purge) | `babies_release_family` (AFTER DELETE OR UPDATE OF family_id): locks the family row, deletes it when no album references it any more (two concurrent purges of its last two albums cannot both keep it). `family_starts.family_id` goes NULL |
+| migration backfill | connected components of "shares an admin", albums in `(created_at, id)` order: no neighbour family ⇒ new family (founder: the creator while still one of the album's admins, else its earliest-joined admin, else NULL, so no ex-member is bound as founder; `created_at` = the album's); one ⇒ join; several ⇒ merge into the first created. `babies.updated_at` is not touched. NOTICE prints counts only |
+
+| Function | Returns | Grants |
+| --- | --- | --- |
+| `parent_family_of(p_user uuid)` | `uuid`: family of the user's oldest album (`created_at, id`) where they are admin, **trashed albums included** (D-E: a parent of only trashed albums still belongs to that family until purge, so trash-cycling cannot reset the pool); else the family they **founded** while it has a live album; NULL when a parent nowhere | none (SECURITY DEFINER helpers and the superuser only) |
+| `my_family_id()` | `parent_family_of(auth_uid())`; NULL ⇒ the caller's next album is a **family start** | `authenticated` |
+| `is_family_member(p_family_id uuid)` | `boolean` (the `families` policy) | `authenticated` |
+
+**The pool (approved only).** Photos that count: `approval = 'approved' AND deleted_at IS NULL AND
+quarantined_at IS NULL AND status NOT IN ('failed', 'duplicate')`. The pool of an album is every
+**free, live** album of its family. Plus albums are exempt (D-F: Plus stays per album); trashed
+albums are outside (purge bounds them to 30 days; the report shows them). Pending and rejected
+photos never count.
+
+| Function | Returns | Grants |
+| --- | --- | --- |
+| `free_tier_pool_used(baby_id uuid)` | `integer`: counting photos across the family's free live albums | `authenticated`, `pipeline`, `service_role` |
+| `free_tier_pool_albums(baby_id uuid)` | `integer`: free live albums of the family (≥ 1 for a free live album) | same |
+| `free_tier_photo_count(baby_id uuid)` | unchanged per-album number (step 4 predicate, any approval) for the "N photos" display | unchanged |
+
+The pool functions are STABLE SECURITY DEFINER: exact for guests (RLS would hide others' photos
+and the family's other albums), **0 for a caller with claims who is not a member** of `baby_id`,
+the full value without claims. A member therefore learns one number about the family's other free
+albums; that is what the usage line shows. Call them for free live albums only.
+
+**The hard stop.** `photos_free_tier_cap` fires BEFORE INSERT **OR UPDATE OF `approval`,
+`deleted_at`** on `photos`, for every role including the superuser, whenever a photo *starts*
+counting: inserted approved (admin upload, admin import, seed, direct SQL), approved (pending →
+approved), restored from the trash while approved. A guest's pending upload and a rejected photo
+restored to pending pass. For a free album it takes `pg_advisory_xact_lock(1011,
+hashtext(family_id::text))`, counts the family pool in a fresh statement snapshot and raises
+`check_violation` **`free tier photo limit reached (1000 approved photos per family)`** at ≥ 1000.
+The prefix `free tier photo limit reached` is unchanged (API `CHECK_VIOLATIONS` → 409
+`free_tier_limit`, `import_book_photo` → `'free_tier_limit'`, the import worker, the iOS sync).
+Approval is refused atomically: the admin's `UPDATE` **raises** (it does not affect 0 rows).
+Concurrency: two inserts/approvals into one family at 999, in any albums, serialise on the lock
+and exactly one passes (READ COMMITTED, the API's and worker's level).
+
+**Over the cap without a check (grandfathering; documented, not a bug).** A family can end up
+above 1,000 counting photos by paths that add whole albums to the pool rather than single
+photos: restoring a trashed free album (`babies.deleted_at` → NULL), switching an album Plus →
+free (`pnpm db:plan <baby> free` or an entitlement lapse), the backfill merging two families, or
+an operator moving an album between families. None is checked; the family keeps every photo and
+the next insert, approval or restore is refused until it is below 1,000 or an album is Plus.
+1000 is hard-coded in SQL (`FREE_TIER_PHOTO_LIMIT` in shared mirrors it).
+
+**Pending cap (D-C, D-D).** Photos pending (`approval = 'pending'`, live, not quarantined, not
+failed/duplicate) are capped **per uploader per family**, for every plan.
+`photos_pending_cap` (BEFORE INSERT OR UPDATE OF `approval`, `deleted_at`) fires whenever a photo
+*becomes* pending (guest upload, guest import, restore of a pending photo, rejected → pending);
+lock `pg_advisory_xact_lock(1014, hashtext(family_id || ':' || uploaded_by))`, count across the
+family's live albums, raise **`pending photo limit reached (per guest per family)`** at ≥ the
+limit. Admin uploads are inserted approved, so it only bites guests; a photo with no uploader
+passes.
+
+| Function | Returns | Grants |
+| --- | --- | --- |
+| `pending_photo_limit()` | `integer`: 200, or the `app.pending_photo_limit` setting (minimum 1). `PENDING_PHOTOS_PER_GUEST_PER_FAMILY` in shared mirrors the 200 | `authenticated`, `pipeline`, `service_role` |
+| `my_pending_photo_count(baby_id uuid)` | `integer`: the caller's live pending photos across the family of `baby_id`; 0 for a non-member or without claims | same |
+
+Operator override, one statement (new sessions pick it up): `ALTER DATABASE tinyglow SET
+app.pending_photo_limit = '500';` (`RESET` to go back to 200). Tests may `SET` it per session.
+
+`pending_limit` joins the error vocabularies `upload_files.error`, `import_sources.last_error` and
+`import_items.error` (appended last, the order of the shared enums), and `import_book_photo()`
+returns `'pending_limit'` when `photos_pending_cap` refuses a guest's import (otherwise the step-10
+body verbatim).
+
+**Advisory-lock classes.** Two-key `pg_advisory_xact_lock(class int4, key int4)`:
+
+| Class | Key | Taken by |
+| --- | --- | --- |
+| **1011** | `hashtext(family_id)` | `photos_free_tier_cap` (the family pool) |
+| **1012** | `hashtext(user_id)` | `babies_set_family` (creator), `baby_members_one_family`, `babies_family_guard` (one family per parent) |
+| **1013** | `hashtext(email_canonical)` | `babies_set_family` on a family start (inbox arbiter), always after 1012 |
+| **1014** | `hashtext(family_id || ':' || uploaded_by)` | `photos_pending_cap` |
+| **1015** | `hashtext(encode(ip_hash, 'hex'))` | the API's family-start guard transaction (`apps/api/src/auth/family-guards.ts`): count and reserve per network |
+
+A hash collision only serialises two unrelated keys. The other two-key locks use
+`hashtext('<name>')` as the class (`'ai.budget_exceeded'`, `'chat.turn'`, `'share.passcode'`;
+none hashes to 1011–1015) and `register_push_device` uses the single-`bigint` form, a separate
+key space. Pick a new class for any new lock.
+
+**Canonical email (a lookup, not a rule).** `email_canonical(text) RETURNS text` (plpgsql,
+IMMUTABLE, STRICT; `authenticated`, `service_role`) is the SQL twin of `canonicalEmail()` in
+`@tinyglow/shared`; `CANONICAL_EMAIL_FIXTURES` there is the parity list for both tests. Steps:
+NFC; trim the ECMAScript `String.prototype.trim` whitespace set; lowercase with the builtin
+`pg_c_utf8` collation (differs from JS `toLowerCase` only for U+0130 and a word-final capital
+sigma); no `@` ⇒ that string; split at the **last** `@`; remove trailing `.` from the domain;
+`googlemail.com` → `gmail.com`; strip `+tag` for every domain unless the local part starts with
+`+`; for `gmail.com` remove every `.` from the local part.
+
+- `profiles.email_canonical`: set by `profiles_set_email_canonical` (BEFORE INSERT, SECURITY
+  DEFINER) from `auth.users.email`, overriding whatever the inserter passed; NULL without an
+  email. No user role can write it. **Not unique**: two accounts may share an inbox (sign-up is
+  never refused); plain index `profiles_email_canonical_idx`. Only *starting a family* is
+  arbitrated (above). Backfill from `auth.users` (NOTICE: a count).
+- Invites: `invite_allows_join` and `baby_members_consume_invite` match the invited address
+  exactly **or** by canonical form (an invite to `mom+baby@gmail.com` is accepted by
+  `mom@gmail.com`); `invites_email_canonical_live_idx` serves those lookups.
+
+**API helpers (service_role only, never `authenticated`).** SECURITY DEFINER, STRICT, bind
+parameters, nothing logged.
+
+| Function | Returns |
+| --- | --- |
+| `account_state_for_email(p_email text)` | `'none'` / `'active'` / `'suspended'` for the account holding exactly this address (the OTP pre-check answers 202 silently for suspended accounts) |
+| `family_holder_email_for_canonical(p_canonical text)` | `auth.users.email` of the oldest account with that canonical form that is a parent somewhere (deletion window included, like the arbiter), else NULL: the masked hint of 409 `inbox_has_family` only |
+
+**`family_starts` (ledger).** One row per family start. The API's guard transaction takes lock
+**1015** on the network's IP hash, counts the rows of the last 24 h and **reserves** a row
+(`family_id` NULL) before committing, so the per-network cap holds under concurrency (N parallel
+first albums from one network admit exactly the remaining count); after the album insert the API
+fills `family_id` with the new family, or deletes the reservation when no family was started (insert
+refused or failed, or a concurrent first album of the same account won). A reservation whose
+request died keeps counting for 24 h (the safe side). Columns: `family_id` (FK `families`, `ON
+DELETE SET NULL`: NULL while reserved, and again after purge), `user_id` (FK
+`profiles`, `ON DELETE SET NULL`: start → delete → start still counts), `ip_hash` (32 bytes:
+HMAC-SHA256 of the client IP under `HKDF(JWT_SECRET, "tinyglow", "family-ip-v1")`), `ip_country`
+(`CF-IPCountry`, NULL in dev), `client` (`web`/`native`), flags `plus_tag`, `dots_folded`,
+`created_at`. **Never** an email, a raw IP or a user agent (CI greps the DDL). ENABLE + FORCE RLS
+with **no policy and no grant** for `authenticated`, `viewer`, `pipeline` (deny-all);
+`service_role` SELECT, INSERT, DELETE and UPDATE of `family_id` only. Retention 30 days (FR-10.3):
+`family_starts_prune() RETURNS integer` (SECURITY DEFINER; `service_role`, `pipeline`), called by
+the API after each insert and by the worker's purge.
+
+**Suspension.** `profiles.suspended_at timestamptz`, `suspended_reason` (`abuse` | `other`),
+written only by `pnpm admin:suspend` (superuser; no user-role grant). `auth_session_info()` returns
+`suspended` (see "Session functions"); the API answers 403 `account_suspended` on every request
+and at sign-in. Audit events `account.suspended` / `account.unsuspended` are written by the tool.
+
+**Down migration.** Restores the step-3 `auth_session_info` shape, the step-2 invite functions,
+the step-4 `photos_free_tier_cap` body and INSERT-only trigger, the three step-4/step-10 error
+CHECKs and the step-10 `import_book_photo` body and comment verbatim; drops everything else.
+Verified: `pg_dump -s` after down equals the step-10 schema, and up → down → up is identical.
+
+**Dev note.** On a dev database migrated with demo + perf seeds, the backfill merges the perf seed's
+"Pixel" into the demo family (demo-mom was one of its admins). Re-running `pnpm perf:seed`
+re-homes it into its own family (perf owner the only parent; mom and dad guests), or reset the
+stack. Pixel's family is **permanently full** for the perf owner (10,000 approved photos, far over
+the 1,000 pool; grandfathered): signed in as `perf-owner@tinyglow.local`, every upload into a free
+album of that family is refused with `free_tier_limit`, and a new album by the owner joins that
+family (they are its parent) rather than starting a fresh pool. Use another account to test uploads.
+
 ## Store-review family (`src/review-family.ts`)
 
 `pnpm db:review-family --email <address> [--confirm-production]` (one transaction;
@@ -1117,6 +1287,8 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 | `pnpm db:migrate:down [n\|all]` | Revert the last `n` migrations (default 1); `all` reverts everything |
 | `pnpm db:seed` | Demo family (needs `SEED_DEMO_FAMILY=true`, `DATA_ENCRYPTION_KEY`; refuses in production) |
 | `pnpm db:plan <babyId> plus\|free [--owner <userId>] [--expires <iso>]` | Dev/operator plan switch, audited (`baby.plan_changed`); refuses in production without `--i-know-this-is-production` (see "AI pipeline") |
+| `pnpm admin:abuse-report [--days N=7] [--limit N=20] [--show-emails] [--json]` | Operator report (read-only), per family: family starts per network (IP hash), families near/over the cap, top storage (albums and families), recent family starts with flags, guests' pending queues; ids/counts/bytes only unless `--show-emails` (step 11, task 11.4b) |
+| `pnpm admin:suspend <userId> [--lift] [--reason abuse\|other] [--i-know-this-is-production]` | Suspend / lift an account: sets `profiles.suspended_at`, deletes its `auth.sessions`, audits `account.suspended` / `account.unsuspended` (step 11, task 11.4) |
 | `pnpm db:review-family --email <addr> [--confirm-production]` | Store-review family for an existing user (see "Store-review family"); refuses in production without the flag |
 | `pnpm --filter @tinyglow/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
 | `pnpm --filter @tinyglow/db db:migrate:create <name>` | New empty `migrations/<ms-timestamp>_<name>.sql` |
@@ -1149,7 +1321,9 @@ sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from 
 4 shared photos, all hand-picked by mom: 2, 9, 10 and the bath photo 4, which is **not released**
 (viewers get a hidden tile and cannot read its derivatives); 3 measurements; `photo_search` rows for the 9 live approved photos (with `place`;
 `embedding`, `embed_model`, `doc_version`, `content_hash` and `embedded_at` NULL, also reset on every
-re-seed, so the worker's `search.reconcile` rebuilds and embeds them); one audit row.
+re-seed, so the worker's `search.reconcile` rebuilds and embeds them); one audit row. Maya lives in
+mom's family (`babies_set_family`: a new `families` row on the first run, kept on re-runs; mom and
+dad are its parents, the nanny a guest); the seed's counts include `families`.
 The seed writes no image bytes: in dev the worker's `ensureDemoMedia()` (step 9, task 9.12)
 puts metadata-free JPEG illustrations of non-real babies at those keys and writes the derivatives.
 Re-seeding never clobbers the real sizes it wrote: `photos.width/height/bytes` are placeholders on
@@ -1243,3 +1417,4 @@ PGPASSWORD=dev $PSQL -U tinyglow_worker -c "begin; set local role pipeline; sele
 | `1792300000100_review-hardening.sql` | FR-1.5 in `baby_members_authenticated_update` / `_delete` (an admin row only by its owner); `profiles_authenticated_select` self-only + `member_profiles` view (security_barrier, 3 columns, live profiles, `authenticated` only); `photos_user_write_guard` + `photos_user_update_guard` trigger (contributors cannot touch approval/sensitivity columns; admin approval pins `approved_by`/`approved_at`; approved INSERT without approver gets the actor); `photos_authenticated_insert` requires `approved_by = auth_uid()` for approved rows and NULL otherwise | restore the step-2/4 policies verbatim; drop trigger, function and view |
 | `1792300000200_data-exports.sql` | guard (`auth.users`); `data_exports` (ENABLE+FORCE RLS, generated `storage_key` not granted to `authenticated`, 5 indexes incl. `data_exports_one_active_per_baby`); `data_exports_baby_live`, `data_exports_rate_limit`, `data_exports_user_update_guard` triggers; `export_requester_is_admin`, `export_requester_email` (pipeline only); pipeline read grants on `babies` profile columns and `baby_members (baby_id, user_id, role, joined_at)` + `baby_members_pipeline_select` | drop the policy and revoke the two grants; drop functions, table, trigger functions |
 | `1792300000300_photo-import.sql` | guard (`auth.users`); `encrypt_secret` / `decrypt_secret` (service_role only); `import_sources` (+ `import_sources_shape`, `import_sources_insert_guard`, composite FK to `baby_members`), `baby_members_drop_apple_sync` trigger; `google_accounts` (+ `google_accounts_shape`); `import_batches` (+ `import_batches_one_active`, `import_batches_user_transitions`, `import_batches_one_active_per_baby`); `import_items` (+ `import_items_batch_guard`), `import_batch_visible`; `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo` (pipeline only); all four tables ENABLE+FORCE RLS | drop the four functions, the `baby_members` trigger + function, the four tables and their trigger functions, `import_batch_visible`, `decrypt_secret`, `encrypt_secret` |
+| `1792400000100_free-tier-abuse.sql` | guard (`auth.users`, `auth.sessions`); `profiles.suspended_at/suspended_reason`; `email_canonical(text)`, `profiles.email_canonical` (+ backfill, plain `profiles_email_canonical_idx`, `profiles_set_email_canonical`), `invites_email_canonical_live_idx`, canonical branch in `invite_allows_join` / `baby_members_consume_invite`; `families` (ENABLE+FORCE RLS, authenticated/service_role SELECT, `is_family_member`), `babies.family_id` NOT NULL (+ connected-components backfill, `babies_family_idx`, `babies_family_free_live_idx`, authenticated SELECT), `parent_family_of`, `my_family_id`, triggers `babies_set_family`, `baby_members_one_family`, `babies_family_guard`, `babies_release_family`; `free_tier_pool_used`, `free_tier_pool_albums`; `photos_free_tier_cap` = per-family approved pool (lock 1011) on INSERT OR UPDATE OF `approval`, `deleted_at`; `pending_photo_limit`, `my_pending_photo_count`, `photos_pending_cap` (lock 1014); `pending_limit` in the `upload_files` / `import_sources` / `import_items` error CHECKs; `account_state_for_email`, `family_holder_email_for_canonical` (service_role); `family_starts` (ENABLE+FORCE RLS, service_role S/I/D only) + `family_starts_prune()` (service_role, pipeline); `auth_session_info` gains `suspended`; `import_book_photo` gains `'pending_limit'` | restore `auth_session_info` (two columns), the step-2 invite functions, the step-4 cap body/trigger, the three error CHECKs and the step-10 `import_book_photo` verbatim; drop everything else (and any first-draft objects) |

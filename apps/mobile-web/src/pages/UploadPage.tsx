@@ -9,6 +9,7 @@ import { type DragEvent, lazy, Suspense, useEffect, useRef, useState } from "rea
 import { useNavigate } from "react-router-dom";
 import { useCurrentBaby } from "../auth/AuthProvider";
 import { AppHeader } from "../components/AppHeader";
+import { FreeTierNotice } from "../components/FreeTierNotice";
 import { PushPrimer } from "../components/PushPrimer";
 import { UploadRow } from "../components/UploadRow";
 import {
@@ -290,6 +291,7 @@ export function UploadPage() {
               </EmptyState>
             ) : (
               <>
+                <FreeTierNotice baby={baby} />
                 {native ? null : (
                   <>
                     <input
@@ -402,7 +404,11 @@ export function UploadPage() {
                       <p className="text-sm text-muted">{t("upload.limitHint")}</p>
                     </>
                   )}
-                  {isContributor ? <p className="text-sm">{t("upload.reviewNote")}</p> : null}
+                  {isContributor ? (
+                    <p className="text-sm" data-testid="upload-guest-note">
+                      {t("upload.guestNote")}
+                    </p>
+                  ) : null}
                   {tooMany ? (
                     <Message kind="info">
                       {`Only ${UPLOAD_MAX_FILES_PER_SESSION} photos per upload session; the rest were added as a new batch.`}

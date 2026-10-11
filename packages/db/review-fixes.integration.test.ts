@@ -58,21 +58,22 @@ describe.skipIf(!databaseUrl)("review fixes: migrations 18 and 19", () => {
   });
 
   // -----------------------------------------------------------------------------------------
-  describe("migration round trip (down 3, up 3)", () => {
-    it("reverts 20, 19 and 18 cleanly and re-applies them, restoring the previous policies in between", async () => {
+  describe("migration round trip (down 4, up 4)", () => {
+    it("reverts 21, 20, 19 and 18 cleanly and re-applies them, restoring the previous policies in between", async () => {
       const probe = new (await import("pg")).default.Client({ connectionString: databaseUrl });
       await probe.connect();
       const q = async (sql: string) => (await probe.query(sql)).rows as Record<string, unknown>[];
       try {
         const downed = await runMigrations({
           direction: "down",
-          count: 3,
+          count: 4,
           bootstrap: false,
           databaseUrl,
           env,
           log: quiet,
         });
         expect(downed.map((m) => m.name)).toEqual([
+          expect.stringContaining("free-tier-abuse"),
           expect.stringContaining("photo-import"),
           expect.stringContaining("data-exports"),
           expect.stringContaining("review-hardening"),
@@ -94,7 +95,10 @@ describe.skipIf(!databaseUrl)("review fixes: migrations 18 and 19", () => {
       } finally {
         await runMigrations({ direction: "up", databaseUrl, env, log: quiet });
         const n = (await q("SELECT count(*)::int AS n FROM public.pgmigrations"))[0]?.n;
-        expect(n).toBe(20);
+        expect(n).toBe(21);
+        // The backfill of migration 21 re-homed the fixtures' admin-less trashed albums into
+        // families of their own: rebuild the fixtures so the rest of the suite sees family A.
+        await createFixtures(db.admin);
         expect((await q("SELECT to_regclass('public.data_exports') AS t"))[0]?.t).not.toBeNull();
         const kind = await q("SELECT relkind FROM pg_class WHERE relname = 'member_profiles'");
         expect(kind[0]?.relkind).toBe("v");

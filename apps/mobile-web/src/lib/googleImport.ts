@@ -236,6 +236,12 @@ export function importErrorKey(e: unknown) {
         return "google.err.forbidden" as const;
       case "network":
         return "google.err.network" as const;
+      case "pending_limit":
+        return "upload.err.pending_limit" as const;
+      case "free_tier_limit":
+        return isNative()
+          ? ("freeTier.full.native" as const)
+          : ("upload.err.free_tier_limit" as const);
     }
   }
   return "google.err.generic" as const;

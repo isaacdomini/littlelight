@@ -79,7 +79,7 @@ export const MARK_DOWNLOADED_SQL = `
 UPDATE import_items SET status = 'downloaded', bytes = $2, sha256 = $3, mime_hint = $4, error = NULL
 WHERE id = $1 AND status IN ('pending', 'downloaded')`;
 
-/** `booked | duplicate | free_tier_limit | not_member | baby_trashed` (D10). */
+/** `booked | duplicate | free_tier_limit | pending_limit | not_member | baby_trashed` (D10; step 11). */
 export const BOOK_PHOTO_SQL = `SELECT public.import_book_photo($1::uuid) AS outcome`;
 
 /** Terminal outcome of one open item. */
@@ -87,7 +87,7 @@ export const MARK_ITEM_SQL = `
 UPDATE import_items SET status = $2, error = $3
 WHERE id = $1 AND status IN ('pending', 'downloaded')`;
 
-/** After a stop (free-tier cap, requester gone, trashed album): every untouched item. */
+/** After a stop (free-tier or pending cap, requester gone, trashed album): every untouched item. */
 export const MARK_PENDING_SQL = `
 UPDATE import_items SET status = 'failed', error = $2
 WHERE batch_id = $1 AND status = 'pending'`;

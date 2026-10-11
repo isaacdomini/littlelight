@@ -126,8 +126,9 @@ describe.skipIf(!databaseUrl)("uploads and ingest (step 4 database rules)", () =
       [NO_HOME_BABY],
     );
     await q(
-      `INSERT INTO babies (id, name, birth_date, plan) VALUES ($1, 'Free', '2025-06-30', 'free')`,
-      [FREE_BABY],
+      `INSERT INTO babies (id, name, birth_date, plan, family_id)
+       VALUES ($1, 'Free', '2025-06-30', 'free', (SELECT family_id FROM babies WHERE id = $2))`,
+      [FREE_BABY, BABY.A],
     );
     await q(
       `INSERT INTO baby_members (baby_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'contributor')`,

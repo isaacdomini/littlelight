@@ -142,7 +142,9 @@ const googleClient = createWorkerGoogleClient(config);
 const mediaAllowList = googleImportMediaAllowList(config);
 
 const mailConfig = mailConfigOf(config);
-const exportMailer: ExportMailer | null = mailConfig ? createExportMailer(mailConfig, log) : null;
+const exportMailer: ExportMailer | null = mailConfig
+  ? createExportMailer(mailConfig, log, { publicUrl: config.PUBLIC_URL })
+  : null;
 
 const heartbeat = startHeartbeat(
   {

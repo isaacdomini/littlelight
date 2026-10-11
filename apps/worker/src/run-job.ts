@@ -315,7 +315,9 @@ async function main(argv: string[]): Promise<number> {
         case JOBS.dataExport: {
           const job = dataExportJobSchema.parse(payload);
           const mail = mailConfigOf(config);
-          mailer = mail ? createExportMailer(mail, log) : undefined;
+          mailer = mail
+            ? createExportMailer(mail, log, { publicUrl: config.PUBLIC_URL })
+            : undefined;
           result = await runDataExport(
             {
               pool,

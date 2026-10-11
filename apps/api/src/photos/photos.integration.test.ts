@@ -421,15 +421,30 @@ describe.skipIf(!databaseUrl)("photos (api + db)", () => {
     });
 
     it("free tier: restoring past the 1000-photo cap is 409 free_tier_limit; a paid baby may", async () => {
+      // One pool per family (step 11): take mom's base album out of it for this case.
+      const siblings = (
+        await h.admin.query(
+          `UPDATE public.babies SET plan = 'plus'
+            WHERE family_id = (SELECT family_id FROM public.babies WHERE id = $1) AND plan = 'free'
+           RETURNING id`,
+          [baby],
+        )
+      ).rows.map((r) => r.id as string);
       const b = await h.baby(mom, "Capped");
-      const t = await seedPhoto(h.admin, b, { trashedAgo: "1 hour" });
-      await seedManyPhotos(h.admin, b, FREE_TIER_PHOTO_LIMIT);
-      const r = await h.inject(mom, "POST", `/photos/${t}/restore`);
-      expect(r.statusCode).toBe(409);
-      expect(apiErrorSchema.parse(r.json()).error).toBe("free_tier_limit");
-      expect((await row(t)).deleted_at).not.toBeNull();
-      await h.admin.query("UPDATE public.babies SET plan = 'plus' WHERE id = $1", [b]);
-      expect((await h.inject(mom, "POST", `/photos/${t}/restore`)).statusCode).toBe(200);
+      try {
+        const t = await seedPhoto(h.admin, b, { trashedAgo: "1 hour" });
+        await seedManyPhotos(h.admin, b, FREE_TIER_PHOTO_LIMIT);
+        const r = await h.inject(mom, "POST", `/photos/${t}/restore`);
+        expect(r.statusCode).toBe(409);
+        expect(apiErrorSchema.parse(r.json()).error).toBe("free_tier_limit");
+        expect((await row(t)).deleted_at).not.toBeNull();
+        await h.admin.query("UPDATE public.babies SET plan = 'plus' WHERE id = $1", [b]);
+        expect((await h.inject(mom, "POST", `/photos/${t}/restore`)).statusCode).toBe(200);
+      } finally {
+        await h.admin.query("UPDATE public.babies SET plan = 'free' WHERE id = ANY($1::uuid[])", [
+          siblings,
+        ]);
+      }
     });
 
     it("restoring a photo whose bytes are live again is 409 conflict", async () => {

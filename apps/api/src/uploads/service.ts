@@ -20,11 +20,21 @@ import {
 } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { audit, requireConsent, type Tx, type TxContext, withClaims } from "../auth";
-import { ApiError, forbidden, freeTierLimit, isPgError, notFound } from "../lib/errors";
 import {
+  ApiError,
+  forbidden,
+  freeTierLimit,
+  isPgError,
+  notFound,
+  pendingLimit,
+} from "../lib/errors";
+import {
+  type BabyAccess,
   babyAccess,
-  countLivePhotos,
+  countMyPending,
+  countPoolPhotos,
   type PhotoSummaryRow,
+  pendingPhotoLimit,
   photoRowsByIds,
   toPhotoSummary,
 } from "../photos/queries";
@@ -283,6 +293,54 @@ export async function getSession(request: Req, sessionId: string): Promise<Uploa
   return toSessionView(request.server, snap);
 }
 
+// ---- room (step 11) -----------------------------------------------------------------------------
+
+interface UploadRoom {
+  /** Photos this caller may still add here (`Infinity` when nothing limits it). */
+  left: number;
+  /** `upload_files.error` of a file refused for lack of room. */
+  error: Extract<UploadFileError, "free_tier_limit" | "pending_limit">;
+  refuse: () => ApiError;
+}
+
+/**
+ * How many more photos the caller can upload into `babyId` (docs/plans/step-11.md 2.2 B–C, 2.5).
+ * An admin's uploads are approved at insert, so they draw from the family's free pool (Plus
+ * albums: no limit). A guest's uploads are pending and never count toward the pool; they are
+ * bounded by the guest's pending queue in this family (every plan, D-C). Friendly pre-check only:
+ * the triggers decide under their advisory locks.
+ */
+async function uploadRoom(client: Tx, babyId: string, access: BabyAccess): Promise<UploadRoom> {
+  if (access.role === "admin") {
+    if (access.plan !== "free") {
+      return { left: Number.POSITIVE_INFINITY, error: "free_tier_limit", refuse: freeTierLimit };
+    }
+    const used = await countPoolPhotos(client, babyId);
+    return { left: FREE_TIER_PHOTO_LIMIT - used, error: "free_tier_limit", refuse: freeTierLimit };
+  }
+  // One client, one query at a time (node-postgres deprecates concurrent queries on a client).
+  const pending = await countMyPending(client, babyId);
+  const limit = await pendingPhotoLimit(client);
+  return {
+    left: limit - pending,
+    error: "pending_limit",
+    refuse: () => pendingLimit({ pending, limit }),
+  };
+}
+
+/** 409 `pending_limit` with the caller's counts when they can be read, else without. */
+async function pendingLimitWithCounts(request: Req, babyId: string): Promise<ApiError> {
+  try {
+    return await withClaims(request, async (client) => {
+      const pending = await countMyPending(client, babyId);
+      const limit = await pendingPhotoLimit(client);
+      return pendingLimit({ pending, limit });
+    });
+  } catch {
+    return pendingLimit();
+  }
+}
+
 // ---- create -------------------------------------------------------------------------------------
 
 /** `POST /babies/:id/uploads`. */
@@ -302,14 +360,10 @@ export async function createSession(
     const access = await babyAccess(client, ctx.uid, babyId);
     if (!access) throw notFound("That album doesn't exist or you don't have access to it");
     if (access.deletedAt) throw babyTrashed();
-    // Friendly pre-check (exact for any member via `free_tier_photo_count`); the
-    // `photos_free_tier_cap` trigger is the hard stop.
-    if (
-      access.plan === "free" &&
-      (await countLivePhotos(client, babyId)) >= FREE_TIER_PHOTO_LIMIT
-    ) {
-      throw freeTierLimit();
-    }
+    // Friendly pre-check per role (step 11); the `photos_free_tier_cap` / `photos_pending_cap`
+    // triggers are the hard stops.
+    const room = await uploadRoom(client, babyId, access);
+    if (room.left <= 0) throw room.refuse();
     if (milestoneId) {
       const { rows } = await client.query(
         "SELECT 1 FROM public.milestones WHERE id = $1 AND (baby_id IS NULL OR baby_id = $2)",
@@ -391,12 +445,11 @@ export async function registerFiles(
       for (const r of rows) live.set(r.sha, r.id);
     }
 
-    let headroom = Number.POSITIVE_INFINITY;
-    if (access.plan === "free") {
-      const registered = existing.filter((f) => f.state === "registered").length;
-      headroom =
-        FREE_TIER_PHOTO_LIMIT - (await countLivePhotos(client, session.baby_id)) - registered;
-    }
+    // Files registered but not yet completed will each become one photo (approved for an
+    // admin, pending for a guest): they use up room too.
+    const room = await uploadRoom(client, session.baby_id, access);
+    const registered = existing.filter((f) => f.state === "registered").length;
+    let headroom = room.left - registered;
 
     const seen = new Set(
       existing.flatMap((f) =>
@@ -424,7 +477,7 @@ export async function registerFiles(
         if (of) return { kind: "duplicate", of };
         if (seen.has(sha)) return { kind: "duplicate", of: null };
       }
-      if (headroom <= 0) return { kind: "failed", error: "free_tier_limit" };
+      if (headroom <= 0) return { kind: "failed", error: room.error };
       headroom--;
       if (sha) seen.add(sha);
       return { kind: "new" };
@@ -732,6 +785,10 @@ export async function completeFile(
     if (isPgError(err) && err.code === "23514" && err.message.startsWith("free tier photo limit")) {
       await markFile(request, file, "failed", "free_tier_limit");
       throw freeTierLimit();
+    }
+    if (isPgError(err) && err.code === "23514" && err.message.startsWith("pending photo limit")) {
+      await markFile(request, file, "failed", "pending_limit");
+      throw await pendingLimitWithCounts(request, file.baby_id);
     }
     throw err;
   }

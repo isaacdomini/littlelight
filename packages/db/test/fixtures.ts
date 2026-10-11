@@ -136,8 +136,11 @@ export async function createFixtures(admin: pg.Client): Promise<void> {
       [BABY.recentTrash, "1 day"],
     ] as const) {
       await admin.query(
-        `INSERT INTO public.babies (id, name, birth_date, plan, deleted_at)
-         VALUES ($1, 'Trashed baby', '2025-06-30', 'plus', now() - interval '${ago}')`,
+        // Step 11: the trashed albums belong to family A (created_by is NULL, so without this each
+        // would get a family of its own and adminA1 could not be made their admin).
+        `INSERT INTO public.babies (id, name, birth_date, plan, deleted_at, family_id)
+         VALUES ($1, 'Trashed baby', '2025-06-30', 'plus', now() - interval '${ago}',
+                 (SELECT family_id FROM public.babies WHERE id = '${BABY.A}'))`,
         [b],
       );
     }

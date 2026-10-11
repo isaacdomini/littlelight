@@ -159,7 +159,8 @@ describe("syncStatusLine", () => {
   });
 
   it.each([
-    ["free_tier_limit", "Free album is full (1,000 photos)"],
+    ["free_tier_limit", "Your family's free albums are full (1,000 photos in total)"],
+    ["pending_limit", "Too many photos waiting for approval"],
     ["permission_denied", "Allow full photo access in Settings"],
     ["album_missing", "That album no longer exists"],
     ["network", "Couldn't reach Tinyglow. It will try again later."],

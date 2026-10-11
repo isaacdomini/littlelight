@@ -6,8 +6,10 @@ import type { WorkerLog } from "../log-types";
 // the requester. Same nodemailer transport rules as the api's (`apps/api/src/email/mailer.ts`):
 // Mailpit in dev, the api's SMTP account in production. The messages carry NO link, token or
 // signed URL and no album content beyond the baby's name: the download URL is minted in the app,
-// for the requester only, after a fresh sign-in. Logging rule: template name and SMTP message id
-// only, never the recipient, subject or body.
+// for the requester only, after a fresh sign-in. The one remote resource is the brand logo,
+// served by web at `${PUBLIC_URL}/email/logo.png` (no tracking: a static file, no per-message
+// parameters); without `PUBLIC_URL` the HTML has no image at all. Logging rule: template name and
+// SMTP message id only, never the recipient, subject or body.
 
 export interface ExportReadyMail {
   babyName: string;
@@ -86,13 +88,41 @@ export function formatExpiry(d: Date): string {
 
 const WHERE = "Open Tinyglow, then Settings, then Export album data";
 
-function html(paragraphs: string[]): string {
-  const body = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("\n");
-  return `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;line-height:1.5;color:#1f2933">\n${body}\n</body></html>`;
+/** Path of the email logo under `PUBLIC_URL` (apps/mobile-web/public/email/logo.png, 480x108). */
+export const EMAIL_LOGO_PATH = "/email/logo.png";
+
+export interface MailBranding {
+  /** `PUBLIC_URL` (browser origin, no trailing slash). Unset ⇒ no logo. */
+  publicUrl?: string;
 }
 
-/** The "ready" notice. Pure; exported for tests (no URL, no token). */
-export function exportReadyContent(mail: ExportReadyMail): MailContent {
+/** `${publicUrl}/email/logo.png`, or null when there is no usable http(s) `publicUrl`. */
+export function logoUrl(publicUrl: string | undefined): string | null {
+  if (!publicUrl) return null;
+  let u: URL;
+  try {
+    u = new URL(publicUrl);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  return `${publicUrl.replace(/\/+$/, "")}${EMAIL_LOGO_PATH}`;
+}
+
+function html(paragraphs: string[], branding: MailBranding): string {
+  const logo = logoUrl(branding.publicUrl);
+  const header = logo
+    ? `<p><img src="${escapeHtml(logo)}" alt="Tinyglow" width="240" height="54" style="display:block;border:0;outline:none;text-decoration:none;font-size:20px;font-weight:600;color:#1f2933"></p>\n`
+    : "";
+  const body = paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("\n");
+  return `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;line-height:1.5;color:#1f2933">\n${header}${body}\n</body></html>`;
+}
+
+/** The "ready" notice. Pure; exported for tests (no link, no token; the logo only with `publicUrl`). */
+export function exportReadyContent(
+  mail: ExportReadyMail,
+  branding: MailBranding = {},
+): MailContent {
   const name = plainName(mail.babyName);
   const paragraphs = [
     `Your Tinyglow export of ${name} is ready.`,
@@ -103,12 +133,15 @@ export function exportReadyContent(mail: ExportReadyMail): MailContent {
   return {
     subject: `Your Tinyglow export of ${name} is ready`,
     text: `${paragraphs.join("\n\n")}\n`,
-    html: html(paragraphs),
+    html: html(paragraphs, branding),
   };
 }
 
-/** The "failed" notice. Pure; exported for tests (no URL, no token, no internal detail). */
-export function exportFailedContent(mail: ExportFailedMail): MailContent {
+/** The "failed" notice. Pure; exported for tests (no link, no token, no internal detail). */
+export function exportFailedContent(
+  mail: ExportFailedMail,
+  branding: MailBranding = {},
+): MailContent {
   const name = plainName(mail.babyName);
   const why =
     mail.error === "too_large"
@@ -122,7 +155,7 @@ export function exportFailedContent(mail: ExportFailedMail): MailContent {
   return {
     subject: `Your Tinyglow export of ${name} could not be completed`,
     text: `${paragraphs.join("\n\n")}\n`,
-    html: html(paragraphs),
+    html: html(paragraphs, branding),
   };
 }
 
@@ -133,7 +166,11 @@ export type WorkerSmtpConfig = MailEnv;
  * credentials never cross the wire in clear text; without credentials (Mailpit) it is
  * opportunistic. Never logs the recipient.
  */
-export function createExportMailer(config: WorkerSmtpConfig, log: WorkerLog): ExportMailer {
+export function createExportMailer(
+  config: WorkerSmtpConfig,
+  log: WorkerLog,
+  branding: MailBranding = {},
+): ExportMailer {
   const hasAuth = config.SMTP_USER !== undefined;
   const transport = createTransport({
     host: config.SMTP_HOST,
@@ -166,8 +203,8 @@ export function createExportMailer(config: WorkerSmtpConfig, log: WorkerLog): Ex
   }
 
   return {
-    sendExportReady: (to, mail) => send(to, "export_ready", exportReadyContent(mail)),
-    sendExportFailed: (to, mail) => send(to, "export_failed", exportFailedContent(mail)),
+    sendExportReady: (to, mail) => send(to, "export_ready", exportReadyContent(mail, branding)),
+    sendExportFailed: (to, mail) => send(to, "export_failed", exportFailedContent(mail, branding)),
     close: () => transport.close(),
   };
 }

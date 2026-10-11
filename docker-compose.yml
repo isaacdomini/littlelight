@@ -52,8 +52,10 @@
 # (docs/plans/step-10.md 2.10): GOOGLE_IMPORT_PROVIDER (default none) and the Google OAuth client
 # (GOOGLE_IMPORT_CLIENT_ID / GOOGLE_IMPORT_CLIENT_SECRET) go to api and worker only (x-app-env);
 # there is no fake Google service in production (`fake` is refused with NODE_ENV=production).
-# A new app
-# variable must be added to .env.example AND to the x-app-env anchor (or the service's own
+# Family-start safeguards (docs/plans/step-11.md 2.10): FAMILIES_PER_IP_PER_DAY,
+# BLOCK_DISPOSABLE_EMAIL and EMAIL_DOMAIN_DENYLIST / _ALLOWLIST go to the api only (operator
+# tools in migrate need none; the pending-photo cap is a database setting, docs/PRODUCTION.md
+# Part J). A new app variable must be added to .env.example AND to the x-app-env anchor (or the service's own
 # block) below.
 #
 # Auth topology (docs/plans/step-3.md 2.1): browsers reach GoTrue only at /auth/health,
@@ -408,6 +410,14 @@ services:
       # while the secret is empty.
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      # Family-start safeguards (docs/plans/step-11.md 2.4, 2.10), api only, checked when an
+      # account creates its first album: new families per client IP per rolling 24 h (guests
+      # never count), the vendored disposable-domain block and the operator's deny/allow lists.
+      # Empty = the api's default (5, true, none, none).
+      FAMILIES_PER_IP_PER_DAY: ${FAMILIES_PER_IP_PER_DAY:-}
+      BLOCK_DISPOSABLE_EMAIL: ${BLOCK_DISPOSABLE_EMAIL:-}
+      EMAIL_DOMAIN_DENYLIST: ${EMAIL_DOMAIN_DENYLIST:-}
+      EMAIL_DOMAIN_ALLOWLIST: ${EMAIL_DOMAIN_ALLOWLIST:-}
       # App emails (invites, new-device alerts) over the same SMTP account as GoTrue. The worker
       # gets the same block (export emails).
       SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST in .env}

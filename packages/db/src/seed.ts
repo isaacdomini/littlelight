@@ -198,6 +198,7 @@ const PHOTOS: readonly DemoPhoto[] = [
 
 const COUNT_TABLES = [
   "profiles",
+  "families",
   "babies",
   "baby_members",
   "photos",
@@ -380,7 +381,8 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
       );
     }
 
-    // --- Baby (creator trigger adds mom as admin on first insert) -------------------------------
+    // --- Baby (creator trigger adds mom as admin on first insert; babies_set_family puts Maya in
+    // mom's family, a new one on the first run; a re-run keeps the existing family) ------------
     await q(
       `INSERT INTO public.babies (id, name, nickname, birth_date, birth_weight_g, birth_length_mm,
          home_lat_enc, home_lng_enc, home_label, plan, plan_owner_user_id, created_by)

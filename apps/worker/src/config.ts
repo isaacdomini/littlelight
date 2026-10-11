@@ -43,11 +43,20 @@ import { z } from "zod";
 // `GOOGLE_IMPORT_PROVIDER` (none|fake|live; `fake` fails boot in production, `live` needs the
 // client id + secret), the fake's internal URL, the download host allow-list
 // (`GOOGLE_IMPORT_MEDIA_HOSTS`) and `IMPORT_CONCURRENCY` (downloads in flight per batch). The
-// client secret is a secret: never logged.
+// client secret is a secret: never logged. The brand pass adds an optional `PUBLIC_URL` (the
+// browser origin, same rules as the api's) for the logo in the export notices
+// (`${PUBLIC_URL}/email/logo.png`); unset ⇒ the notices go out without the logo.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
   HEARTBEAT_STALE_MS: z.coerce.number().int().min(1_000).default(30_000),
+});
+
+export const workerPublicUrlEnvSchema = z.object({
+  PUBLIC_URL: z
+    .url({ protocol: /^https?$/ })
+    .transform((u) => u.replace(/\/+$/, ""))
+    .optional(),
 });
 
 export const workerShareEnvSchema = shareEnvSchema.pick({ SHARE_RECONCILE_CRON: true });
@@ -65,6 +74,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof exportEnvSchema> &
   z.output<typeof googleImportEnvSchema> &
   z.output<typeof sentryEnvSchema> &
+  z.output<typeof workerPublicUrlEnvSchema> &
   Partial<MailEnv> &
   z.output<typeof logEnvSchema>;
 
@@ -160,6 +170,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     exportEnvSchema,
     googleImportEnvSchema,
     sentryEnvSchema,
+    workerPublicUrlEnvSchema,
     ...(mailRequired(env) ? [mailEnvSchema] : []),
     embedDimsGuardSchema,
     logEnvSchema,

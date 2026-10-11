@@ -21,6 +21,11 @@ import type { ObjectStorage } from "./storage";
 //      (`export_requester_is_admin()` false), or the album is in the trash. A purged baby's ZIPs
 //      go with its prefix (step 1) and its rows by cascade.
 //   7. Rows purged more than 30 days ago are deleted.
+//
+// Step 11 (migration 21, FR-10.3 retention):
+//   8. `family_starts` rows older than 30 days are deleted through `family_starts_prune()`
+//      (SECURITY DEFINER; pipeline has EXECUTE but no grant on the table). Only the count is
+//      logged. A failure counts an error and never stops the rest of the sweep.
 
 export const PURGE_BATCH = 100;
 const MAX_BATCHES = 50;
@@ -132,6 +137,8 @@ DELETE FROM data_exports WHERE purged_at < now() - interval '30 days'`;
 export const AUDIT_EXPORT_SQL = `
 INSERT INTO audit_log (baby_id, event, metadata) VALUES ($1, $2, $3::jsonb)`;
 
+export const FAMILY_STARTS_PRUNE_SQL = `SELECT public.family_starts_prune() AS n`;
+
 export interface PurgeDeps {
   pool: PipelinePool;
   storage: ObjectStorage;
@@ -151,6 +158,8 @@ export interface PurgeResult {
   exportsPurged: number;
   /** Export rows purged > 30 days ago, deleted (step 7). */
   exportRowsDeleted: number;
+  /** `family_starts` rows older than 30 days, deleted (step 8). */
+  familyStartsPruned: number;
   versionsDeleted: number;
   errors: number;
 }
@@ -195,6 +204,7 @@ export async function purgeTrash(deps: PurgeDeps): Promise<PurgeResult> {
     exportsStale: 0,
     exportsPurged: 0,
     exportRowsDeleted: 0,
+    familyStartsPruned: 0,
     versionsDeleted: 0,
     errors: 0,
   };
@@ -337,6 +347,17 @@ export async function purgeTrash(deps: PurgeDeps): Promise<PurgeResult> {
   result.exportRowsDeleted = await runAsPipeline(pool, {}, async (c) => {
     return (await c.query(DELETE_OLD_EXPORTS_SQL)).rowCount ?? 0;
   });
+
+  // 8. Family-start ledger retention (30 days). The function returns a count; nothing else is
+  // read.
+  try {
+    result.familyStartsPruned = await runAsPipeline(pool, {}, async (c) => {
+      return Number((await c.query<{ n: number | null }>(FAMILY_STARTS_PRUNE_SQL)).rows[0]?.n ?? 0);
+    });
+  } catch (err) {
+    result.errors++;
+    log.warn({ err: errorCategory(err) }, "purge: family-start ledger prune deferred");
+  }
 
   log.info({ ...result }, "purge: done");
   return result;

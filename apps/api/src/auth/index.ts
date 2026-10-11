@@ -84,7 +84,7 @@ export interface RegisterAuthDeps {
  */
 export function registerAuth(app: FastifyInstance, deps: RegisterAuthDeps): void {
   registerAuthHook(app, deps.config);
-  const runtime = createAuthRuntime(deps);
+  const runtime = createAuthRuntime({ ...deps, log: app.log });
   app.decorate("authRuntime", runtime);
   app.addHook("onClose", async () => {
     runtime.close();

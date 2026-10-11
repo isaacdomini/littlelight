@@ -456,6 +456,33 @@ describe.skipIf(!integrationEnv)(
       expect(ingests.every((j) => Object.keys(j).sort().join() === "babyId,photoId")).toBe(true);
     });
 
+    it("pending cap: a guest at the queue limit stops the batch; the rest fail pending_limit and nothing is downloaded after", async () => {
+      const s = await setup({ role: "contributor", pick: ["G-1", "G-2", "G-3", "G-4"] });
+      await h.admin.query(
+        `INSERT INTO public.photos (baby_id, uploaded_by, storage_key_original, bytes, approval, status)
+       SELECT $1::uuid, $2::uuid, 'babies/' || $1::text || '/originals/' || gen_random_uuid()::text, 10, 'pending', 'ready'
+         FROM generate_series(1, 199)`,
+        [s.baby.id, s.requester],
+      );
+      const r = await run(s, { concurrency: 1 });
+      expect(r.outcome).toBe("done");
+      const rows = await items(s.batchId);
+      expect(rows.filter((x) => x.status === "booked")).toHaveLength(1); // the 200th
+      expect(rows.filter((x) => x.status === "failed" && x.error === "pending_limit").length).toBe(
+        3,
+      );
+      expect(
+        (
+          await h.admin.query(
+            "SELECT count(*)::int AS n FROM public.photos WHERE baby_id = $1 AND uploaded_by = $2 AND approval = 'pending'",
+            [s.baby.id, s.requester],
+          )
+        ).rows[0]?.n,
+      ).toBe(200);
+      expect(await objectCount(s.baby.id)).toBe(1);
+      expect(ingests).toHaveLength(1);
+    });
+
     it("a requester who left the album: the batch fails requester_not_member and books nothing", async () => {
       const s = await setup({ role: "contributor", pick: ["G-1", "G-2"] });
       await h.admin.query("DELETE FROM public.baby_members WHERE baby_id = $1 AND user_id = $2", [

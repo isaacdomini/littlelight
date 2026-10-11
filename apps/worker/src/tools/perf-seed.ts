@@ -26,6 +26,7 @@ import {
   PERF_BABY_NICKNAME,
   PERF_BIRTH_DATE,
   PERF_CUSTOM_MILESTONES,
+  PERF_OWNER,
   PERF_TZ_OFFSET_MINUTES,
   type PerfPhoto,
   perfDetails,
@@ -41,8 +42,17 @@ import {
 } from "./perf-images";
 
 // Dev-only performance seed (docs/plans/step-5.md 2.8, D6): a free-tier baby "Pixel" with 10,000
-// ingested photos whose admins are the demo mom and dad, real thumb/display derivatives in MinIO,
-// milestones, details and measurements.
+// ingested photos, real thumb/display derivatives in MinIO, milestones, details and measurements.
+//
+// Family (step 11, migration 21's family model, docs/plans/step-11.md 2.6, D-G): Pixel is its own
+// perf family, free, far over the cap; the owner never signs in; mom/dad are guests. The perf
+// owner (`PERF_OWNER`, a GoTrue user with no password) creates it and is its only parent (an
+// account is a parent in one family only, and demo-mom and demo-dad are parents of the demo
+// family); demo-mom and demo-dad are contributors, so the perf check signing in as mom still sees
+// the timeline and album. `family_id` is passed explicitly and pinned on every run (a dev DB
+// backfilled by migration 21 has Pixel merged into the demo family through demo-mom's old admin
+// row: a re-run re-homes it). `--remove` deletes the baby (`babies_release_family` drops its
+// family), then the perf owner.
 //
 //   pnpm perf:seed              # seed (idempotent: a re-run copies nothing and prints the same counts)
 //   pnpm perf:seed --force      # re-copy every per-photo object (old versions are deleted first)
@@ -60,8 +70,9 @@ import {
 // server-side `CopyObject`s of its month's base (no bytes over the wire). No `analysis`
 // derivative, no original object, no GPS, no `encrypt_coord`. The baby is `plus` only while the
 // photo rows are inserted (the free-tier cap trigger) and ends `free` with no plan owner in the
-// same transaction, so nothing of it can ever be sent to a model. Output is counts and timings
-// only: never notes, people, keys with signatures or credentials.
+// same transaction, so nothing of it can ever be sent to a model. (Free, it is far over the
+// 1,000-photo cap: the perf owner can never add to it, which the perf gate does not need.)
+// Output is counts and timings only: never notes, people, keys with signatures or credentials.
 
 const { Client } = pg;
 
@@ -273,9 +284,18 @@ async function connect(target: PerfSeedTarget): Promise<pg.Client> {
 // --- preflight ----------------------------------------------------------------------------------
 
 async function preflight(db: pg.Client, s3: S3Client, bucket: string): Promise<void> {
-  const { rows } = await db.query<{ superuser: string; step5: boolean; demo_users: number }>(
+  const { rows } = await db.query<{
+    superuser: string;
+    step5: boolean;
+    step11: boolean;
+    demo_users: number;
+  }>(
     `SELECT current_setting('is_superuser') AS superuser,
             to_regprocedure('public.age_group(integer)') IS NOT NULL AS step5,
+            (to_regclass('public.families') IS NOT NULL
+              AND EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'public' AND table_name = 'babies'
+                             AND column_name = 'family_id')) AS step11,
             (SELECT count(*)::int FROM public.profiles WHERE user_id = ANY($1::uuid[]) AND deleted_at IS NULL) AS demo_users`,
     [[DEMO_IDS.users.mom, DEMO_IDS.users.dad]],
   );
@@ -284,6 +304,10 @@ async function preflight(db: pg.Client, s3: S3Client, bucket: string): Promise<v
     throw new PerfSeedError("the database user must be a superuser (postgres)");
   if (!r.step5)
     throw new PerfSeedError("schema is behind: run pnpm db:migrate (step-5 migration missing)");
+  if (!r.step11)
+    throw new PerfSeedError(
+      "schema is behind: run pnpm db:migrate (step-11 families migration missing)",
+    );
   if (r.demo_users !== 2) {
     throw new PerfSeedError(
       "demo mom/dad not found: run the demo seed first (SEED_DEMO_FAMILY=true pnpm db:seed, or start the dev stack)",
@@ -300,20 +324,62 @@ async function preflight(db: pg.Client, s3: S3Client, bucket: string): Promise<v
 
 // --- rows -------------------------------------------------------------------------------------
 
+// The perf owner: a GoTrue user (same column list as the demo seed, packages/db/src/seed.ts) with
+// no password, plus its identity and a consented profile. Never signs in.
+const UPSERT_OWNER_USER_SQL = `
+INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+  confirmation_token, recovery_token, email_change, email_change_token_new, email_change_token_current,
+  phone_change, phone_change_token, reauthentication_token, raw_app_meta_data, raw_user_meta_data,
+  is_sso_user, is_anonymous, created_at, updated_at)
+VALUES ('00000000-0000-0000-0000-000000000000', $1, 'authenticated', 'authenticated', $2, NULL, now(),
+  '', '', '', '', '', '', '', '', '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb,
+  false, false, now(), now())
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, updated_at = now()`;
+
+const UPSERT_OWNER_IDENTITY_SQL = `
+INSERT INTO auth.identities (id, user_id, provider, provider_id, identity_data, last_sign_in_at, created_at, updated_at)
+VALUES ($1, $2::uuid, 'email', $2::uuid::text,
+  jsonb_build_object('sub', $2::uuid::text, 'email', $3::text, 'email_verified', true), NULL, now(), now())
+ON CONFLICT (id) DO UPDATE SET identity_data = EXCLUDED.identity_data, updated_at = now()`;
+
+const UPSERT_OWNER_PROFILE_SQL = `
+INSERT INTO public.profiles (user_id, display_name, relationship_label, timezone, units, terms_version, privacy_version, accepted_at, accepted_ip_country)
+VALUES ($1, $2, NULL, 'America/Los_Angeles', 'metric', '2026-01', '2026-01', now(), NULL)
+ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name, deleted_at = NULL,
+  suspended_at = NULL, suspended_reason = NULL`;
+
+// The perf family: Pixel's current family when no other baby shares it, else the perf owner's
+// family under the same condition, else NULL (the caller inserts a new one). A dev DB backfilled
+// by migration 21 holds Pixel in the demo family (shared admin demo-mom): never reuse that one.
+const PERF_FAMILY_SQL = `
+SELECT f.id
+  FROM (SELECT b.family_id AS id, 1 AS rank FROM public.babies b WHERE b.id = $1
+        UNION ALL
+        SELECT public.parent_family_of($2::uuid), 2) AS f
+ WHERE f.id IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM public.babies o WHERE o.family_id = f.id AND o.id <> $1)
+ ORDER BY f.rank
+ LIMIT 1`;
+
+const INSERT_FAMILY_SQL = `INSERT INTO public.families (created_by) VALUES ($1) RETURNING id`;
+
+// created_by is the perf owner and family_id the perf family, on insert (an explicit family_id
+// bypasses the creator lookup of babies_set_family) AND on a re-run over an older Pixel.
 const UPSERT_BABY_SQL = `
 INSERT INTO public.babies (id, name, nickname, birth_date, birth_weight_g, birth_length_mm,
-  home_lat_enc, home_lng_enc, home_label, plan, plan_owner_user_id, entitlement_expires_at, created_by, deleted_at)
-VALUES ($1, $2, $3, $4::date, 3300, 500, NULL, NULL, NULL, 'plus', NULL, NULL, $5, NULL)
+  home_lat_enc, home_lng_enc, home_label, plan, plan_owner_user_id, entitlement_expires_at, created_by,
+  family_id, deleted_at)
+VALUES ($1, $2, $3, $4::date, 3300, 500, NULL, NULL, NULL, 'plus', NULL, NULL, $5, $6, NULL)
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, nickname = EXCLUDED.nickname,
   birth_date = EXCLUDED.birth_date, birth_weight_g = EXCLUDED.birth_weight_g,
   birth_length_mm = EXCLUDED.birth_length_mm, home_lat_enc = NULL, home_lng_enc = NULL,
   home_label = NULL, plan = 'plus', plan_owner_user_id = NULL, entitlement_expires_at = NULL,
-  deleted_at = NULL`;
+  created_by = EXCLUDED.created_by, family_id = EXCLUDED.family_id, deleted_at = NULL`;
 
 const UPSERT_MEMBER_SQL = `
 INSERT INTO public.baby_members (baby_id, user_id, role, invited_by)
-VALUES ($1, $2, 'admin', $3)
-ON CONFLICT (baby_id, user_id) DO UPDATE SET role = 'admin'`;
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (baby_id, user_id) DO UPDATE SET role = EXCLUDED.role`;
 
 const UPSERT_MILESTONE_SQL = `
 INSERT INTO public.milestones (id, baby_id, name, category, sort_order, created_by)
@@ -411,6 +477,7 @@ async function writeRows(
   bases: ReadonlyMap<string, PerfBaseImage>,
 ): Promise<void> {
   const baby = PERF_IDS.baby;
+  const owner = PERF_OWNER.userId;
   const mom = DEMO_IDS.users.mom;
   const dad = DEMO_IDS.users.dad;
   await db.query("BEGIN");
@@ -423,18 +490,49 @@ async function writeRows(
     if (clash.rowCount)
       throw new PerfSeedError("a perf photo id belongs to another baby; refusing");
 
+    // The perf owner account (creator and only parent of Pixel).
+    await db.query(UPSERT_OWNER_USER_SQL, [owner, PERF_OWNER.email]);
+    await db.query(UPSERT_OWNER_IDENTITY_SQL, [PERF_OWNER.identityId, owner, PERF_OWNER.email]);
+    await db.query(UPSERT_OWNER_PROFILE_SQL, [owner, PERF_OWNER.displayName]);
+
+    // The perf family, reused when it is Pixel's alone, else a new one founded by the owner.
+    const reuse = await db.query<{ id: string }>(PERF_FAMILY_SQL, [baby, owner]);
+    const family =
+      reuse.rows[0]?.id ?? (await db.query<{ id: string }>(INSERT_FAMILY_SQL, [owner])).rows[0]?.id;
+    if (!family) throw new PerfSeedError("could not create the perf family");
+
+    // Members: the owner the only admin, mom and dad guests. Order matters over an older Pixel
+    // (admins mom + dad from step 5, or owner + mom): baby_members_max_two_admins and
+    // baby_members_keep_last_admin need dad to step down first, then the owner to be an admin,
+    // then mom to step down. baby_members_one_family only checks rows becoming admin (the
+    // owner's, whose only album is Pixel), so this order never trips it.
+    const setMembers = async (): Promise<void> => {
+      await db.query(UPSERT_MEMBER_SQL, [baby, dad, "contributor", owner]);
+      await db.query(UPSERT_MEMBER_SQL, [baby, owner, "admin", null]);
+      await db.query(UPSERT_MEMBER_SQL, [baby, mom, "contributor", owner]);
+    };
+    // An existing Pixel is re-homed by the upsert below (family_id = the perf family), and
+    // babies_family_guard refuses that move while any admin of Pixel is a parent elsewhere
+    // (demo-mom and demo-dad are parents of the demo family): demote them first. A new Pixel
+    // needs its row before any member row (babies_add_creator_admin adds the owner as admin).
+    const existing = await db.query("SELECT 1 FROM public.babies WHERE id = $1 FOR UPDATE", [baby]);
+    const babyExists = (existing.rowCount ?? 0) > 0;
+    if (babyExists) await setMembers();
+
     // `plus` only while the photos go in (photos_free_tier_cap); flipped back to free below.
+    // babies_release_family drops Pixel's previous family if the move leaves it empty (it never
+    // does: PERF_FAMILY_SQL reuses a family that holds Pixel alone).
     await db.query(UPSERT_BABY_SQL, [
       baby,
       PERF_BABY_NAME,
       PERF_BABY_NICKNAME,
       PERF_BIRTH_DATE,
-      mom,
+      owner,
+      family,
     ]);
-    await db.query(UPSERT_MEMBER_SQL, [baby, mom, null]);
-    await db.query(UPSERT_MEMBER_SQL, [baby, dad, mom]);
+    if (!babyExists) await setMembers();
     for (const m of PERF_CUSTOM_MILESTONES) {
-      await db.query(UPSERT_MILESTONE_SQL, [m.id, baby, m.name, m.category, m.sortOrder, mom]);
+      await db.query(UPSERT_MILESTONE_SQL, [m.id, baby, m.name, m.category, m.sortOrder, owner]);
     }
 
     for (const batch of chunks(photos, BATCH)) {
@@ -689,7 +787,14 @@ export async function runPerfSeed(
 export async function removePerfSeed(
   target: PerfSeedTarget,
   opts: { log?: Log } = {},
-): Promise<{ versionsDeleted: number; versionsLeft: number; photosLeft: number }> {
+): Promise<{
+  versionsDeleted: number;
+  versionsLeft: number;
+  photosLeft: number;
+  ownerLeft: number;
+  /** 1 when Pixel's family row outlived it with no album left (the release trigger is missing). */
+  familyLeft: number;
+}> {
   const log = opts.log ?? ((line: string) => console.log(line));
   const t0 = performance.now();
   const s3 = createS3(target);
@@ -700,6 +805,7 @@ export async function removePerfSeed(
     log(`perf:seed --remove: deleted ${versionsDeleted} object versions in ${ms(t0)}`);
 
     const t = performance.now();
+    let family: string | null = null;
     await db.query("BEGIN");
     try {
       // Trash first so baby_members_keep_last_admin lets the cascade remove the admins.
@@ -707,19 +813,56 @@ export async function removePerfSeed(
         "UPDATE public.babies SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
         [PERF_IDS.baby],
       );
+      const fam = await db.query<{ family_id: string }>(
+        "SELECT family_id FROM public.babies WHERE id = $1",
+        [PERF_IDS.baby],
+      );
+      family = fam.rows[0]?.family_id ?? null;
+      // babies_release_family drops the perf family with its last album.
       const del = await db.query("DELETE FROM public.babies WHERE id = $1", [PERF_IDS.baby]);
+      // Then the perf owner (auth.users cascades to its identity and profile). Fixed id AND the
+      // fixed email, so a real account can never match.
+      const owner = await db.query("DELETE FROM auth.users WHERE id = $1 AND email = $2", [
+        PERF_OWNER.userId,
+        PERF_OWNER.email,
+      ]);
       await db.query("COMMIT");
-      log(`perf:seed --remove: deleted ${del.rowCount ?? 0} baby row (cascade) in ${ms(t)}`);
+      log(
+        `perf:seed --remove: deleted ${del.rowCount ?? 0} baby row (cascade) and ${owner.rowCount ?? 0} perf owner user in ${ms(t)}`,
+      );
     } catch (err) {
       await db.query("ROLLBACK").catch(() => undefined);
       throw err;
     }
     const left = await countRows(db, PERF_IDS.baby);
+    const ownerLeft =
+      (
+        await db.query<{ n: number }>(
+          `SELECT ((SELECT count(*) FROM auth.users WHERE id = $1)
+                 + (SELECT count(*) FROM public.profiles WHERE user_id = $1))::int AS n`,
+          [PERF_OWNER.userId],
+        )
+      ).rows[0]?.n ?? 0;
+    const familyLeft = family
+      ? ((
+          await db.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM public.families f
+              WHERE f.id = $1 AND NOT EXISTS (SELECT 1 FROM public.babies b WHERE b.family_id = f.id)`,
+            [family],
+          )
+        ).rows[0]?.n ?? 0)
+      : 0;
     const versions = await countVersions(s3, target.s3Bucket, prefix);
     log(
-      `perf:seed --remove: photos=${left.photos} measurements=${left.measurements} milestones(custom)=${left.custom_milestones} object_versions=${versions.versions} in ${ms(t0)}`,
+      `perf:seed --remove: photos=${left.photos} measurements=${left.measurements} milestones(custom)=${left.custom_milestones} perf_owner_rows=${ownerLeft} perf_family_rows=${familyLeft} object_versions=${versions.versions} in ${ms(t0)}`,
     );
-    return { versionsDeleted, versionsLeft: versions.versions, photosLeft: left.photos };
+    return {
+      versionsDeleted,
+      versionsLeft: versions.versions,
+      photosLeft: left.photos,
+      ownerLeft,
+      familyLeft,
+    };
   } finally {
     await db.end().catch(() => undefined);
     s3.destroy();
@@ -767,7 +910,9 @@ export async function main(argv: string[], env: Env = process.env): Promise<numb
   try {
     if (args.has("--remove")) {
       const r = await removePerfSeed(target, { log });
-      return r.versionsLeft === 0 && r.photosLeft === 0 ? 0 : 1;
+      return r.versionsLeft === 0 && r.photosLeft === 0 && r.ownerLeft === 0 && r.familyLeft === 0
+        ? 0
+        : 1;
     }
     await runPerfSeed(target, { force: args.has("--force"), log });
     await reportVersions(target, log);

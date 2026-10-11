@@ -120,6 +120,108 @@ export function maskEmail(email: string): string {
   return `${local[0]}***@${domain}`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Family-start safeguards (docs/plans/step-11.md 2.2 A/D/E, 2.3, 2.4, D-B, D-J). Sign-in is never
+// refused (only suspension); an account's first album runs the checks. Two accounts may share an
+// inbox, but only one of them may be a parent: starting a family compares `canonicalEmail`,
+// mirrored step by step by the SQL `public.email_canonical()` (the parity test runs both over
+// `CANONICAL_EMAIL_FIXTURES`).
+// ---------------------------------------------------------------------------------------------
+
+/** Default of `FAMILIES_PER_IP_PER_DAY`: new families per client IP per rolling 24 h (guests never count). */
+export const FAMILIES_PER_IP_PER_DAY_DEFAULT = 5;
+/** `family_starts` rows older than this are pruned (`family_starts_prune()`, FR-10.3). */
+export const FAMILY_START_RETENTION_DAYS = 30;
+/** Support contact named in the `account_suspended` message (docs/plans/step-11.md 2.9). */
+export const SUPPORT_EMAIL = "support@tinyglow.app";
+/**
+ * Email domains the disposable-domain check never blocks, whatever the vendored list or
+ * `EMAIL_DOMAIN_DENYLIST` say (exact domain match): Apple Hide My Email relay addresses are
+ * real accounts (PRD), and our own / dev / e2e domains keep the seed and the tests working.
+ */
+export const NEVER_BLOCKED_EMAIL_DOMAINS = [
+  "privaterelay.appleid.com",
+  "tinyglow.app",
+  "tinyglow.local",
+  "example.com",
+] as const;
+
+/** Why an operator suspended an account (`profiles.suspended_reason`, `admin:suspend --reason`). */
+export const SUSPENSION_REASONS = ["abuse", "other"] as const;
+export const suspensionReasonSchema = z.enum(SUSPENSION_REASONS);
+export type SuspensionReason = z.infer<typeof suspensionReasonSchema>;
+
+/** Gmail's two domain spellings; the canonical one is `gmail.com`. */
+const GMAIL_DOMAIN = "gmail.com";
+const GOOGLEMAIL_DOMAIN = "googlemail.com";
+
+/** How an address was canonicalised (the `family_starts` flags). */
+export interface EmailShape {
+  /** The local part had a `+tag` that was stripped. */
+  readonly plusTag: boolean;
+  /** Gmail dots were removed from the local part. */
+  readonly dotsFolded: boolean;
+  /** Canonical domain (lowercase, trailing dots removed, `googlemail.com` → `gmail.com`); `""` without an `@`. */
+  readonly domain: string;
+}
+
+function canonicalParts(s: string): { canonical: string; shape: EmailShape } {
+  // Same order as the SQL: NFC, trim, lowercase.
+  const e = normalizeEmail(s);
+  const at = e.lastIndexOf("@");
+  if (at < 0) return { canonical: e, shape: { plusTag: false, dotsFolded: false, domain: "" } };
+  const original = e.slice(0, at);
+  let domain = e.slice(at + 1).replace(/\.+$/, "");
+  if (domain === GOOGLEMAIL_DOMAIN) domain = GMAIL_DOMAIN;
+  const plus = original.indexOf("+");
+  // `split_part(local, '+', 1)`; an empty result keeps the original local part.
+  let local = plus > 0 ? original.slice(0, plus) : original;
+  const plusTag = local !== original;
+  let dotsFolded = false;
+  if (domain === GMAIL_DOMAIN && local.includes(".")) {
+    local = local.replaceAll(".", "");
+    dotsFolded = true;
+  }
+  return { canonical: `${local}@${domain}`, shape: { plusTag, dotsFolded, domain } };
+}
+
+/**
+ * Canonical form of an email for "one inbox = one family" (D-B). Mirrors SQL
+ * `public.email_canonical()` exactly:
+ * 1. NFC, trim, lowercase (`normalizeEmail`); no `@` ⇒ that string;
+ * 2. split at the **last** `@`; trailing dots removed from the domain;
+ * 3. `googlemail.com` → `gmail.com`;
+ * 4. `+tag` stripped for every domain, unless that empties the local part;
+ * 5. dots removed from the local part for `gmail.com` only.
+ * Never stored as the user's address: `auth.users.email` stays as typed (Apple relay addresses
+ * as-is); this value only feeds `profiles.email_canonical` and comparisons.
+ */
+export function canonicalEmail(s: string): string {
+  return canonicalParts(s).canonical;
+}
+
+/** The `family_starts` flags of an address: whether canonicalisation stripped a `+tag` or folded Gmail dots. */
+export function emailShape(s: string): EmailShape {
+  return canonicalParts(s).shape;
+}
+
+/**
+ * Parity fixtures `[input, canonical]` shared by the TS unit test and the SQL
+ * `email_canonical()` integration test (docs/plans/step-11.md 2.3). Add cases here, never in
+ * one test only.
+ */
+export const CANONICAL_EMAIL_FIXTURES: ReadonlyArray<readonly [input: string, canonical: string]> =
+  Object.freeze([
+    ["Maria.Rossi+baby@Gmail.com", "mariarossi@gmail.com"],
+    ["m.rossi@googlemail.com", "mrossi@gmail.com"],
+    ["dad+twins@outlook.com", "dad@outlook.com"],
+    ["dad@example.com ", "dad@example.com"],
+    ["+tag@gmail.com", "+tag@gmail.com"],
+    ["a.b@fastmail.com", "a.b@fastmail.com"],
+    ["user@sub.example.co.uk.", "user@sub.example.co.uk"],
+    ["ÄBC@Example.com", "äbc@example.com"],
+  ] as const);
+
 /** The native apps' User-Agent product token, `Tinyglow/<version>` (`appendUserAgent`). */
 const APP_UA_RE = new RegExp(`(^|[\\s;(])${APP_UA_TOKEN}/[0-9A-Za-z.+-]+`);
 const APP_LABEL = "Tinyglow app";
@@ -167,7 +269,8 @@ export function userAgentLabel(ua: string | null | undefined): string {
  * `audit_log.event` values: step 3 (auth, invites, members, babies, account), step 4 (uploads,
  * photo moderation, purge, safety), step 5 (details, milestones, measurements), step 6 (AI
  * overrides, AI retry, plan changes, AI budget), step 7 (chat history cleared), step 8
- * (share links), the review-fixes batch (data exports) and step 10 (photo import).
+ * (share links), the review-fixes batch (data exports), step 10 (photo import) and step 11
+ * (account suspension).
  */
 export const AUDIT_EVENTS = [
   "auth.sign_in",
@@ -272,6 +375,13 @@ export const AUDIT_EVENTS = [
   "import.batch_cancelled",
   /** The worker gave up on a batch (`actor_user_id` NULL); metadata `{batch_id}`. */
   "import.batch_failed",
+  // Free-tier abuse safeguards (docs/plans/step-11.md 2.2 F, 2.7). Written by the operator
+  // tool `admin:suspend` (`actor_user_id` NULL); family-start refusals are not audited (a family
+  // start itself is `baby.created` with `family_start: true`).
+  /** An operator suspended an account; metadata `{target_user_id, reason}`. */
+  "account.suspended",
+  /** An operator lifted a suspension; metadata `{target_user_id}`. */
+  "account.unsuspended",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -348,5 +458,12 @@ export const auditMetadataSchema = z.strictObject({
   source_id: z.uuid().optional(),
   /** `import.batch_*`: the `import_batches` row (never the Google session id). */
   batch_id: z.uuid().optional(),
+  /** `account.suspended` / `account.unsuspended` (step 11): the operator's reason code, never free text. */
+  reason: suspensionReasonSchema.optional(),
+  /**
+   * `baby.created` (step 11): `true` when this album started the caller's family (the
+   * family-start checks ran); omitted otherwise. Never the family id, IP or address.
+   */
+  family_start: z.boolean().optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

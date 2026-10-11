@@ -66,7 +66,10 @@ export const uploadFileStateSchema = z.enum([
 ]);
 export type UploadFileState = z.infer<typeof uploadFileStateSchema>;
 
-/** `upload_files.error`. Values match the migration CHECK literally and in order. */
+/**
+ * `upload_files.error`. Values match the migration CHECK literally and in order; step 11 appends
+ * `pending_limit` (the uploader's pending queue in this family is full, `photos_pending_cap`).
+ */
 export const uploadFileErrorSchema = z.enum([
   "unsupported_media_type",
   "file_too_large",
@@ -76,6 +79,7 @@ export const uploadFileErrorSchema = z.enum([
   "expired",
   "storage_error",
   "upload_incomplete",
+  "pending_limit",
 ]);
 export type UploadFileError = z.infer<typeof uploadFileErrorSchema>;
 

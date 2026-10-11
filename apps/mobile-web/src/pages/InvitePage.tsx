@@ -12,7 +12,8 @@ import { useSignOut } from "../auth/useSignOut";
 import { FlowPage } from "../components/Page";
 import { Button, Message } from "../components/ui";
 import { t } from "../i18n";
-import { type ApiError, apiFetch, errorMessage, isApiError } from "../lib/api";
+import { type ApiError, apiFetch, isApiError } from "../lib/api";
+import { memberError } from "../lib/familyErrors";
 import { pendingInvite } from "../lib/session";
 
 type Outcome =
@@ -82,7 +83,7 @@ export function InvitePage() {
         setOutcome({
           kind: "failed",
           code: isApiError(e) ? e.code : "unknown",
-          message: errorMessage(e),
+          message: memberError(e, "invitee"),
         });
       });
   }, [me, needsOnboarding, lookup.data, token, refetchMe, setCurrentBabyId]);
@@ -135,6 +136,11 @@ export function InvitePage() {
     body = (
       <>
         <Message data-testid="invite-failed">{text}</Message>
+        {outcome.code === "already_parent_elsewhere" ? (
+          <Button data-testid="invite-switch-account" onClick={() => void signOut("local")}>
+            {t("accept.useDifferentAccount")}
+          </Button>
+        ) : null}
         <Button
           variant="secondary"
           onClick={() =>

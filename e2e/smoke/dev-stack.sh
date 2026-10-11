@@ -93,9 +93,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 20 migrations applied"
+step "3a. database: all 21 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "20" ] || fail "expected 20 applied migrations, found $MIGS"
+[ "$MIGS" = "21" ] || fail "expected 21 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -257,7 +257,18 @@ echo "AI wiring and seeded description ok"
 
 step "5f. step 7: search and chat (paid, admin-only), search rows only for paid babies, no secrets in logs"
 MAYA_ID="00000000-0000-4000-8000-000000000100"
+# The seed (and every re-seed) writes the demo photo_search rows without vectors; the worker's
+# search.reconcile embeds them, but only on its hourly cron. Run it in-process now so a freshly
+# (re-)seeded stack is checked deterministically. Without an embedder it leaves those rows alone.
+WORKER_EMBEDS=1
+grep -q 'search: embeddings disabled' <<<"$WLOG" && WORKER_EMBEDS=0
+RECON="$("${DC[@]}" exec -T worker pnpm --silent --filter @tinyglow/worker run-job search.reconcile 2>&1 | grep '^{"job":' || true)"
+[ -n "$RECON" ] || fail "run-job search.reconcile printed no result"
+echo "search.reconcile: $RECON"
 SEARCH="$(curl -fsS -b "$MOM_JAR" "$BASE/api/babies/$MAYA_ID/search?q=bath")" || fail "GET search as demo-mom failed"
+if [ "$WORKER_EMBEDS" = "1" ] && [ "$(printf '%s' "$SEARCH" | json 'j.degraded')" = "no_embeddings" ]; then
+  fail "the worker has an embedder but search is still degraded (no_embeddings) after search.reconcile: $SEARCH"
+fi
 [ "$(printf '%s' "$SEARCH" | json 'j.photos[0]?.id')" = "00000000-0000-4000-8000-000000000304" ] || fail "q=bath did not rank the bath photo first: $SEARCH"
 # JSON keys of the hidden document / coordinates / vectors, or a long numeric array (a vector);
 # the legitimate "degraded":"no_embeddings" label must not trip it

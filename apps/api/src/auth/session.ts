@@ -2,6 +2,7 @@ import {
   ACCESS_TOKEN_TTL_SEC,
   AUTH_COOKIE_ACCESS,
   AUTH_COOKIE_REFRESH,
+  type AuditMetadata,
   type ClientKind,
   type SessionResponse,
   WEB_SESSION_IDLE_DAYS,
@@ -9,10 +10,15 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ApiConfig } from "../config";
 import { newDeviceEmail } from "../email/templates";
-import { safeErrorLog } from "../lib/errors";
-import { clientCountry, clientDeviceLabel, clientKind } from "../lib/request";
-import { audit, withClaimsOf } from "./context";
-import type { GoTrueSession } from "./gotrue";
+import { ApiError, safeErrorLog } from "../lib/errors";
+import {
+  clientCountry,
+  clientDeviceLabel,
+  clientKind,
+  upstreamClientHeaders,
+} from "../lib/request";
+import { audit, type Tx, type TxContext, withClaimsOf } from "./context";
+import { GoTrueError, type GoTrueSession } from "./gotrue";
 import { verifyAccessToken } from "./jwt";
 
 // Session transport (docs/plans/step-3.md 2.2, 2.3 "On every session-issuing response").
@@ -77,13 +83,59 @@ export interface IssueOptions {
   method?: "review";
 }
 
+type SessionTxResult = { ctx: TxContext; newDevice: boolean };
+
+/** `auth.sign_in` (+ `auth.new_device` when another live session exists), inside the claims tx. */
+async function signInBookkeeping(
+  client: Tx,
+  ctx: TxContext,
+  metadata: AuditMetadata,
+): Promise<SessionTxResult> {
+  const { rows } = await client.query<{ n: number }>("SELECT public.count_user_sessions() AS n");
+  const liveSessions = rows[0]?.n ?? 1;
+  await audit(client, "auth.sign_in", { actorUserId: ctx.uid, metadata });
+  const newDevice = liveSessions > 1;
+  if (newDevice) await audit(client, "auth.new_device", { actorUserId: ctx.uid, metadata });
+  return { ctx, newDevice };
+}
+
+/**
+ * A suspended account (D13) reached a session-issuing route: GoTrue just minted a session
+ * for it, so end every session of the account at GoTrue (best effort; `admin:suspend` already
+ * deleted the older ones) and drop this browser's cookies. The caller rethrows the 403.
+ */
+async function endSuspendedSession(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  session: GoTrueSession,
+): Promise<void> {
+  request.log.info({ outcome: "suspended" }, "session refused");
+  if (clientKind(request) === "web") clearSessionCookies(reply, request.server.config);
+  try {
+    await request.server.authRuntime.gotrue.logout(
+      session.accessToken,
+      "global",
+      upstreamClientHeaders(request),
+    );
+  } catch (err) {
+    if (err instanceof GoTrueError) {
+      request.log.warn({ status: err.status, code: err.code }, "suspended session logout failed");
+    } else {
+      request.log.warn({ err: safeErrorLog(err) }, "suspended session logout failed");
+    }
+  }
+}
+
 /**
  * Turn a GoTrue session into the API's response: verifies the new access token with our own
  * verifier (never trust the upstream body blindly), runs the liveness check under the new
- * claims, and on sign-in creates the `profiles` row if missing (needed before any `audit_log`
- * row: `actor_user_id` references `profiles`), writes `auth.sign_in`, and if another live
- * session already existed writes `auth.new_device` and sends the alert email (best effort).
- * Then sets cookies (web) or returns tokens (native).
+ * claims (401 when the session is gone, 403 `account_suspended` for a suspended account, which
+ * also ends the GoTrue session it was just given), and on sign-in creates the `profiles` row if
+ * missing (needed before any `audit_log` row: `actor_user_id` references `profiles`), writes
+ * `auth.sign_in`, and if another live session already existed writes `auth.new_device` and sends
+ * the alert email (best effort). Sign-up is never refused here (step 11, amended: the abuse
+ * checks run when an account starts a family, `family-guards.ts`). Then sets cookies (web) or
+ * returns tokens (native).
  */
 export async function issueSession(
   request: FastifyRequest,
@@ -97,26 +149,29 @@ export async function issueSession(
   const kind: ClientKind = clientKind(request);
   const country = clientCountry(request);
   const deviceLabel = clientDeviceLabel(request);
+  const metadata: AuditMetadata = {
+    client: kind,
+    user_agent_label: deviceLabel,
+    ...(country ? { ip_country: country } : {}),
+    ...(opts.method === "review" ? { method: "review" as const } : {}),
+  };
 
-  const result = await withClaimsOf(app, claims, async (client, ctx) => {
-    if (opts.kind !== "sign_in") return { ctx, newDevice: false };
-    await client.query(
-      "INSERT INTO public.profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
-      [ctx.uid],
-    );
-    const { rows } = await client.query<{ n: number }>("SELECT public.count_user_sessions() AS n");
-    const liveSessions = rows[0]?.n ?? 1;
-    const metadata = {
-      client: kind,
-      user_agent_label: deviceLabel,
-      ...(country ? { ip_country: country } : {}),
-      ...(opts.method ? { method: opts.method } : {}),
-    };
-    await audit(client, "auth.sign_in", { actorUserId: ctx.uid, metadata });
-    const newDevice = liveSessions > 1;
-    if (newDevice) await audit(client, "auth.new_device", { actorUserId: ctx.uid, metadata });
-    return { ctx, newDevice };
-  });
+  let result: SessionTxResult;
+  try {
+    result = await withClaimsOf(app, claims, async (client, ctx) => {
+      if (opts.kind !== "sign_in") return { ctx, newDevice: false };
+      await client.query(
+        "INSERT INTO public.profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+        [ctx.uid],
+      );
+      return signInBookkeeping(client, ctx, metadata);
+    });
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "account_suspended") {
+      await endSuspendedSession(request, reply, session);
+    }
+    throw err;
+  }
 
   if (result.newDevice && result.ctx.email) {
     const content = newDeviceEmail({

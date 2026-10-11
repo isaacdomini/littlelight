@@ -7,6 +7,7 @@ import {
   type BabyRole,
   type DerivativeKind,
   derivativeKey,
+  PENDING_PHOTOS_PER_GUEST_PER_FAMILY,
   PHOTO_DETAILS_LIMITS,
   type PhotoAiStatus,
   type PhotoApproval,
@@ -273,17 +274,43 @@ export async function babyAccess(
 }
 
 /**
- * Photos of a baby that count toward the free-tier cap, from the DB's single definition
- * `free_tier_photo_count` (SECURITY DEFINER: not trashed, not quarantined, status not
- * failed/duplicate; pending counts). Exact for any member, admin or contributor; 0 for a
- * non-member. Runs under the caller's claims; the `photos_free_tier_cap` trigger is the hard stop.
+ * Approved photos counting toward the free-tier pool this baby draws from (docs/plans/step-11.md
+ * 2.2 B, 2.5): every free, live album of the baby's family, from the DB's single definition
+ * `free_tier_pool_used` (SECURITY DEFINER; counting predicate: approved, not trashed, not
+ * quarantined, status not failed/duplicate; pending photos never count). Exact for any member,
+ * admin or contributor; 0 for a non-member. Runs under the caller's claims; the
+ * `photos_free_tier_cap` trigger (per-family advisory lock) is the hard stop.
  */
-export async function countLivePhotos(client: Tx, babyId: string): Promise<number> {
+export async function countPoolPhotos(client: Tx, babyId: string): Promise<number> {
+  const { rows } = await client.query<{ n: number }>("SELECT public.free_tier_pool_used($1) AS n", [
+    babyId,
+  ]);
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * The caller's live pending photos across the family of `babyId` (docs/plans/step-11.md 2.2 C,
+ * 2.5): `my_pending_photo_count` (SECURITY DEFINER, member-gated, same predicate as the
+ * `photos_pending_cap` trigger). Runs under the caller's claims.
+ */
+export async function countMyPending(client: Tx, babyId: string): Promise<number> {
   const { rows } = await client.query<{ n: number }>(
-    "SELECT public.free_tier_photo_count($1) AS n",
+    "SELECT public.my_pending_photo_count($1) AS n",
     [babyId],
   );
   return rows[0]?.n ?? 0;
+}
+
+/**
+ * Most live pending photos one guest may have in one family: `public.pending_photo_limit()`
+ * (SQL default 200 = `PENDING_PHOTOS_PER_GUEST_PER_FAMILY`; operator override through the
+ * `app.pending_photo_limit` database setting), so the API pre-check and the trigger agree by
+ * construction. Named after the SQL function (the plan's `pendingLimit` would collide with the
+ * `pendingLimit` error helper in `lib/errors.ts`).
+ */
+export async function pendingPhotoLimit(client: Tx): Promise<number> {
+  const { rows } = await client.query<{ n: number }>("SELECT public.pending_photo_limit() AS n");
+  return rows[0]?.n ?? PENDING_PHOTOS_PER_GUEST_PER_FAMILY;
 }
 
 /**

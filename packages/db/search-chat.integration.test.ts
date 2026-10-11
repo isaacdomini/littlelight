@@ -1621,8 +1621,8 @@ describe.skipIf(!databaseUrl)("search and chat database rules (step 7)", () => {
       const t1 = await threadFor();
       const extra = fid("f", 15);
       await q(
-        "INSERT INTO public.babies (id, name, birth_date, plan) VALUES ($1, 'Extra', '2025-06-30', 'plus')",
-        [extra],
+        "INSERT INTO public.babies (id, name, birth_date, plan, family_id) VALUES ($1, 'Extra', '2025-06-30', 'plus', (SELECT family_id FROM public.babies WHERE id = $2))",
+        [extra, BABY.paid],
       );
       await q("INSERT INTO public.baby_members (baby_id, user_id, role) VALUES ($1, $2, 'admin')", [
         extra,

@@ -2,6 +2,7 @@ import { IonContent, IonPage } from "@ionic/react";
 import { type InfiniteData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import type { ShareAlbum, ViewerPhoto, ViewerPhotosResponse } from "@tinyglow/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LogoHorizontal } from "../../components/Logo";
 import { FlowPage } from "../../components/Page";
 import { InstallPrompt } from "../../components/share/InstallPrompt";
 import { NativeDone } from "../../components/share/NativeDone";
@@ -37,6 +38,9 @@ function useShareHead(token: string) {
       document.head.appendChild(el);
       added.push(el);
     };
+    // Only one manifest may win: the app-wide one steps aside while a share link is open.
+    const appManifest = document.querySelector<HTMLLinkElement>("link[data-app-manifest]");
+    appManifest?.remove();
     add("meta", { name: "robots", content: "noindex, nofollow" });
     if (!document.querySelector('meta[name="referrer"]')) {
       add("meta", { name: "referrer", content: "no-referrer" });
@@ -45,9 +49,10 @@ function useShareHead(token: string) {
       rel: "manifest",
       href: `/api/share/manifest.webmanifest?t=${encodeURIComponent(token)}`,
     });
-    add("link", { rel: "apple-touch-icon", href: "/icons/viewer-192.png" });
+    add("link", { rel: "apple-touch-icon", href: "/apple-touch-icon.png" });
     return () => {
       for (const el of added) el.remove();
+      if (appManifest) document.head.appendChild(appManifest);
     };
   }, [token]);
 }
@@ -195,6 +200,7 @@ function Album({ album, onLost }: { album: ShareAlbum; onLost: () => void }) {
           data-testid="share-album"
         >
           <header className="flex flex-col gap-3 px-4 pb-2 pt-[max(env(safe-area-inset-top),1rem)]">
+            <LogoHorizontal className="h-6" />
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 flex-col gap-0.5">
                 <h1 className="text-2xl font-semibold" data-testid="share-album-title">

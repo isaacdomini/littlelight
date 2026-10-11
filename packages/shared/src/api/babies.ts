@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FREE_TIER_PHOTO_LIMIT } from "../constants";
 import { babyRoleSchema, planSchema } from "../db-enums";
 import { isoDateSchema, isoDateTimeSchema } from "./common";
 
@@ -30,6 +31,20 @@ export const babyUpdateSchema = babyCreateSchema
   });
 export type BabyUpdate = z.infer<typeof babyUpdateSchema>;
 
+/**
+ * Free-tier usage of the family an album belongs to (docs/plans/step-11.md 2.2 B, 2.3, D-E, D-F):
+ * `used` counts approved photos across the family's free, live albums (pending, trashed and Plus
+ * albums' photos excluded), out of `limit`, spread over `familyAlbums` such albums (≥ 1: this
+ * one). `used` may exceed `limit` for grandfathered families; such a family accepts no new
+ * approved photo until it is under the cap.
+ */
+export const freeTierSchema = z.object({
+  used: z.number().int().nonnegative(),
+  limit: z.literal(FREE_TIER_PHOTO_LIMIT),
+  familyAlbums: z.number().int().min(1),
+});
+export type FreeTier = z.infer<typeof freeTierSchema>;
+
 export const babySchema = z.object({
   id: z.uuid(),
   name: z.string(),
@@ -45,6 +60,8 @@ export const babySchema = z.object({
   createdAt: isoDateTimeSchema,
   /** Set when trashed (soft delete); only admins ever see trashed babies. */
   deletedAt: isoDateTimeSchema.nullable(),
+  /** The family's free-tier pool this album draws from; `null` for Plus or trashed albums. */
+  freeTier: freeTierSchema.nullable(),
 });
 export type Baby = z.infer<typeof babySchema>;
 

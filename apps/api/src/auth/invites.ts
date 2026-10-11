@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   type BabyRole,
   babyInviteParamsSchema,
+  canonicalEmail,
   INVITE_PATH,
   type Invite,
   type InviteLookupResponse,
@@ -174,7 +175,8 @@ export function inviteRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
 
         // Membership by email: profiles hold no email, so "already a member" is the caller
         // themselves or someone who joined on an earlier invite to this address and is still in.
-        if (ctx.email && normalizeEmail(ctx.email) === email) {
+        // Canonical comparison (step 11, D9): `you+baby@gmail.com` is the caller's own inbox too.
+        if (ctx.email && canonicalEmail(ctx.email) === canonicalEmail(email)) {
           throw new ApiError(409, "already_member", "That's your own email address");
         }
         const member = await client.query(
@@ -389,9 +391,16 @@ export function inviteRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
 
       return withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
-        // Case-insensitive match on the signed-in email (PRD "Invites"). The policy below checks
-        // the same thing in SQL (`auth_email()` is lower-cased); this gives the exact message.
-        if (!ctx.email || normalizeEmail(ctx.email) !== found.email) {
+        // Case-insensitive match on the signed-in email (PRD "Invites"), or the same canonical
+        // inbox (step 11, D9: an invite to `mom+baby@gmail.com` is accepted by `mom@gmail.com`,
+        // the only account that inbox may have). The policy below checks the same thing in SQL
+        // (`invite_allows_join`: exact lower-cased or `email_canonical` equal); this gives the
+        // exact message.
+        if (
+          !ctx.email ||
+          (normalizeEmail(ctx.email) !== found.email &&
+            canonicalEmail(ctx.email) !== canonicalEmail(found.email))
+        ) {
           throw new ApiError(403, "invite_email_mismatch", inviteEmailMismatchMessage(found.email));
         }
         // Store-review account (D4, review.ts): it signs in without proving its mailbox, so it
@@ -408,14 +417,18 @@ export function inviteRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
           throw new ApiError(409, "already_member", "You're already a member of this album");
         }
         try {
-          // RLS invite branch + triggers: consume invite, max two admins (-> admins_full).
+          // RLS invite branch + triggers: consume invite, max two admins (-> admins_full), one
+          // family per parent (step 11, `baby_members_one_family`: an admin invite accepted by
+          // an account that is a parent in another family -> 409 already_parent_elsewhere).
           await client.query(
             "INSERT INTO public.baby_members (baby_id, user_id, role, invited_by) VALUES ($1, $2, $3, $4)",
             [found.babyId, ctx.uid, found.role, found.invitedBy],
           );
         } catch (err) {
           // The invite died between the lookup and the insert (revoked/accepted concurrently):
-          // the policy's invite branch no longer holds.
+          // the policy's invite branch no longer holds. Only that (42501) becomes
+          // invite_expired; every trigger refusal (23514: admins_full, already_parent_elsewhere,
+          // invite_expired from the consume trigger) is rethrown for the shared mapper.
           if (isPgError(err) && err.code === "42501") {
             throw new ApiError(410, "invite_expired", "This invite is no longer valid");
           }

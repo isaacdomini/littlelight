@@ -186,6 +186,14 @@ describe.skipIf(!databaseUrl)("AI pipeline database rules (step 6)", () => {
         ($5, 'Deleted', '2025-06-30', 'plus', NULL, now() - interval '1 day')`,
       [BABY.paid, BABY.paid2, BABY.free, BABY.expired, BABY.deleted],
     );
+    // One family per parent (step 11): U.admin administers `paid` and `free`, so they share a family.
+    await q(
+      "UPDATE public.babies SET family_id = (SELECT family_id FROM public.babies WHERE id = $1) WHERE id = $2",
+      [BABY.paid, BABY.free],
+    );
+    await q(
+      "DELETE FROM public.families f WHERE NOT EXISTS (SELECT 1 FROM public.babies b WHERE b.family_id = f.id)",
+    );
     for (const [b, u, role] of [
       [BABY.paid, U.admin, "admin"],
       [BABY.paid, U.contrib, "contributor"],

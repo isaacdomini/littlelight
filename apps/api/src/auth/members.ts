@@ -170,7 +170,9 @@ export function memberRoutes(app: FastifyInstance, _runtime: AuthRuntime): void 
         }
 
         // Triggers: max two admins -> 409 admins_full; last admin -> 409 last_admin; the paying
-        // admin stepping down -> plan_owner_user_id cleared, plan back to free.
+        // admin stepping down -> plan_owner_user_id cleared, plan back to free; promoting a
+        // guest who is a parent in another family -> 409 already_parent_elsewhere (step 11,
+        // `baby_members_one_family`; the UPDATE raises, it never affects 0 rows for this).
         const updatedRole = await client.query(
           "UPDATE public.baby_members SET role = $3 WHERE baby_id = $1 AND user_id = $2",
           [babyId, userId, role],

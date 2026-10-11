@@ -12,7 +12,7 @@ import {
 } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type pg from "pg";
-import { ApiError } from "../lib/errors";
+import { ApiError, accountSuspended } from "../lib/errors";
 import { runAs } from "../plugins/db";
 
 // Request-scoped identity for database work (docs/plans/step-3.md 2.2 "Liveness", 2.7;
@@ -21,7 +21,8 @@ import { runAs } from "../plugins/db";
 // … COMMIT; RESET ROLE; DISCARD ALL). `withClaims` additionally starts with
 // `auth_session_info(session_id)`: no row means GoTrue deleted the session (sign-out on another
 // device, refresh-token reuse, account deletion) and the request fails with 401
-// `session_revoked` even though the JWT is still within its hour.
+// `session_revoked` even though the JWT is still within its hour; a suspended account (step 11)
+// fails with 403 `account_suspended`.
 
 /** What the auth hook establishes for a request carrying a valid user token. */
 export interface AuthContext {
@@ -57,14 +58,28 @@ export function isFreshSignIn(sessionCreatedAt: Date, now: Date = new Date()): b
   return now.getTime() - sessionCreatedAt.getTime() <= FRESH_SIGN_IN_MAX_AGE_MIN * 60_000;
 }
 
-/** The `claims` → `TxContext` step, shared by `withClaims` and `withClaimsOf`. */
+/**
+ * The `claims` → `TxContext` step, shared by `withClaims` and `withClaimsOf`. Step 11 (D13): a
+ * suspended account (`profiles.suspended_at`, set by `admin:suspend`) fails every request with
+ * 403 `account_suspended`, whether its session is still alive or was deleted by the tool.
+ */
 async function sessionLiveness(client: Tx, claims: AuthenticatedClaims): Promise<TxContext> {
-  const { rows } = await client.query<{ created_at: Date }>(
-    "SELECT created_at FROM public.auth_session_info($1)",
+  const { rows } = await client.query<{ created_at: Date; suspended: boolean }>(
+    "SELECT created_at, suspended FROM public.auth_session_info($1)",
     [claims.session_id],
   );
   const row = rows[0];
-  if (!row) throw sessionRevoked();
+  if (!row) {
+    // `admin:suspend` deletes every session of the account, so a suspended user's still-valid
+    // access token lands here; tell them why (own row only: the profiles self-select policy).
+    const own = await client.query<{ suspended: boolean }>(
+      "SELECT suspended_at IS NOT NULL AS suspended FROM public.profiles WHERE user_id = $1",
+      [claims.sub],
+    );
+    if (own.rows[0]?.suspended) throw accountSuspended();
+    throw sessionRevoked();
+  }
+  if (row.suspended) throw accountSuspended();
   return {
     uid: claims.sub,
     email: claims.email ?? null,

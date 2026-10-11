@@ -8,6 +8,7 @@
     "build": "tsup",
     "start": "node dist/server.js",
     "search-bench": "tsx src/search/bench.ts",
+    "disposable:build": "tsx src/auth/disposable/build.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests --exclude '**/*.integration.test.ts'"
   },

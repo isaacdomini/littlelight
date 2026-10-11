@@ -106,6 +106,28 @@ export const sessionsListResponseSchema = z.object({
 export type SessionsListResponse = z.infer<typeof sessionsListResponseSchema>;
 export type SessionListItem = SessionsListResponse["sessions"][number];
 
+/**
+ * `details` of a 409 `inbox_has_family` (docs/plans/step-11.md 2.3, 2.4, 2.9): the address of the
+ * other account for this inbox that is already a parent, masked with `maskEmail`
+ * (`m***@gmail.com`). Never the full address. Omitted when the hint cannot be read.
+ */
+export const inboxHasFamilyDetailsSchema = z.object({
+  existingEmailMasked: z.string().min(1).max(320),
+});
+export type InboxHasFamilyDetails = z.infer<typeof inboxHasFamilyDetailsSchema>;
+
+/**
+ * `details` of a 409 `pending_limit` (docs/plans/step-11.md 2.3, 2.5, 2.9): the caller's live
+ * pending photos across this family and the most allowed (`public.pending_photo_limit()`,
+ * default `PENDING_PHOTOS_PER_GUEST_PER_FAMILY`). Omitted when the trigger refused and the
+ * route could not read the counts.
+ */
+export const pendingLimitDetailsSchema = z.object({
+  pending: z.number().int().nonnegative(),
+  limit: z.number().int().min(1),
+});
+export type PendingLimitDetails = z.infer<typeof pendingLimitDetailsSchema>;
+
 /** `GET /auth/config` (public). */
 export const authConfigResponseSchema = z.object({
   providers: z.object({ apple: z.boolean(), google: z.boolean() }),

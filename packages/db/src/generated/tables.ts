@@ -197,6 +197,7 @@ export interface BabiesRow {
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
+  family_id: string;
 }
 
 export interface BabiesInsert {
@@ -218,6 +219,7 @@ export interface BabiesInsert {
   created_at?: Date;
   updated_at?: Date;
   deleted_at?: Date | null;
+  family_id?: string;
 }
 
 export interface BabyMembersRow {
@@ -348,6 +350,41 @@ export interface DataExportsInsert {
   last_downloaded_at?: Date | null;
 }
 
+export interface FamiliesRow {
+  id: string;
+  created_by: string | null;
+  created_at: Date;
+}
+
+export interface FamiliesInsert {
+  id?: string;
+  created_by?: string | null;
+  created_at?: Date;
+}
+
+export interface FamilyStartsRow {
+  id: string;
+  family_id: string | null;
+  user_id: string | null;
+  ip_hash: Buffer;
+  ip_country: string | null;
+  client: "web" | "native";
+  plus_tag: boolean;
+  dots_folded: boolean;
+  created_at: Date;
+}
+
+export interface FamilyStartsInsert {
+  family_id?: string | null;
+  user_id?: string | null;
+  ip_hash: Buffer;
+  ip_country?: string | null;
+  client: "web" | "native";
+  plus_tag?: boolean;
+  dots_folded?: boolean;
+  created_at?: Date;
+}
+
 export interface GoogleAccountsRow {
   user_id: string;
   refresh_token_enc: Buffer;
@@ -456,6 +493,7 @@ export interface ImportItemsRow {
     | "storage_error"
     | "not_member"
     | "baby_trashed"
+    | "pending_limit"
     | null;
   storage_key: string;
   photo_id: string | null;
@@ -483,6 +521,7 @@ export interface ImportItemsInsert {
     | "storage_error"
     | "not_member"
     | "baby_trashed"
+    | "pending_limit"
     | null;
   photo_id?: string | null;
   created_at?: Date;
@@ -513,6 +552,7 @@ export interface ImportSourcesRow {
     | "storage_error"
     | "baby_trashed"
     | "signed_out"
+    | "pending_limit"
     | null;
   created_at: Date;
   updated_at: Date;
@@ -542,6 +582,7 @@ export interface ImportSourcesInsert {
     | "storage_error"
     | "baby_trashed"
     | "signed_out"
+    | "pending_limit"
     | null;
   created_at?: Date;
   updated_at?: Date;
@@ -854,6 +895,9 @@ export interface ProfilesRow {
   deleted_at: Date | null;
   notify_photos_analyzed: boolean;
   notify_share_viewed: boolean;
+  suspended_at: Date | null;
+  suspended_reason: "abuse" | "other" | null;
+  email_canonical: string | null;
 }
 
 export interface ProfilesInsert {
@@ -871,6 +915,9 @@ export interface ProfilesInsert {
   deleted_at?: Date | null;
   notify_photos_analyzed?: boolean;
   notify_share_viewed?: boolean;
+  suspended_at?: Date | null;
+  suspended_reason?: "abuse" | "other" | null;
+  email_canonical?: string | null;
 }
 
 export interface PushDeliveriesRow {
@@ -1049,6 +1096,7 @@ export interface UploadFilesRow {
     | "expired"
     | "storage_error"
     | "upload_incomplete"
+    | "pending_limit"
     | null;
   photo_id: string | null;
   duplicate_of_photo_id: string | null;
@@ -1079,6 +1127,7 @@ export interface UploadFilesInsert {
     | "expired"
     | "storage_error"
     | "upload_incomplete"
+    | "pending_limit"
     | null;
   photo_id?: string | null;
   duplicate_of_photo_id?: string | null;
@@ -1171,6 +1220,8 @@ export interface Tables {
   chat_threads: { row: ChatThreadsRow; insert: ChatThreadsInsert };
   chat_turns: { row: ChatTurnsRow; insert: ChatTurnsInsert };
   data_exports: { row: DataExportsRow; insert: DataExportsInsert };
+  families: { row: FamiliesRow; insert: FamiliesInsert };
+  family_starts: { row: FamilyStartsRow; insert: FamilyStartsInsert };
   google_accounts: { row: GoogleAccountsRow; insert: GoogleAccountsInsert };
   import_batches: { row: ImportBatchesRow; insert: ImportBatchesInsert };
   import_items: { row: ImportItemsRow; insert: ImportItemsInsert };
@@ -1212,6 +1263,8 @@ export const TABLE_NAMES = [
   "chat_threads",
   "chat_turns",
   "data_exports",
+  "families",
+  "family_starts",
   "google_accounts",
   "import_batches",
   "import_items",
