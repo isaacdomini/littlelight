@@ -1,0 +1,25 @@
+# Tinyglow: the compose file for the server's app folder (servers/tinyglow/docker-compose.yml).
+#
+#   servers/tinyglow/
+#     docker-compose.yml   <- this file (copy it; it never needs editing)
+#     .env                 <- from app/.env.example, git-ignored by the servers repo (**/.env)
+#     app/                 <- this repo (git submodule or plain clone), see deploy/README.md
+#
+#   cd servers/tinyglow && docker compose up -d --build --wait
+#
+# `include` loads app/docker-compose.yml with its paths resolved against app/ (build contexts,
+# ./docker/minio, ./docker/backup), so nothing in the repo changes. `env_file: .env` (relative to
+# THIS folder) is the only file used for ${VAR} interpolation: a stray app/.env is ignored.
+# Every other command also runs from this folder: docker compose ps / logs -f api /
+# run --rm migrate ... / exec db psql -U postgres tinyglow / down.
+#
+# Local additions (extra networks, labels, resource limits) go in a second file listed under
+# `path` (merged like -f a -f b); its relative paths resolve against app/ too:
+#   - path:
+#       - app/docker-compose.yml
+#       - docker-compose.local.yml
+name: tinyglow
+
+include:
+  - path: app/docker-compose.yml
+    env_file: .env

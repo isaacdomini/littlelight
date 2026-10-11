@@ -161,16 +161,18 @@ describe.skipIf(!databaseUrl)("db migrations round trip", () => {
       ],
     );
     const by = Object.fromEntries(r.map((x) => [x.rolname as string, x]));
-    expect(Object.keys(by).sort()).toEqual([
-      "anon",
-      "authenticated",
-      "tinyglow_api",
-      "tinyglow_worker",
-      "pipeline",
-      "service_role",
-      "supabase_auth_admin",
-      "viewer",
-    ]);
+    expect(Object.keys(by).sort()).toEqual(
+      [
+        "anon",
+        "authenticated",
+        "tinyglow_api",
+        "tinyglow_worker",
+        "pipeline",
+        "service_role",
+        "supabase_auth_admin",
+        "viewer",
+      ].sort(),
+    );
     for (const name of ["tinyglow_api", "tinyglow_worker"]) {
       expect(by[name], name).toMatchObject({
         rolcanlogin: true,

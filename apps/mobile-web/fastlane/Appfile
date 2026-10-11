@@ -1,9 +1,9 @@
 # Placeholders only. Never commit real values: pass them through the environment or a git-ignored
 # fastlane/.env.local. See NATIVE.md and store/release-checklist.md.
-app_identifier("com.tesarsoft.tinyglow")
+app_identifier("app.tinyglow")
 apple_id(ENV["APPLE_ID"] || "APPLE_ID_PLACEHOLDER")
 team_id(ENV["APPLE_TEAM_ID"] || "APPLE_TEAM_ID")
 itc_team_id(ENV["APP_STORE_CONNECT_TEAM_ID"] || "APP_STORE_CONNECT_TEAM_ID")
 
-package_name("com.tesarsoft.tinyglow")
+package_name("app.tinyglow")
 json_key_file(ENV["PLAY_SERVICE_ACCOUNT_JSON_PATH"] || "PLAY_SERVICE_ACCOUNT_JSON_PATH")

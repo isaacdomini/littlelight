@@ -15,7 +15,7 @@ const t = (n: number) => "A".repeat(n);
 
 describe("native identity constants", () => {
   it("has the published identifiers", () => {
-    expect(APP_ID).toBe("com.tesarsoft.tinyglow");
+    expect(APP_ID).toBe("app.tinyglow");
     expect(APP_UA_TOKEN).toBe("Tinyglow");
     expect(APP_LINK_HOST_DEFAULT).toBe("tinyglow.app");
     expect(DEV_URL_SCHEME).toBe("tinyglow");

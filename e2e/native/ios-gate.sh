@@ -34,7 +34,7 @@ cd "$ROOT" || exit 2
 OUT="$ROOT/e2e/native-results/ios"
 UITEST="$ROOT/e2e/native/ios-uitest"
 UIDD="$ROOT/e2e/native-results/ios-uitest-dd"
-BUNDLE_ID="com.tesarsoft.tinyglow"
+BUNDLE_ID="app.tinyglow"
 SIM_NAME="${IOS_GATE_SIM_NAME:-iPhone 17}"
 RUNTIME="${IOS_GATE_RUNTIME:-com.apple.CoreSimulator.SimRuntime.iOS-26-4}"
 SHARE_TOKEN="demo-grandparents-share-token"

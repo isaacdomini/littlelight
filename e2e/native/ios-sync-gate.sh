@@ -31,8 +31,8 @@ OUT="$ROOT/e2e/native-results/ios-sync"
 UITEST="$ROOT/e2e/native/ios-uitest"
 UIDD="$ROOT/e2e/native-results/ios-uitest-dd"
 APPDD="$ROOT/apps/mobile-web/ios/DerivedData"
-BUNDLE_ID="com.tesarsoft.tinyglow"
-RUNNER_ID="com.tesarsoft.lluitests.xctrunner"
+BUNDLE_ID="app.tinyglow"
+RUNNER_ID="app.tinyglow.uitests.xctrunner"
 SIM_NAME="${IOS_GATE_SIM_NAME:-iPhone 17}"
 RUNTIME="${IOS_GATE_RUNTIME:-com.apple.CoreSimulator.SimRuntime.iOS-26-4}"
 MAILPIT="http://localhost:${MAILPIT_PORT:-8025}"
@@ -141,7 +141,7 @@ PB=/usr/libexec/PlistBuddy
 step "1a. the built app declares what album sync needs and nothing more"
 v="$("$PB" -c 'Print :NSPhotoLibraryUsageDescription' "$APP/Info.plist" 2>/dev/null)"
 grep -qi "album" <<<"$v" && pass "NSPhotoLibraryUsageDescription mentions the album sync" || fail "usage string does not mention album sync"
-"$PB" -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$APP/Info.plist" 2>/dev/null | grep -q 'com.tesarsoft.tinyglow.sync' && pass "BGTaskSchedulerPermittedIdentifiers has the sync task" || fail "BGTaskSchedulerPermittedIdentifiers missing"
+"$PB" -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$APP/Info.plist" 2>/dev/null | grep -q 'app.tinyglow.sync' && pass "BGTaskSchedulerPermittedIdentifiers has the sync task" || fail "BGTaskSchedulerPermittedIdentifiers missing"
 "$PB" -c 'Print :UIBackgroundModes' "$APP/Info.plist" 2>/dev/null | grep -q 'fetch' && pass "UIBackgroundModes has fetch" || fail "UIBackgroundModes missing fetch"
 "$PB" -c 'Print :NSLocationWhenInUseUsageDescription' "$APP/Info.plist" >/dev/null 2>&1 && fail "the app declares a location permission" || pass "no location permission declared (GPS comes from the file)"
 
@@ -309,7 +309,7 @@ cat <<'CHECKLIST'
 
 MANUAL CHECKLIST (docs/plans/step-10.md 4.4; a shell cannot do these)
   [ ] Background refresh: run the app under Xcode, pause, then in the debugger:
-        e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.tinyglow.sync"]
+        e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"app.tinyglow.sync"]
       and resume: one batch imports and import_sources.last_trigger becomes 'background'.
   [ ] Wi-Fi only on a real phone: with Wi-Fi off and cellular on, the card says "Waiting for Wi-Fi"
       and nothing uploads; back on Wi-Fi it syncs (the simulator cannot fake cellular).

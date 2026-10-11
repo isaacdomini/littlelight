@@ -11,7 +11,7 @@ export { SYNC_BG_TASK_ID } from "./imports";
 // CORS allow-list and the worker's APNs topic default.
 
 /** iOS bundle id and Android applicationId (D1; permanent once published). */
-export const APP_ID = "com.tesarsoft.tinyglow";
+export const APP_ID = "app.tinyglow";
 /**
  * Product token Capacitor appends to the WebView User-Agent (`appendUserAgent:
  * "Tinyglow/<version>"`); `userAgentLabel()` maps it to "Tinyglow app on …".

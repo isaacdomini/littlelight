@@ -7,7 +7,7 @@ import Capacitor
 //   upload({ url, path, wifiOnly? }) -> { id }
 //                                        PUT the file bytes (no multipart, no extra headers).
 //                                        wifiOnly: true uses a second background session that never
-//                                        uses cellular (com.tesarsoft.tinyglow.upload.wifi).
+//                                        uses cellular (app.tinyglow.upload.wifi).
 //   cancel({ id })                       cancel a running upload (searches both sessions)
 //   events: progress { id, sent, total } | done { id, status } | error { id, message }
 //
@@ -15,8 +15,8 @@ import Capacitor
 // not stored anywhere by this code. Error messages carry only an NSURLError code.
 
 final class LLUploadSession: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
-    static let identifier = "com.tesarsoft.tinyglow.upload"
-    static let wifiIdentifier = "com.tesarsoft.tinyglow.upload.wifi"
+    static let identifier = "app.tinyglow.upload"
+    static let wifiIdentifier = "app.tinyglow.upload.wifi"
     static let shared = LLUploadSession(identifier: identifier, cellular: true)
     static let wifi = LLUploadSession(identifier: wifiIdentifier, cellular: false)
     static let all = [shared, wifi]

@@ -1,4 +1,4 @@
-package com.tesarsoft.tinyglow.uploader;
+package app.tinyglow.uploader;
 
 import androidx.lifecycle.Observer;
 import androidx.work.Constraints;

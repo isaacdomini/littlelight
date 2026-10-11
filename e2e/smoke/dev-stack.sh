@@ -358,8 +358,8 @@ grep -qi '^content-type: application/json' <<<"$AASA_H" || fail "apple-app-site-
 AASA="$(curl -fsS "$BASE/.well-known/apple-app-site-association")" || fail "no apple-app-site-association"
 [ "$(printf '%s' "$AASA" | json 'j.applinks.details[0].components.map(c=>c["/"]).join(",")')" = "/invite/*,/s/*,/signin/native*" ] \
   || fail "AASA components are not /invite/*, /s/*, /signin/native*: $AASA"
-[ "$(curl -fsS "$BASE/.well-known/assetlinks.json" | json 'j[0].target.package_name')" = "com.tesarsoft.tinyglow" ] \
-  || fail "assetlinks.json package_name is not com.tesarsoft.tinyglow"
+[ "$(curl -fsS "$BASE/.well-known/assetlinks.json" | json 'j[0].target.package_name')" = "app.tinyglow" ] \
+  || fail "assetlinks.json package_name is not app.tinyglow"
 # CORS preflight through the web proxy (:8080): the two app origins are allowed, without credentials
 for ORIGIN in 'capacitor://localhost' 'https://localhost'; do
   PH="$(curl -si -X OPTIONS "$BASE/api/me" -H "origin: $ORIGIN" -H 'access-control-request-method: GET' \

@@ -7,12 +7,12 @@ import XCTest
 // Inputs come from `TEST_RUNNER_LL_*` environment variables of the xcodebuild invocation.
 //
 // Album-sync gate additions (e2e/native/ios-sync-gate.sh, docs/plans/step-10.md 2.12, 4.4): the
-// runner itself uses PhotoKit (its bundle id com.tesarsoft.lluitests.xctrunner is granted Photos
+// runner itself uses PhotoKit (its bundle id app.tinyglow.uitests.xctrunner is granted Photos
 // access by the shell with `simctl privacy grant`) to create, fill and shrink a user album,
 // because `simctl addmedia` only fills the camera roll. Everything else is UI driving.
 final class LLUITests: XCTestCase {
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-    let app = XCUIApplication(bundleIdentifier: "com.tesarsoft.tinyglow")
+    let app = XCUIApplication(bundleIdentifier: "app.tinyglow")
 
     private func env(_ k: String) -> String? {
         let v = ProcessInfo.processInfo.environment[k]
@@ -201,7 +201,7 @@ final class LLUITests: XCTestCase {
             if b.exists { b.tap() } else { alert.buttons.element(boundBy: 0).tap() }
         }
         _ = sem.wait(timeout: .now() + 20)
-        XCTAssertEqual(result, .authorized, "the UI-test runner has no Photos access (simctl privacy grant photos com.tesarsoft.lluitests.xctrunner)")
+        XCTAssertEqual(result, .authorized, "the UI-test runner has no Photos access (simctl privacy grant photos app.tinyglow.uitests.xctrunner)")
     }
 
     private func album(named title: String) -> PHAssetCollection? {

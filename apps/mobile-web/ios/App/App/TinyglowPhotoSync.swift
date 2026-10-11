@@ -32,7 +32,7 @@ import UniformTypeIdentifiers
 /// atomic writes, protected until first unlock, directory excluded from backup.
 final class LLSyncLedger {
     static let shared = LLSyncLedger()
-    private let queue = DispatchQueue(label: "com.tesarsoft.tinyglow.sync.ledger")
+    private let queue = DispatchQueue(label: "app.tinyglow.sync.ledger")
 
     struct Entry: Codable { var o: String; var n: Int }
     struct File: Codable { var v: Int; var entries: [String: Entry] }
@@ -123,7 +123,7 @@ final class LLSyncLedger {
 
 final class LLPhotoSync {
     static let shared = LLPhotoSync()
-    static let taskIdentifier = "com.tesarsoft.tinyglow.sync"
+    static let taskIdentifier = "app.tinyglow.sync"
 
     private let lock = NSLock()
     private var buffered: [(String, [String: Any])] = []
@@ -143,7 +143,7 @@ final class LLPhotoSync {
             guard let self = self else { return }
             self.lock.lock(); self.path = p; self.lock.unlock()
         }
-        monitor.start(queue: DispatchQueue(label: "com.tesarsoft.tinyglow.sync.path"))
+        monitor.start(queue: DispatchQueue(label: "app.tinyglow.sync.path"))
     }
 
     func latestPath() -> NWPath? {
@@ -235,7 +235,7 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "completeBackgroundTask", returnType: CAPPluginReturnPromise),
     ]
 
-    private static let work = DispatchQueue(label: "com.tesarsoft.tinyglow.sync.work", qos: .utility)
+    private static let work = DispatchQueue(label: "app.tinyglow.sync.work", qos: .utility)
 
     override public func load() {
         LLPhotoSync.shared.startMonitor()

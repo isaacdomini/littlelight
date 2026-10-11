@@ -404,9 +404,19 @@ jobs:
           # Production needs a .env and the required bind-mount paths; use the documented
           # placeholders and throwaway directories (config -q only interpolates, it starts nothing).
           cp .env.example .env
-          STORAGE_PATH="$RUNNER_TEMP/storage" BACKUP_PATH="$RUNNER_TEMP/backups" \
-            docker compose -f docker-compose.yml config -q
+          DB_DATA_PATH="$RUNNER_TEMP/postgres" STORAGE_PATH="$RUNNER_TEMP/storage" \
+            BACKUP_PATH="$RUNNER_TEMP/backups" docker compose -f docker-compose.yml config -q
           rm -f .env
+          # Server layout (deploy/README.md): servers/tinyglow/{docker-compose.yml,.env,app/}
+          # started from the outer folder via `include`. Paths must resolve against app/ and the
+          # outer .env must be the one interpolated (here: the .env.example values).
+          outer="$RUNNER_TEMP/servers/tinyglow"
+          mkdir -p "$outer"
+          ln -s "$GITHUB_WORKSPACE" "$outer/app"
+          cp deploy/server-compose.example.yml "$outer/docker-compose.yml"
+          cp .env.example "$outer/.env"
+          (cd "$outer" && docker compose config --format json) \
+            | node .github/scripts/check-server-layout.mjs "$outer/app"
 
       # Provider-key placement (docs/plans/step-7.md 2.11, step-10.md 2.10): OPENAI_API_KEY reaches
       # worker + api, ANTHROPIC_API_KEY the worker only, GOOGLE_IMPORT_CLIENT_ID / _SECRET api +
@@ -431,8 +441,8 @@ jobs:
           (
             while IFS= read -r kv; do export "${kv?}"; done \
               < <(node .github/scripts/check-compose-keys.mjs --print-env)
-            STORAGE_PATH="$RUNNER_TEMP/storage" BACKUP_PATH="$RUNNER_TEMP/backups" \
-              docker compose -f docker-compose.yml config --format json \
+            DB_DATA_PATH="$RUNNER_TEMP/postgres" STORAGE_PATH="$RUNNER_TEMP/storage" \
+              BACKUP_PATH="$RUNNER_TEMP/backups" docker compose -f docker-compose.yml config --format json \
               | node .github/scripts/check-compose-keys.mjs prod
           )
 

@@ -19,7 +19,7 @@ const msg: PushMessage = {
 };
 const base: PushConfig = {
   PUSH_PROVIDER: "none",
-  APNS_BUNDLE_ID: "com.tesarsoft.tinyglow",
+  APNS_BUNDLE_ID: "app.tinyglow",
   APNS_ENVIRONMENT: "sandbox",
   NODE_ENV: "development",
 };

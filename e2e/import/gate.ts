@@ -205,6 +205,8 @@ let photosBefore = new Set<string>();
 let batchesBefore = new Set<string>();
 let pushBefore = 0;
 let auditBefore = 0;
+/** Object versions under Maya's `originals/` before the run (the seeded demo originals). */
+let originalsAtStart = 0;
 
 async function main() {
   await assertDevStack();
@@ -224,6 +226,7 @@ async function main() {
   batchesBefore = new Set(await q(`select id from import_batches where baby_id = '${MAYA}'`));
   pushBefore = Number((await q("select count(*) from push_deliveries"))[0]);
   auditBefore = Number((await q("select coalesce(max(id), 0) from audit_log"))[0]);
+  originalsAtStart = await objectLines(`babies/${MAYA}/originals/`);
   await fake("POST", "/__fake/reset");
   await fake("POST", "/__fake/consent", { decision: "ask" });
   // A leftover connection of an earlier run would hide step 1.
@@ -637,25 +640,38 @@ async function cleanup() {
       (x) => !batchesBefore.has(x),
     );
     const list = (xs: string[]) => xs.map((x) => `'${x}'`).join(",");
+    // Objects of ours: every photo the run added plus every import item of its batches (an item's
+    // key is `originals/<itemId>`; a failed, duplicate or cancelled item has no photo row but may
+    // have left an object). Only these exact ids are removed. Never a prefix-wide delete of
+    // Maya's `originals/`: that also wipes the seeded demo originals (`<id>.jpg`), and the next
+    // Maya export then fails with storage_error/NoSuchKey until `pnpm demo:media` redraws them.
+    const items = batches.length
+      ? await q(`select id from import_items where batch_id in (${list(batches)})`)
+      : [];
+    const ours = [...new Set([...added, ...items])].filter(
+      (id) => /^[0-9a-f-]{36}$/.test(id) && !photosBefore.has(id),
+    );
     if (batches.length) {
       await q(`delete from import_items where batch_id in (${list(batches)})`);
       await q(`delete from import_batches where id in (${list(batches)})`);
     }
-    if (added.length) {
-      await q(`delete from photos where id in (${list(added)})`);
-      const rm = added.map((i) => `originals/${i} derivatives/${i}`).join(" ");
-      await dc([
-        "exec",
-        "-T",
-        "storage",
-        "sh",
-        "-c",
-        `cd /data/${BUCKET}/babies/${MAYA} 2>/dev/null && rm -rf ${rm}`,
-      ]).catch(() => undefined);
-      await mc(
-        `rm --recursive --versions --force ll/${BUCKET}/babies/${MAYA}/originals/ --older-than 0d`,
-      ).catch(() => "");
+    if (added.length) await q(`delete from photos where id in (${list(added)})`);
+    for (let i = 0; i < ours.length; i += 20) {
+      const targets = ours
+        .slice(i, i + 20)
+        .map(
+          (id) =>
+            `ll/${BUCKET}/babies/${MAYA}/originals/${id} ll/${BUCKET}/babies/${MAYA}/derivatives/${id}/`,
+        )
+        .join(" ");
+      await mc(`rm --recursive --versions --force ${targets}`).catch(() => "");
     }
+    const originalsLeft = await objectLines(`babies/${MAYA}/originals/`);
+    check(
+      "cleanup: Maya's originals are exactly what they were (seeded demo originals untouched)",
+      originalsLeft === originalsAtStart,
+      `${originalsLeft} object versions vs ${originalsAtStart} at start`,
+    );
     await q(
       `delete from upload_sessions where baby_id = '${MAYA}' and created_at >= '${startedAt}'`,
     );

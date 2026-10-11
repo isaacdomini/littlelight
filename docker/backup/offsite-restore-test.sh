@@ -7,26 +7,51 @@
 #   3. run restore-test.sh against the newest restored pg_dump
 # Never touches the live database or STORAGE_PATH. The scratch dir is deleted on exit.
 #
-# Reads /etc/tinyglow/offsite.env (see offsite-backup.sh) and the stack's .env for
-# S3_ROOT_USER / S3_ROOT_PASSWORD (MinIO root: the restored data's IAM store belongs to it) /
-# S3_BUCKET / MINIO_IMAGE / MC_IMAGE.
-#   APP_DIR=/srv/tinyglow/app docker/backup/offsite-restore-test.sh
+# Reads OFFSITE_ENV (see offsite-backup.sh) and, from the stack's .env (STACK_ENV; default
+# APP_DIR/../.env as in the servers/tinyglow layout of deploy/README.md, else APP_DIR/.env),
+# only S3_ROOT_USER / S3_ROOT_PASSWORD (MinIO root: the restored data's IAM store belongs to it),
+# S3_BUCKET, MINIO_IMAGE and MC_IMAGE. The .env is parsed, not sourced: Compose syntax such as
+# unquoted cron values (SEARCH_RECONCILE_CRON=17 * * * *) is not valid shell.
+#   OFFSITE_ENV=/path/servers/tinyglow/.env.offsite /path/servers/tinyglow/app/docker/backup/offsite-restore-test.sh
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 OFFSITE_ENV="${OFFSITE_ENV:-/etc/tinyglow/offsite.env}"
+if [ -z "${STACK_ENV:-}" ]; then
+  if [ -f "$APP_DIR/../.env" ]; then STACK_ENV="$APP_DIR/../.env"; else STACK_ENV="$APP_DIR/.env"; fi
+fi
 RESTIC_IMAGE="${RESTIC_IMAGE:-restic/restic:0.19.1}"
 PG_IMAGE="${PG_IMAGE:-pgvector/pgvector:0.8.7-pg17}"
 SCRATCH_PARENT="${SCRATCH_PARENT:-/var/tmp}"
 
 log() { printf '%s offsite-restore-test: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+[ -r "$OFFSITE_ENV" ] || { log "missing $OFFSITE_ENV"; exit 1; }
+[ -r "$STACK_ENV" ] || { log "missing stack .env ($STACK_ENV; set STACK_ENV)"; exit 1; }
 set -a
 # shellcheck disable=SC1090
 . "$OFFSITE_ENV"
-# shellcheck disable=SC1091
-. "$APP_DIR/.env"
 set +a
+
+# Last KEY=value line of the stack .env, one layer of matching quotes removed. Values only reach
+# variables, never the log.
+stack_env() {
+  local line v
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$1=" "$STACK_ENV" | tail -n 1 || true)"
+  v="${line#*=}"
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}" ;;
+    \'*\') v="${v#\'}"; v="${v%\'}" ;;
+    *) v="${v%%[[:space:]]#*}"; v="${v%"${v##*[![:space:]]}"}" ;; # Compose: " #" starts a comment
+  esac
+  printf '%s' "$v"
+}
+for k in S3_ROOT_USER S3_ROOT_PASSWORD S3_BUCKET MINIO_IMAGE MC_IMAGE; do
+  if [ -z "${!k:-}" ]; then
+    v="$(stack_env "$k")"
+    [ -z "$v" ] || export "$k=$v"
+  fi
+done
 : "${RESTIC_REPOSITORY:?}" "${RESTIC_PASSWORD:?}" "${S3_ROOT_USER:?}" "${S3_ROOT_PASSWORD:?}" "${S3_BUCKET:?}"
 MINIO_IMAGE="${MINIO_IMAGE:-pgsty/minio:RELEASE.2026-08-04T00-00-00Z}"
 MC_IMAGE="${MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}"

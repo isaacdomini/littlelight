@@ -2,14 +2,14 @@
 #
 # cloudflared is NOT part of docker-compose.yml: it runs on the host (or another machine on the
 # LAN) and reaches the two ports the stack publishes (see the docker-compose.yml header):
-#   web     nginx      ${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}
-#   storage MinIO API  ${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}
+#   web     nginx      ${WEB_BIND:-127.0.0.1}:${WEB_PORT:-6987}
+#   storage MinIO API  ${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-16987}
 # This file is the reference for the tunnel's ingress rules. Use it as-is for a locally-managed
 # tunnel (`cloudflared tunnel --config /etc/cloudflared/config.yml run`, with your tunnel name /
 # credentials file below), or enter the same rules as Public hostnames in the dashboard for a
 # token-managed tunnel (Zero Trust -> Networks -> Tunnels -> <tunnel> -> Public hostnames):
-#   1. tinyglow.app                          -> HTTP  localhost:8080
-#   2. files.tinyglow.app  Path: ^/tinyglow/.  -> HTTP  localhost:9000
+#   1. tinyglow.app                          -> HTTP  localhost:6987
+#   2. files.tinyglow.app  Path: ^/tinyglow/.  -> HTTP  localhost:16987
 #      Leave "HTTP Host Header" EMPTY: MinIO validates pre-signed URL signatures against the
 #      original Host (files.tinyglow.app). Overriding it breaks every upload/download.
 #      Path: only object paths in the app bucket are forwarded (S3_BUCKET, path-style URLs:
@@ -20,9 +20,13 @@
 #      MinIO's admin, metrics and listing APIs are never public. If S3_BUCKET is not
 #      "tinyglow", change the regex to ^/<S3_BUCKET>/. here and in the dashboard.
 #   No route for the MinIO console (:9001); compose does not publish it.
-# Ports: if WEB_PORT / STORAGE_PORT differ from 8080 / 9000, change the services below. If
-# cloudflared runs on another machine, replace localhost with the server's LAN address (= the
-# *_BIND values) and firewall both ports to that machine only.
+# Ports: if WEB_PORT / STORAGE_PORT differ from 6987 / 16987, change the services below.
+# Where cloudflared runs decides WEB_BIND / STORAGE_BIND in the stack's .env and the host below:
+#   on this host (package, or a container with network_mode: host): binds 127.0.0.1, localhost
+#   in a bridged container on this host: binds = the server's LAN IP and here that IP, or
+#     binds 0.0.0.0 and here host.docker.internal (extra_hosts: host-gateway); firewall the ports
+#   on another machine: binds = the server's LAN IP, here that IP; firewall both ports to it
+# Anything else that can reach the ports bypasses Cloudflare.
 # Client IP: Cloudflare sets CF-Connecting-IP; nginx passes it through unchanged and the api and
 # GoTrue rate-limit on it, so nothing depends on where cloudflared runs, as long as only
 # cloudflared can reach the published ports.
@@ -58,14 +62,14 @@ credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
   - hostname: tinyglow.app
-    service: http://localhost:8080
+    service: http://localhost:6987
     originRequest:
       connectTimeout: 10s
   # Object paths in the app bucket only (regex on the URL path); everything else on this
   # hostname falls through to the 404 below.
   - hostname: files.tinyglow.app
     path: ^/tinyglow/.
-    service: http://localhost:9000
+    service: http://localhost:16987
     originRequest:
       connectTimeout: 10s
       # Large part uploads/downloads over slow links.

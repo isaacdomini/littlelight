@@ -23,7 +23,7 @@ const expected = {
   NSAppTransportSecurity: { NSAllowsLocalNetworking: true },
   CFBundleURLTypes: [
     {
-      CFBundleURLName: "com.tesarsoft.tinyglow.debug-scheme",
+      CFBundleURLName: "app.tinyglow.debug-scheme",
       CFBundleURLSchemes: ["tinyglow"],
     },
   ],
@@ -36,7 +36,7 @@ if (!isDeepStrictEqual(debug, expected)) {
   }
 }
 // Album sync (step 10): both plists must carry the background-refresh keys and the photo string.
-const SYNC_TASK_ID = "com.tesarsoft.tinyglow.sync";
+const SYNC_TASK_ID = "app.tinyglow.sync";
 for (const [name, plist] of [
   ["Info.plist", release],
   ["Info-Debug.plist", debug],

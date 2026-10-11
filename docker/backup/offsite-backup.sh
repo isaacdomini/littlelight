@@ -3,18 +3,22 @@
 # BACKUP_PATH (pg_dump archives) with restic (PRD "Compose requirements": off-site copy).
 # Runs on the production HOST from cron; needs only Docker (restic runs from a pinned image).
 #
-# Setup (once, as root):
+# Setup (once, as root). The settings file is OFFSITE_ENV (default /etc/tinyglow/offsite.env);
+# in the servers/tinyglow layout (deploy/README.md) keep it next to the stack's .env as
+# servers/tinyglow/.env.offsite (git-ignored by **/.env.*) and pass OFFSITE_ENV=<that path>:
 #   install -m 600 /dev/null /etc/tinyglow/offsite.env   # then fill it in:
 #     RESTIC_REPOSITORY=s3:https://s3.<region>.backblazeb2.com/<bucket>/tinyglow
 #     RESTIC_PASSWORD=<openssl rand -hex 32; store a copy OUTSIDE this server or the backup is useless>
 #     AWS_ACCESS_KEY_ID=<B2 application key id, scoped to the bucket>
 #     AWS_SECRET_ACCESS_KEY=<B2 application key>
-#     STORAGE_PATH=/srv/tinyglow/storage                # same values as the stack's .env
-#     BACKUP_PATH=/srv/tinyglow/backups
+#     STORAGE_PATH=/mnt/data/tinyglow/photos             # same values as the stack's .env
+#     BACKUP_PATH=/mnt/data/tinyglow/backups
 #   docker/backup/offsite-backup.sh --init                  # creates the restic repository
-# Cron (after the 03:00 pg_dump; offsite.env path can be overridden with OFFSITE_ENV):
-#   30 4 * * * root /srv/tinyglow/app/docker/backup/offsite-backup.sh >>/var/log/tinyglow-offsite.log 2>&1
-#   0 5 1 * *  root /srv/tinyglow/app/docker/backup/offsite-restore-test.sh >>/var/log/tinyglow-offsite.log 2>&1
+# Cron (after the 03:00 pg_dump; <dir> = the servers/tinyglow folder):
+#   30 4 * * * root OFFSITE_ENV=<dir>/.env.offsite <dir>/app/docker/backup/offsite-backup.sh >>/var/log/tinyglow-offsite.log 2>&1
+#   0 5 1 * *  root OFFSITE_ENV=<dir>/.env.offsite <dir>/app/docker/backup/offsite-restore-test.sh >>/var/log/tinyglow-offsite.log 2>&1
+# The restic cache is the named volume tinyglow-restic-cache: disposable (rebuilt from the
+# repository), not data.
 #
 # Retention: 14 daily, 8 weekly, 12 monthly snapshots. Weekly `restic check` reads 5% of data.
 # Note: MinIO stores objects in its own on-disk format (xl.meta + parts), so the copy is restored

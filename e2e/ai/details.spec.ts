@@ -10,7 +10,10 @@ import { newContext, tid } from "../helpers/ui";
 // removes it afterwards; the free baby is created through the API and deleted afterwards.
 
 const BATH = photoId(4);
-const FAILED = photoId(5); // seeded without an analysis copy and without AI data
+// Seeded without AI data. Since step 9 the worker's demo media gives it a real analysis copy; the
+// fixture row below is only inserted when that is absent, and cleanup removes only the fixture
+// row (its `e2e/` key), never the real one (`pnpm demo:media --check` counts it).
+const FAILED = photoId(5);
 const OVERRIDE = `Bath time with the yellow duck ${Date.now().toString(36)}`;
 
 let mom: ApiClient;
@@ -31,7 +34,8 @@ async function clearOverrides() {
 async function clearFailedFixture() {
   await psql(
     `delete from ai_batches where id in (select batch_id from ai_batch_items where photo_id = '${FAILED}');
-     delete from photo_derivatives where photo_id = '${FAILED}' and kind = 'analysis';
+     delete from photo_derivatives where photo_id = '${FAILED}' and kind = 'analysis'
+       and storage_key = 'e2e/${FAILED}/analysis.jpg';
      update photos set ai_retry_requested_at = null where id = '${FAILED}'`,
   );
 }

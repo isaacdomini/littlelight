@@ -3,10 +3,10 @@
 Needs from the user, in order. Tick as done.
 
 - [ ] U1 Apple Developer Program membership and Team ID
-- [ ] U2 Xcode signed in with that Apple ID (App ID `com.tesarsoft.tinyglow`: Associated Domains, Push Notifications)
+- [ ] U2 Xcode signed in with that Apple ID (App ID `app.tinyglow`: Associated Domains, Push Notifications)
 - [ ] U3 App Store Connect app record, API key (Issuer ID, Key ID, .p8), TestFlight testers
 - [ ] U4 APNs key (.p8, Key ID) and worker env (`PUSH_PROVIDER=live`, `APNS_*`)
-- [ ] U5 Google Play Console account, app `com.tesarsoft.tinyglow`, Play App Signing, upload keystore (kept outside the repo)
+- [ ] U5 Google Play Console account, app `app.tinyglow`, Play App Signing, upload keystore (kept outside the repo)
 - [ ] U6 SHA-256 fingerprints (Play signing + upload) into `assetlinks.json`; Team ID into the AASA file
 - [ ] U7 Firebase project, `google-services.json` in `android/app/` (git-ignored), FCM service account, build with `VITE_PUSH_ANDROID=1`
 - [ ] U8 Apple / Google sign-in client IDs (before public launch; not in this build)

@@ -56,7 +56,7 @@ export const SYNC_ASSET_MAX_ATTEMPTS = 3;
 /** A launch/resume/background run within this many seconds of the last run does nothing ("Sync now" always runs). */
 export const SYNC_MIN_INTERVAL_SEC = 60;
 /** `BGAppRefreshTask` identifier (`BGTaskSchedulerPermittedIdentifiers` in both iOS plists). */
-export const SYNC_BG_TASK_ID = "com.tesarsoft.tinyglow.sync";
+export const SYNC_BG_TASK_ID = "app.tinyglow.sync";
 
 // ---------------------------------------------------------------------------------------------
 // Google endpoints and scope

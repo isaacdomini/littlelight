@@ -471,7 +471,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
 
 ## Step 9 (part A): native apps without store accounts
 
-- **Built**: Capacitor 8 iOS (SPM) and Android projects, bundle id `com.tesarsoft.tinyglow`,
+- **Built**: Capacitor 8 iOS (SPM) and Android projects, bundle id `app.tinyglow`,
   iPhone only, portrait. Permission strings, `PrivacyInfo.xcprivacy` (no tracking; precise location
   from photo metadata), entitlements (`applinks:`, `aps-environment`), Android manifest without
   media/storage/location permissions, no backup, cleartext only to localhost in debug, App Links and
@@ -513,7 +513,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   links open the app"): pending user credentials (part B).**
 - **Decisions**:
   - **User decisions (2026-10-09):** split step 9 into part A (now) and part B (store accounts);
-    bundle id `com.tesarsoft.tinyglow`; no purchase prompts in the native apps (billing is a
+    bundle id `app.tinyglow`; no purchase prompts in the native apps (billing is a
     later step); static-code review account; free disk then install tools; deleted iOS 26.0/26.1
     simulator runtimes (kept 26.4.1; iOS 27 runtime not installed); commit without the Android
     runtime check.
@@ -760,7 +760,7 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - Product name and copy everywhere.
   - Packages `@tinyglow/*`.
   - Domains, AASA/assetlinks, App Links and the Google callback.
-  - App ID `com.tesarsoft.tinyglow` (plus `.upload`, `.upload.wifi`, `.sync` and the BGTask id).
+  - App ID `app.tinyglow` (plus `.upload`, `.upload.wifi`, `.sync` and the BGTask id).
   - Native classes and plugins `Tinyglow*`.
   - `tinyglow://`, the `Tinyglow/<ver>` user agent and the `X-Tinyglow-Client` header.
   - JWT, HKDF and model strings, and Sentry release names.
@@ -779,3 +779,39 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   - web e2e 42/42;
   - Android debug and iOS simulator builds under the new app ID.
 - **Commit**: rename: Littlelight → Tinyglow
+
+## Production layout, app ID and gate fixes (2026-10-10)
+
+- **App ID:** `app.tinyglow` (user: "I don't want to see Tesarsoft anywhere"). It is used for
+  iOS/Android, the Java packages, background and BGTask ids, the XCUITest runner, AASA/assetlinks and
+  fastlane; the review example is `review@tinyglow.app`. `grep -ri tesarsoft` is empty.
+- **Production layout** (the user's `servers` repo):
+  - `servers/tinyglow/{docker-compose.yml (include: app/), .env, app/}`.
+  - All data is under `/mnt/data/tinyglow/{postgres,photos,backups}`. Postgres moved from a named
+    volume to a required `DB_DATA_PATH` bind mount. Every bind mount uses `create_host_path: false`.
+  - Prod ports default to 6987 (tinyglow.app) and 16987 (files.tinyglow.app).
+  - Files: `deploy/server-compose.example.yml`, `deploy/README.md`, and the CI check
+    `check-server-layout.mjs`.
+  - A prod-mode smoke run in a temp mirror passed: healthy, data in the three folders, restore test
+    and off-site restic backup/restore test passed.
+  - Fixed `offsite-restore-test.sh`: it sourced `.env` with bash and died on cron values.
+- **Guide:** `docs/PRODUCTION.md` is the step-by-step production guide (server, `.env`, Cloudflare,
+  first start, backups, optional features, phone apps, go-live checklist).
+- **Gate fixes:**
+  - The recurring export-gate `storage_error` was the import gate's cleanup deleting all of Maya's
+    seeded originals (`mc rm … --older-than 0d`). It now deletes only its own objects and asserts
+    the demo originals are untouched (43 checks).
+  - `details.spec.ts` cleanup deleted a real analysis copy; it is now scoped to its fixture.
+  - The migrations role-order test is fixed after the rename.
+- **Verified:**
+  - unit tests 3,591; integration 1,540/1,540 on clean containers;
+  - import 43/43 and export 44/44 (twice, after an integration run);
+  - web e2e 42/42;
+  - iOS gate 55/55 and iOS sync gate 41/41 under `app.tinyglow`;
+  - Android debug build, lint and manifest under `app.tinyglow`.
+- **Open:**
+  - `ios-gate.sh` re-run issue: an uninstall doesn't revoke the server session, so a second run
+    leaves a stale push row. The gate should sign out before uninstalling.
+  - The first dump after a fresh install is nearly empty (expected).
+  - `APPLE_CLIENT_SECRET` has no generator in the repo.
+- **Commit**: app id app.tinyglow, production layout, gate fixes, production guide

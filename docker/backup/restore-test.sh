@@ -16,7 +16,8 @@
 #
 # Exit 0 = restorable. Prints table counts only, never row contents.
 #
-# Real restore into production (after a passing test), from the app directory:
+# Real restore into production (after a passing test), from the folder you run `docker compose`
+# in (servers/tinyglow in the deploy/README.md layout; BACKUP_PATH as in its .env):
 #   docker compose stop api worker auth backup
 #   docker compose exec -T db psql -U postgres -d postgres -c 'DROP DATABASE tinyglow WITH (FORCE)'
 #   docker compose exec -T db psql -U postgres -d postgres -f - < "$BACKUP_PATH/<stamp>.roles.sql"
@@ -108,4 +109,5 @@ check "RLS policies"              "select count(*) from pg_policies where schema
 log "auth.users rows: $(q 'select count(*) from auth.users')"
 log "photos rows: $(q 'select count(*) from public.photos' 2>/dev/null || echo '?')"
 
-[ "$fail" = 0 ] && log "PASS $(basename "$DUMP") is restorable" || { log "FAILED"; exit 1; }
+if [ "$fail" != 0 ]; then log "FAILED"; exit 1; fi
+log "PASS $(basename "$DUMP") is restorable"

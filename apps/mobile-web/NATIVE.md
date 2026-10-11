@@ -1,6 +1,6 @@
 # Native builds (Capacitor)
 
-App id `com.tesarsoft.tinyglow` (permanent), name Tinyglow, iPhone only for v1.
+App id `app.tinyglow` (permanent), name Tinyglow, iPhone only for v1.
 The native shells are `ios/` (Swift Package Manager, no CocoaPods) and `android/`.
 Config: `capacitor.config.ts` (`loggingBehavior: "none"` must stay: debug logging would print tokens
 and presigned URLs).
@@ -18,7 +18,7 @@ All commands from the repo root with the pnpm on PATH (`export PATH="$HOME/.cach
   certificate). Do not use `CODE_SIGNING_ALLOWED=NO`: an unsigned app drops its entitlements and the
   simulator then cannot test push registration or Associated Domains. Install and launch:
   `xcrun simctl install booted ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app`
-  then `xcrun simctl launch booted com.tesarsoft.tinyglow`.
+  then `xcrun simctl launch booted app.tinyglow`.
 - Android: Gradle needs **JDK 21**. Do not change the global default or pin it in the repo:
   `JAVA_HOME=<path to JDK 21> pnpm --filter @tinyglow/mobile-web android:build:debug`
   (runs `assembleDebug`; also try `./gradlew lintDebug` in `android/`). SDK at `~/Library/Android/sdk`
@@ -33,7 +33,7 @@ Photo bytes are uploaded by our own `TinyglowUploader` Capacitor plugin, not a t
 (no multipart, no extra headers) and reports `progress`, `done` and `error` events.
 
 - iOS: `ios/App/App/TinyglowUploader.swift`, a background `URLSession`
-  (`com.tesarsoft.tinyglow.upload`), so uploads continue after the app is suspended and the system
+  (`app.tinyglow.upload`), so uploads continue after the app is suspended and the system
   can relaunch the app to deliver results.
 - Android: `TinyglowUploaderPlugin.java` and `UploadWorker.java` (expedited WorkManager work
   promoted to a visible `dataSync` foreground service, "Uploading N photos").
@@ -60,9 +60,9 @@ review drafts in `store/`. `sh store/check-limits.sh` checks the character limit
 - iOS: the system permission alert and notification banners are outside the app's web view, so
   tapping them needs **XCUITest** (an XCTest UI test target using `XCUIApplication` and
   `XCUIApplication(bundleIdentifier: "com.apple.springboard")` for the alert's "Allow" button and for
-  banner taps). `simctl` can deliver a payload (`xcrun simctl push booted com.tesarsoft.tinyglow
+  banner taps). `simctl` can deliver a payload (`xcrun simctl push booted app.tinyglow
   payload.apns`) but cannot tap anything. The e2e native gate will add the test target.
-- Android: `adb shell pm grant com.tesarsoft.tinyglow android.permission.POST_NOTIFICATIONS` skips
+- Android: `adb shell pm grant app.tinyglow android.permission.POST_NOTIFICATIONS` skips
   the prompt; tap the notification with `adb shell input` or UI Automator.
 
 ## Android emulator
@@ -121,19 +121,19 @@ EXIF and GPS needs it; only the chosen album is read and nothing is ever deleted
   sweep delete files the sync still needs, and `discardFiles` refuses anything outside
   `ll-sync-export`. Both directories are excluded from backup.
 - Wi-Fi session: the uploader has a second background `URLSession`
-  (`com.tesarsoft.tinyglow.upload.wifi`, `allowsCellularAccess = false`). Sync uploads pass
+  (`app.tinyglow.upload.wifi`, `allowsCellularAccess = false`). Sync uploads pass
   `wifiOnly: true` unless the parent allows cellular. iCloud original downloads follow the system
   cellular setting and are not controlled by the app.
-- Background refresh: `BGAppRefreshTask` id `com.tesarsoft.tinyglow.sync` (listed in
+- Background refresh: `BGAppRefreshTask` id `app.tinyglow.sync` (listed in
   `BGTaskSchedulerPermittedIdentifiers`). iOS decides when it runs, often never, so launch,
   foreground and Sync now are the real triggers. The simulator cannot fire it from the shell. Run
   the app from Xcode, pause, and at the LLDB prompt enter:
-  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.tinyglow.sync"]`
+  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"app.tinyglow.sync"]`
   then resume. Treat this as a manual check; unit tests cover the JS path.
 - XCUITest: the Photos alert is a system alert, so the e2e test taps it through
   `XCUIApplication(bundleIdentifier: "com.apple.springboard")` and presses **Allow Full Access**
   (not "Limited Access"; the app sets `PHPhotoLibraryPreventAutomaticLimitedAccessAlert`).
-  `simctl privacy booted grant photos com.tesarsoft.tinyglow` is a shortcut that skips the alert.
+  `simctl privacy booted grant photos app.tinyglow` is a shortcut that skips the alert.
 
 ## Google import on devices
 

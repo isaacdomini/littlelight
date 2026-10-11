@@ -24,7 +24,7 @@ describe("worker loadConfig: step 9 push settings (pushEnvSchema)", () => {
     const c = loadConfig(env);
     expect(c.PUSH_PROVIDER).toBe("none");
     expect(c.APNS_ENVIRONMENT).toBe("sandbox");
-    expect(c.APNS_BUNDLE_ID).toBe("com.tesarsoft.tinyglow");
+    expect(c.APNS_BUNDLE_ID).toBe("app.tinyglow");
     expect(c.PUSH_PHOTOS_DEBOUNCE_SEC).toBe(600);
     expect(c.PUSH_SHARE_DEBOUNCE_SEC).toBe(60);
     expect(c.PUSH_MIN_GAP_MIN).toBe(60);

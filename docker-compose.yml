@@ -1,29 +1,39 @@
 # Tinyglow production stack (on-prem server, reached only through Cloudflare Tunnel).
 #
 # cloudflared runs OUTSIDE this file (on the host, or on another machine on the LAN). Exactly two
-# ports are published, bound to 127.0.0.1 by default so only the host-run cloudflared reaches them:
-#   web     nginx :80        -> ${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}
-#   storage MinIO API :9000  -> ${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}
+# ports are published, bound to 127.0.0.1 by default so only a host-run cloudflared reaches them:
+#   web     nginx :80        -> ${WEB_BIND:-127.0.0.1}:${WEB_PORT:-6987}
+#   storage MinIO API :9000  -> ${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-16987}
 # Tunnel public hostnames (ingress reference: docker/cloudflared/config.example.yml):
 #   tinyglow.app        -> http://localhost:${WEB_PORT}
 #   files.tinyglow.app  -> http://localhost:${STORAGE_PORT}, path ^/<S3_BUCKET>/. only,
 #                                       NO "HTTP Host Header" override (presigned signatures are
 #                                       validated against the original Host)
-# Nothing else is published: not the MinIO console (9001), db, auth, api, mail or worker. If
-# cloudflared runs on another machine, set WEB_BIND / STORAGE_BIND to this server's LAN address
-# and firewall both ports to that machine only: whoever reaches them bypasses Cloudflare and can
-# send their own CF-Connecting-IP (the client IP the api and GoTrue rate-limit on).
+# Nothing else is published: not the MinIO console (9001), db, auth, api, mail or worker.
+# WEB_BIND / STORAGE_BIND: 127.0.0.1 when cloudflared runs on this host (package or container
+# with network_mode: host). When it runs in a bridged container or on another machine, use this
+# server's LAN address (or 0.0.0.0) and firewall both ports to cloudflared only: whoever reaches
+# them bypasses Cloudflare and can send their own CF-Connecting-IP (the client IP the api and
+# GoTrue rate-limit on).
 #
+# Server layout (deploy/README.md): this repo is cloned to servers/tinyglow/app/ and started from
+# servers/tinyglow/ through deploy/server-compose.example.yml (Compose `include:`), with the .env
+# in servers/tinyglow/. Running it directly from the repo root works the same way:
 #   cp .env.example .env && $EDITOR .env      # fill every value; never commit .env
 #   docker compose up -d --build --wait
 #   docker compose ps
-#   docker compose down                        # keeps db-data, STORAGE_PATH and BACKUP_PATH
+#   docker compose down                        # keeps every host folder below
 #
-# Host folders (create them first; Compose refuses to start if the variables are unset):
-#   STORAGE_PATH  MinIO data (the photo library), bind-mounted at /data (storage) and read-only
-#                 at /storage (worker, disk-usage alert only)
-#   BACKUP_PATH   nightly pg_dump archives (docker/backup/pg-backup.sh)
-# Off-site copies of both folders: docker/backup/offsite-backup.sh from host cron.
+# Host folders: ALL persistent data lives in them (there are no named volumes). Each variable is
+# required (Compose refuses to start when it is unset) and each folder must already exist
+# (create_host_path: false, so an unmounted data disk fails the start instead of Docker
+# creating empty folders on the root filesystem). Recommended layout, see .env.example:
+#   DB_DATA_PATH  /mnt/data/tinyglow/postgres  Postgres cluster (PGDATA), owner 999:999, mode 700
+#   STORAGE_PATH  /mnt/data/tinyglow/photos    MinIO data (the photo library), at /data (storage)
+#                                              and read-only at /storage (worker, disk alert)
+#   BACKUP_PATH   /mnt/data/tinyglow/backups   nightly pg_dump archives (docker/backup/pg-backup.sh)
+# Off-site copies of photos + backups: docker/backup/offsite-backup.sh from host cron (the
+# postgres folder is not copied raw: the nightly dump is the consistent copy).
 #
 # Configuration: .env (from .env.example) is used ONLY for ${VAR} interpolation in this file. No
 # service gets the whole file (no env_file): each one receives exactly the variables listed in
@@ -172,8 +182,15 @@ services:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: tinyglow
+    # PGDATA = /var/lib/postgresql/data (image default) = DB_DATA_PATH on the host. The image's
+    # entrypoint starts as root, chowns the folder to postgres (uid 999) and initdb's it when empty;
+    # pre-creating it as 999:999 mode 700 also covers file systems where root cannot chown.
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - type: bind
+        source: ${DB_DATA_PATH:?Set DB_DATA_PATH to the Postgres data folder}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
     shm_size: 256m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d tinyglow"]
@@ -243,7 +260,7 @@ services:
       API_EXTERNAL_URL: ${PUBLIC_URL:-https://tinyglow.app}/auth
       GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:-https://tinyglow.app/**}
       # Rate-limit on the client IP Cloudflare sets (clients cannot bypass Cloudflare: the only
-      # published ports are bound to 127.0.0.1 for the host-run cloudflared, see the header).
+      # published ports are reachable by cloudflared only, see WEB_BIND in the header).
       # OAuth redirects arrive via cloudflared -> nginx, which passes the header through; the
       # api, which calls GoTrue directly for everything else, forwards the client's
       # CF-Connecting-IP, so GoTrue's own per-IP limits (defaults: 30 codes / 30 verifies per
@@ -328,11 +345,15 @@ services:
       # step-9.md 2.3). Override the whole comma list with S3_CORS_ALLOW_ORIGIN.
       MINIO_API_CORS_ALLOW_ORIGIN: ${S3_CORS_ALLOW_ORIGIN:-${PUBLIC_URL:-https://tinyglow.app},capacitor://localhost,https://localhost}
     volumes:
-      - ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}:/data
+      - type: bind
+        source: ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}
+        target: /data
+        bind:
+          create_host_path: false
     # S3 API only, for the host-run cloudflared (files. hostname). The console (:9001) is never
     # published.
     ports:
-      - "${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-9000}:9000"
+      - "${STORAGE_BIND:-127.0.0.1}:${STORAGE_PORT:-16987}:9000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
       interval: 10s
@@ -464,7 +485,7 @@ services:
       # Push notifications (docs/plans/step-9.md 2.8), worker only: none (default; nothing is
       # sent until the keys exist) | live (APNs for iOS devices if APNS_* are set, FCM for
       # Android if FCM_* are set). `fake` is refused when NODE_ENV=production. Empty values =
-      # unset / code defaults (APNS_BUNDLE_ID = com.tesarsoft.tinyglow; *_BASE_URL = the
+      # unset / code defaults (APNS_BUNDLE_ID = app.tinyglow; *_BASE_URL = the
       # real Apple/Google endpoints, mock servers in testing only).
       PUSH_PROVIDER: ${PUSH_PROVIDER:-none}
       APNS_TEAM_ID: ${APNS_TEAM_ID:-}
@@ -505,6 +526,8 @@ services:
         source: ${STORAGE_PATH:?Set STORAGE_PATH to the mounted photo folder}
         target: /storage
         read_only: true
+        bind:
+          create_host_path: false
     # Two concurrent 48 MP HEIC decodes are ~800 MB RSS (INGEST_CONCURRENCY=2).
     mem_limit: 2g
     depends_on:
@@ -544,7 +567,7 @@ services:
       # Extra connect-src origins (space-separated), e.g. the Sentry ingest origin.
       WEB_CSP_CONNECT_EXTRA: ${WEB_CSP_CONNECT_EXTRA:-}
     ports:
-      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-6987}:80"
     depends_on:
       api:
         condition: service_started
@@ -576,7 +599,11 @@ services:
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
       TZ: ${TZ:-UTC}
     volumes:
-      - ${BACKUP_PATH:?Set BACKUP_PATH to a backup folder}:/backups
+      - type: bind
+        source: ${BACKUP_PATH:?Set BACKUP_PATH to a backup folder}
+        target: /backups
+        bind:
+          create_host_path: false
       - ./docker/backup:/scripts:ro
     entrypoint: ["/bin/bash", "/scripts/pg-backup.sh"]
     healthcheck:
@@ -587,6 +614,3 @@ services:
       retries: 1
       start_period: 30m
       start_interval: 10s
-
-volumes:
-  db-data:

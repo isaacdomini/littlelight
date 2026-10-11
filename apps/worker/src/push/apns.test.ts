@@ -31,7 +31,7 @@ describe("apns", () => {
     teamId: "TEAM123456",
     keyId: "KEY1234567",
     privateKeyPem: keys.ecPem,
-    bundleId: "com.tesarsoft.tinyglow",
+    bundleId: "app.tinyglow",
     baseUrl: mock.baseUrl,
     ...extra,
   });
@@ -51,7 +51,7 @@ describe("apns", () => {
     const seen = mock.seen[before];
     expect(seen?.headers[":method"]).toBe("POST");
     expect(seen?.headers[":path"]).toBe(`/3/device/${hex("c0ffee")}`);
-    expect(seen?.headers["apns-topic"]).toBe("com.tesarsoft.tinyglow");
+    expect(seen?.headers["apns-topic"]).toBe("app.tinyglow");
     expect(seen?.headers["apns-push-type"]).toBe("alert");
     expect(seen?.headers["apns-priority"]).toBe("5");
     expect(seen?.headers["apns-collapse-id"]).toBe(`photos_analyzed:${BABY}`);

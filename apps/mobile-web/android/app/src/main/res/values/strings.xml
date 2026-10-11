@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Tinyglow</string>
     <string name="title_activity_main">Tinyglow</string>
-    <string name="package_name">com.tesarsoft.tinyglow</string>
-    <string name="custom_url_scheme">com.tesarsoft.tinyglow</string>
+    <string name="package_name">app.tinyglow</string>
+    <string name="custom_url_scheme">app.tinyglow</string>
 </resources>

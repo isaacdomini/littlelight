@@ -10,7 +10,7 @@ const liveReloadUrl = process.env.CAP_LIVE_RELOAD_URL;
 const mixedContent = process.env.CAP_DEV_MIXED_CONTENT === "1";
 
 const config: CapacitorConfig = {
-  appId: "com.tesarsoft.tinyglow",
+  appId: "app.tinyglow",
   appName: "Tinyglow",
   webDir: "dist",
   loggingBehavior: "none",

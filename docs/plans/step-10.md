@@ -50,7 +50,7 @@ What exists and is reused (verified in the repo):
   refs, details)`, `NativeFileRef {path,name,mime,size}`, `Uploader.putFile` (native background
   PUT), `copyIntoUploadCache`/`deleteNativeCopy` (`platform/native/files.ts`), `pickPhotos` via
   `@capawesome/capacitor-file-picker` (`skipTranscoding: true`, originals).
-- iOS: `TinyglowUploader.swift` (background `URLSession` `com.tesarsoft.tinyglow.upload`,
+- iOS: `TinyglowUploader.swift` (background `URLSession` `app.tinyglow.upload`,
   `handleEventsForBackgroundURLSession` in `AppDelegate`), `FreshInstall` Keychain wipe,
   `excludeFromBackup()` for `Caches/ll-*`, `Info.plist` + `Info-Debug.plist` kept equal except two
   keys (`check-ios-plists.ts`), `PrivacyInfo.xcprivacy` (Photos, Precise Location declared).
@@ -91,7 +91,7 @@ manifest, App Store privacy label, Data Safety answers, review notes and `NATIVE
 
 ```
 iPhone  TinyglowPhotoSync (Swift, PhotoKit) ── listPendingAssets/exportAssets(sha256) ──▶ src/platform/native/photoSync.ts
-        BGAppRefreshTask "com.tesarsoft.tinyglow.sync" ── event backgroundSync ──▶ photoSync.runSync('background')
+        BGAppRefreshTask "app.tinyglow.sync" ── event backgroundSync ──▶ photoSync.runSync('background')
         photoSync ──▶ UploadManager.addNative(lane:'sync', wifiOnly) ──▶ existing /uploads/* + TinyglowUploader (Wi-Fi-only session)
         photoSync ──▶ POST/PATCH /import-sources (status counters only; no PHAsset ids)
 
@@ -306,7 +306,7 @@ CREATE INDEX ON public.import_items (status) WHERE status IN ('pending','downloa
   `IMPORT_ALBUM_TITLE_MAX = 120`, `SYNC_FOREGROUND_BATCH = 50`, `SYNC_BACKGROUND_BATCH = 25`,
   `SYNC_LANE_CONCURRENCY = 2`, `SYNC_ASSET_MAX_ATTEMPTS = 3`, `SYNC_MIN_INTERVAL_SEC = 60` (a
   resume within a minute of the last run does nothing), `SYNC_BG_TASK_ID =
-  "com.tesarsoft.tinyglow.sync"`, `GOOGLE_PICKER_SCOPE =
+  "app.tinyglow.sync"`, `GOOGLE_PICKER_SCOPE =
   "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"`, `GOOGLE_ENDPOINTS = {
   AUTH: "https://accounts.google.com/o/oauth2/v2/auth", TOKEN:
   "https://oauth2.googleapis.com/token", REVOKE: "https://oauth2.googleapis.com/revoke", PICKER:
@@ -399,11 +399,11 @@ file name, a URL or an asset identifier outside the ledger file.**
   `didFinishLaunching` (before the scene exists), handler ⇒ `LLPhotoSync.shared.handle(task)`;
   `handleEventsForBackgroundURLSession` accepts both uploader identifiers (below).
 - `TinyglowUploader.swift`: `upload({ url, path, wifiOnly? })`; when `wifiOnly` is true the
-  task goes on a second background session `com.tesarsoft.tinyglow.upload.wifi`
+  task goes on a second background session `app.tinyglow.upload.wifi`
   (`allowsCellularAccess = false`, otherwise identical). `cancel` searches both.
 - Plists (**both** `Info.plist` and `Info-Debug.plist`, kept equal; `check-ios-plists.ts` still
   passes): `UIBackgroundModes = [fetch]`, `BGTaskSchedulerPermittedIdentifiers =
-  [com.tesarsoft.tinyglow.sync]`, `PHPhotoLibraryPreventAutomaticLimitedAccessAlert = true`
+  [app.tinyglow.sync]`, `PHPhotoLibraryPreventAutomaticLimitedAccessAlert = true`
   (the app presents its own flow), `NSPhotoLibraryUsageDescription` rewritten: "Tinyglow uses
   your photo library to upload the photos you choose. If you turn on album sync, it also imports
   new photos from the one album you pick, so you don't have to add them by hand." `project.pbxproj`:
@@ -746,7 +746,7 @@ ai-engineer has no task: the step makes no model call and leaves `packages/ai`, 
   Wi-Fi-only session identifier handled in `handleEventsForBackgroundURLSession`.
 - Done-when: `pnpm --filter @tinyglow/mobile-web ios:build:sim` succeeds; `check:ios-plists`
   passes; `PlistBuddy -c 'Print :UIBackgroundModes' …/App.app/Info.plist` lists `fetch` and
-  `:BGTaskSchedulerPermittedIdentifiers` lists `com.tesarsoft.tinyglow.sync` on **both**
+  `:BGTaskSchedulerPermittedIdentifiers` lists `app.tinyglow.sync` on **both**
   configurations; `plutil -lint` on both source plists; `grep -nE 'print\(|NSLog\(|os_log'
   apps/mobile-web/ios/App/App/TinyglowPhotoSync.swift` ⇒ exit 1; a throwaway JS call from the
   simulator (`TinyglowPhotoSync.listAlbums()`) returns `{albums: []}` on a fresh simulator and
@@ -1013,10 +1013,10 @@ pnpm e2e:upload-gate && pnpm e2e:share-gate && pnpm e2e:export-gate && pnpm e2e:
 ```sh
 UDID=$(xcrun simctl list devices -j | node -e '…same lookup as ios-gate.sh…')   # iPhone 17 / iOS 26.4
 pnpm --filter @tinyglow/mobile-web native:sync:ios && pnpm --filter @tinyglow/mobile-web ios:build:sim
-xcrun simctl boot "$UDID"; xcrun simctl privacy "$UDID" reset photos com.tesarsoft.tinyglow
+xcrun simctl boot "$UDID"; xcrun simctl privacy "$UDID" reset photos app.tinyglow
 xcrun simctl install "$UDID" apps/mobile-web/ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app
 # runner may use PhotoKit without a prompt (its bundle id is the UI-test bundle id + ".xctrunner")
-xcrun simctl privacy "$UDID" grant photos com.tesarsoft.tinyglow.LLUITests.xctrunner
+xcrun simctl privacy "$UDID" grant photos app.tinyglow.uitests.xctrunner
 # 1. seed the library: 3 HEIC (one with GPS, one with a tz offset) + 2 JPEG
 xcrun simctl addmedia "$UDID" e2e/fixtures/heic/gps-640x480.heic e2e/fixtures/heic/datetime-tz.heic e2e/fixtures/heic/plain-640x480.heic e2e/fixtures/bakeoff-sample/sample-1-gradient.jpg e2e/fixtures/bakeoff-sample/sample-2-blocks.jpg
 uitest testCreateAlbum LL_ALBUM="LL Sync Test" LL_ALBUM_COUNT=5
@@ -1046,13 +1046,13 @@ Then (`$PSQL` as in 4.2, `M=<maya>`):
   becomes `launch` after a run (or the min-interval skip leaves `manual`; accept either within
   60 s of the previous run).
 - Sign out (ios-gate helper) ⇒ `paused = t, last_error = 'signed_out'`; the ledger directory is
-  gone (`xcrun simctl get_app_container "$UDID" com.tesarsoft.tinyglow data` → no
+  gone (`xcrun simctl get_app_container "$UDID" app.tinyglow data` → no
   `Library/Application Support/ll-sync/*.json`); `Caches/ll-uploads` empty.
 - Log scan: `xcrun simctl spawn "$UDID" log show --last 20m --predicate 'process == "App"' |
   grep -E "ll-uploads/|X-Amz-Signature|eyJ[A-Za-z0-9_-]{10,}|-?[0-9]{1,3}\.[0-9]{3,},\s*-?[0-9]{1,3}\.[0-9]{3,}|/var/mobile/Media"; echo "exit $?"` ⇒ exit 1; api + worker logs as in 4.3.10.
 - Manual checklist printed by the gate: **background refresh** — with the app running under
   Xcode, pause and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler]
-  _simulateLaunchForTaskWithIdentifier:@"com.tesarsoft.tinyglow.sync"]`, resume ⇒ one batch
+  _simulateLaunchForTaskWithIdentifier:@"app.tinyglow.sync"]`, resume ⇒ one batch
   imports and `last_trigger = 'background'`; cannot be automated from the shell (best effort by
   design, D13). Wi-Fi only: Settings → simulate "cellular" is not possible on the simulator; the
   unit test covers the gate; verify on a device in part B.

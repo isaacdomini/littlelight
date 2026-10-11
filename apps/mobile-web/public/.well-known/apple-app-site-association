@@ -2,7 +2,7 @@
   "applinks": {
     "details": [
       {
-        "appIDs": ["APPLE_TEAM_ID.com.tesarsoft.tinyglow"],
+        "appIDs": ["APPLE_TEAM_ID.app.tinyglow"],
         "components": [{ "/": "/invite/*" }, { "/": "/s/*" }, { "/": "/signin/native*" }]
       }
     ]
