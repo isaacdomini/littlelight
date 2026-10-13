@@ -269,9 +269,17 @@ public class TinyglowUploaderPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 final class TinyglowViewController: CAPBridgeViewController {
+    // Live updates: settle the OTA launch decision (and Capacitor's persisted serverBasePath)
+    // before Capacitor reads it in super.instanceDescriptor() (TinyglowUpdater.swift).
+    override func instanceDescriptor() -> InstanceDescriptor {
+        LLUpdater.prepareLaunch()
+        return super.instanceDescriptor()
+    }
+
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(TinyglowUploaderPlugin())
         bridge?.registerPluginInstance(TinyglowPhotoSyncPlugin())
         bridge?.registerPluginInstance(TinyglowPasskeysPlugin())
+        bridge?.registerPluginInstance(TinyglowUpdaterPlugin())
     }
 }

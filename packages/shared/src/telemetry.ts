@@ -20,7 +20,8 @@ import { SHARE_PATH } from "./constants";
 //    Picker's token shapes, Google media / Picker URLs, OAuth `code=`/`state=` pairs, native
 //    upload-cache, share-staging and album-sync paths, photo-library paths and PHAsset
 //    identifiers, and (step 12, video) worker scratch paths, QuickTime location tags and ISO 6709
-//    coordinate strings; strings are capped at `TELEMETRY_MAX_STRING_CHARS`;
+//    coordinate strings, and (step 14, live updates) `manifestJson` / signing-key pairs and
+//    base64 EC private keys; strings are capped at `TELEMETRY_MAX_STRING_CHARS`;
 // 4. walks at most `TELEMETRY_MAX_DEPTH` levels (deeper values become a marker), caps arrays and
 //    objects, cuts cycles, and copies: the input is never mutated.
 // The output of `scrubTelemetryEvent` is stable under a second pass (idempotent).
@@ -180,6 +181,19 @@ export const TELEMETRY_SCRUB_PATTERNS = Object.freeze({
    */
   webauthnPair:
     /\b(clientDataJSON|attestationObject|authenticatorData|signature|rawId|userHandle|challenge(?:_?id)?)(["']?\s*[:=]\s*["']?)(?!\[)[^\s"'&,;)}\]]+/i,
+  /**
+   * Live-update material written as `key=value` / `key: value` / `"key":"value"` (step 14,
+   * docs/plans/step-14.md 2.3): `manifestJson` and `APP_UPDATE_SIGNING_KEY_BASE64`. Group 1 (the
+   * key) and 2 (the separator) are kept; the value is replaced (a JSON value starting with `{`:
+   * the rest of the line). `signature` is `webauthnPair`'s.
+   */
+  appUpdatePair:
+    /\b(manifestJson|APP_UPDATE_SIGNING_KEY_BASE64)(["']?\s*[:=]\s*["']?)(?!\[)(?:\{[^\n]*|[^\s"'&,;)}\]]+)/i,
+  /**
+   * An EC P-256 private key as base64 PKCS#8 DER (the live-update signing key's fixed
+   * 48-character prefix, then the rest of the base64 run), with or without a key name.
+   */
+  ecPrivateKeyPkcs8: /MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg[A-Za-z0-9+/=]*/,
   /** Presigned-URL parameters: `X-Amz-Signature=…`, `X-Amz-Credential=…`, SigV2 `Signature=…`. */
   amzParam: /\b(X-Amz-[A-Za-z-]+|AWSAccessKeyId|Signature|Credential)=[^&\s"'<>]+/i,
   /**
@@ -286,6 +300,7 @@ type Replacer = (match: string, ...groups: string[]) => string;
  * emails so user-info (`user:pass@host`) is removed as a whole.
  */
 const STRING_RULES: ReadonlyArray<readonly [RegExp, Replacer]> = [
+  [withGlobalFlag(P.ecPrivateKeyPkcs8), () => "[private-key]"],
   [withGlobalFlag(P.jwt), () => "[jwt]"],
   [withGlobalFlag(P.googleAccessToken), () => REDACTED],
   [withGlobalFlag(P.googleRefreshToken), () => REDACTED],
@@ -301,6 +316,7 @@ const STRING_RULES: ReadonlyArray<readonly [RegExp, Replacer]> = [
   [withGlobalFlag(P.iso6709), () => "[coords]"],
   [withGlobalFlag(P.authCredential), (_m, scheme) => `${scheme} ${REDACTED}`],
   [withGlobalFlag(P.webauthnPair), (_m, key, sep) => `${key}${sep}${REDACTED}`],
+  [withGlobalFlag(P.appUpdatePair), (_m, key, sep) => `${key}${sep}${REDACTED}`],
   [withGlobalFlag(P.amzParam), (_m, name) => `${name}=${REDACTED}`],
   [withGlobalFlag(P.secretPair), (_m, key, sep) => `${key}${sep}${REDACTED}`],
   [withGlobalFlag(P.pgRowDetail), (_m, lead, space) => `${lead}${space}(${REDACTED})`],
@@ -396,6 +412,9 @@ const SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   "challengeid",
   "publickey",
   "credentialid",
+  // Live updates (step 14): the signed manifest text and the signing key (`signature` above).
+  "manifestjson",
+  "appupdatesigningkeybase64",
   // Photo import (step 10): Google capabilities and identifiers, device-only identifiers, parent text.
   "baseurl",
   "pickeruri",

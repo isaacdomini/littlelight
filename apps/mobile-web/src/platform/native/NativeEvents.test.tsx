@@ -27,6 +27,8 @@ const auth = vi.hoisted(() => ({ me: { user: {} } as unknown, setCurrentBabyId: 
 vi.mock("@capacitor/app", () => ({ App }));
 vi.mock("./push", () => push);
 vi.mock("./session", () => session);
+const updater = vi.hoisted(() => ({ checkForUpdate: vi.fn() }));
+vi.mock("./appUpdate", () => updater);
 vi.mock("../../auth/AuthProvider", () => ({
   useAuth: () => ({ me: auth.me, setCurrentBabyId: auth.setCurrentBabyId }),
 }));
@@ -63,6 +65,7 @@ beforeEach(() => {
   });
   push.refreshPushRegistration.mockReset().mockResolvedValue(undefined);
   session.refreshIfNeeded.mockReset().mockResolvedValue(undefined);
+  updater.checkForUpdate.mockReset().mockResolvedValue("up_to_date");
   auth.me = { user: {} };
   auth.setCurrentBabyId.mockReset();
   assign.mockReset();
@@ -279,6 +282,66 @@ describe("NativeEvents: lifecycle", () => {
     push.refreshPushRegistration.mockRejectedValue(new Error("nope"));
     renderApp(<NativeEvents />);
     await waitFor(() => expect(push.refreshPushRegistration).toHaveBeenCalled());
+  });
+});
+
+describe("NativeEvents: live-update checks (step 14)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("checks for an update 10 s after sign-in (launch), not before", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+    renderApp(<NativeEvents />);
+    await ready();
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(updater.checkForUpdate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_100);
+    await waitFor(() => expect(updater.checkForUpdate).toHaveBeenCalledWith("launch"));
+    expect(updater.checkForUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("no launch check when signed out, or when unmounted before 10 s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+    auth.me = null;
+    renderApp(<NativeEvents />);
+    await ready();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(updater.checkForUpdate).not.toHaveBeenCalled();
+    cleanup();
+    auth.me = { user: {} };
+    renderApp(<NativeEvents />);
+    await ready();
+    cleanup();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(updater.checkForUpdate).not.toHaveBeenCalled();
+  });
+
+  it("resume: session refresh first, then a resume check (also when the refresh fails)", async () => {
+    renderApp(<NativeEvents />);
+    await ready();
+    fire("resume", {});
+    await waitFor(() => expect(updater.checkForUpdate).toHaveBeenCalledWith("resume"));
+    expect(session.refreshIfNeeded.mock.invocationCallOrder[0]).toBeLessThan(
+      updater.checkForUpdate.mock.invocationCallOrder[0] as number,
+    );
+    updater.checkForUpdate.mockClear();
+    session.refreshIfNeeded.mockRejectedValue(new Error("offline"));
+    fire("resume", {});
+    await waitFor(() => expect(updater.checkForUpdate).toHaveBeenCalledWith("resume"));
+  });
+
+  it("a rejecting check never breaks the app", async () => {
+    updater.checkForUpdate.mockRejectedValue(new Error("boom"));
+    renderApp(<NativeEvents />);
+    await ready();
+    fire("resume", {});
+    await waitFor(() => expect(updater.checkForUpdate).toHaveBeenCalled());
+  });
+
+  it("on the web nothing is checked", async () => {
+    setNativePlatform(null);
+    renderApp(<NativeEvents />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(updater.checkForUpdate).not.toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { APP_UPDATE_BASE_URL_MESSAGE, isAppUpdateBaseUrl } from "./app-update";
 import { emailSchema, FAMILIES_PER_IP_PER_DAY_DEFAULT, NEVER_BLOCKED_EMAIL_DOMAINS } from "./auth";
 import { EXPORT_MAX_BYTES_DEFAULT } from "./constants";
 import type { MediaUrlGuardOptions } from "./google-photos";
@@ -930,3 +931,46 @@ export const abuseEnvSchema = z.object({
   EMAIL_DOMAIN_ALLOWLIST: domainListSchema(false),
 });
 export type AbuseEnv = z.infer<typeof abuseEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Live updates (docs/plans/step-14.md 2.3, 2.6, D2, D7). api only: the signing key must reach no
+// other service (`check-compose-keys.mjs`). Errors name the field, never the value.
+// ---------------------------------------------------------------------------------------------
+
+/** Where the api fetches the web image's manifest over the Compose network. */
+export const APP_UPDATE_SOURCE_URL_DEFAULT = "http://web/app-update/manifest.json";
+
+/** Like `emptyAsUndefined`, also for whitespace-only strings (a pasted key line). */
+const blankAsUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
+
+/**
+ * api live-update settings:
+ * - `APP_UPDATE_ENABLED` (stringbool, default true): `false` ⇒ every check answers `disabled`.
+ * - `APP_UPDATE_SIGNING_KEY_BASE64`: base64 PKCS#8 DER of the EC P-256 private key (trimmed).
+ *   Unset or empty ⇒ feature off (`disabled`). Its shape and public half are checked by the
+ *   api's signer, not here: a wrong key turns the feature off with one log line, it does not stop
+ *   the api.
+ * - `APP_UPDATE_SOURCE_URL`: the manifest upstream (default `APP_UPDATE_SOURCE_URL_DEFAULT`).
+ * - `APP_UPDATE_FILES_BASE_URL`: the signed `baseUrl` (default `PUBLIC_URL`, resolved by the api);
+ *   trailing slashes removed, then the `isAppUpdateBaseUrl` rules apply.
+ */
+export const appUpdateEnvSchema = z.object({
+  APP_UPDATE_ENABLED: z.preprocess(emptyAsUndefined, z.stringbool().default(true)),
+  APP_UPDATE_SIGNING_KEY_BASE64: z.preprocess(
+    blankAsUndefined,
+    z.string().trim().min(1).max(4096).optional(),
+  ),
+  APP_UPDATE_SOURCE_URL: z.preprocess(
+    emptyAsUndefined,
+    z.url({ protocol: /^https?$/ }).default(APP_UPDATE_SOURCE_URL_DEFAULT),
+  ),
+  APP_UPDATE_FILES_BASE_URL: z.preprocess(
+    emptyAsUndefined,
+    z
+      .url({ protocol: /^https?$/ })
+      .transform((u) => u.replace(/\/+$/, ""))
+      .refine(isAppUpdateBaseUrl, APP_UPDATE_BASE_URL_MESSAGE)
+      .optional(),
+  ),
+});
+export type AppUpdateEnv = z.output<typeof appUpdateEnvSchema>;

@@ -1,7 +1,10 @@
 import {
   type AbuseEnv,
+  APP_UPDATE_SOURCE_URL_DEFAULT,
+  type AppUpdateEnv,
   abuseEnvSchema,
   aiPipelineEnvSchema,
+  appUpdateEnvSchema,
   authEnvSchema,
   CHAT_DEFAULTS,
   type ChatEnv,
@@ -13,6 +16,7 @@ import {
   GOOGLE_IMPORT_DEFAULTS,
   type GoogleImportEnv,
   googleImportEnvSchema,
+  isAppUpdateBaseUrl,
   jwtEnvSchema,
   logEnvSchema,
   mailEnvSchema,
@@ -77,6 +81,11 @@ import { z } from "zod";
 // Step 13 (docs/plans/step-13.md 2.3, 2.4, 2.7) adds `AUTH_PASSKEYS_ENABLED` (`passkeyEnvSchema`,
 // default false; must equal GoTrue's `GOTRUE_PASSKEY_ENABLED`, both fed by one `.env` flag). Read
 // through `passkeysEnabled`: off ⇒ every passkey route answers 404 `passkey_disabled`.
+// Step 14 (docs/plans/step-14.md 2.3, 2.6, D7) adds live updates (`appUpdateEnvSchema`):
+// `APP_UPDATE_ENABLED` (default true), `APP_UPDATE_SIGNING_KEY_BASE64` (unset ⇒ feature off; a
+// bad or untrusted key also turns it off with one log line in `app-update/`, never a boot
+// failure), `APP_UPDATE_SOURCE_URL`, `APP_UPDATE_FILES_BASE_URL` (default `PUBLIC_URL`). Read
+// through `appUpdateSettings`; the key is never logged or serialized.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -146,7 +155,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   // Optional in the type (always set by `loadConfig`); read through `abuseSettings`.
   Partial<AbuseEnv> &
   // Optional in the type (always set by `loadConfig`); read through `passkeysEnabled`.
-  Partial<PasskeyEnv>;
+  Partial<PasskeyEnv> &
+  // Optional in the type (the key is absent unless configured); read through `appUpdateSettings`.
+  Partial<AppUpdateEnv>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -195,6 +206,7 @@ export function loadConfig(
     googleImportEnvSchema,
     abuseEnvSchema,
     passkeyEnvSchema,
+    appUpdateEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];
@@ -315,4 +327,38 @@ export function abuseSettings(config: Partial<AbuseEnv>): AbuseEnv {
  */
 export function passkeysEnabled(config: Partial<PasskeyEnv>): boolean {
   return config.AUTH_PASSKEYS_ENABLED ?? false;
+}
+
+/** Live-update settings the api reads (step 14, `appUpdateEnvSchema`), defaults filled in. */
+export interface AppUpdateSettings {
+  /** `APP_UPDATE_ENABLED` (default true; a config built by hand without it means on). */
+  enabled: boolean;
+  /** base64 PKCS#8 DER of the P-256 signing key; undefined ⇒ the feature is off. Secret. */
+  signingKeyBase64: string | undefined;
+  /** Where the web image's manifest is fetched (Compose network). */
+  sourceUrl: string;
+  /**
+   * The signed `baseUrl`: `APP_UPDATE_FILES_BASE_URL`, else `PUBLIC_URL`. `null` when the
+   * fallback `PUBLIC_URL` does not satisfy `isAppUpdateBaseUrl` (e.g. plain http on a LAN
+   * address): the feature is then off with one log line, the api still boots.
+   */
+  filesBaseUrl: string | null;
+  /** `NODE_ENV === "production"`: only the `prod` public key is trusted. */
+  production: boolean;
+}
+
+export function appUpdateSettings(
+  config: Partial<AppUpdateEnv> & Partial<Pick<ApiConfig, "PUBLIC_URL" | "NODE_ENV">>,
+): AppUpdateSettings {
+  const fallback = config.PUBLIC_URL?.replace(/\/+$/, "");
+  const filesBaseUrl =
+    config.APP_UPDATE_FILES_BASE_URL ??
+    (fallback !== undefined && isAppUpdateBaseUrl(fallback) ? fallback : null);
+  return {
+    enabled: config.APP_UPDATE_ENABLED ?? true,
+    signingKeyBase64: config.APP_UPDATE_SIGNING_KEY_BASE64,
+    sourceUrl: config.APP_UPDATE_SOURCE_URL ?? APP_UPDATE_SOURCE_URL_DEFAULT,
+    filesBaseUrl,
+    production: config.NODE_ENV === "production",
+  };
 }

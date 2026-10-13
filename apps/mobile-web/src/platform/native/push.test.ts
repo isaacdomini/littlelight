@@ -24,6 +24,9 @@ const PN = vi.hoisted(() => {
   });
 });
 vi.mock("@capacitor/push-notifications", () => ({ PushNotifications: PN }));
+// Shell facts from the live updater (step 14 D10): `null` = a shell without the updater plugin.
+const updaterInfo = vi.hoisted(() => vi.fn());
+vi.mock("./appUpdate", () => ({ updaterInfo }));
 
 const API = "https://api.example.test";
 const TOKEN = `apns-${"ab".repeat(32)}`;
@@ -47,6 +50,7 @@ async function load() {
 
 beforeEach(() => {
   listeners.clear();
+  updaterInfo.mockReset().mockResolvedValue(null);
   PN.checkPermissions.mockReset().mockResolvedValue({ receive: "granted" });
   PN.requestPermissions.mockReset().mockResolvedValue({ receive: "granted" });
   PN.register.mockReset().mockImplementation(async () => {
@@ -70,7 +74,7 @@ describe("pushSupported / pushPermission", () => {
   it("web: unsupported, and the plugin is never touched", async () => {
     setNativePlatform(null);
     const push = await load();
-    expect(push.pushSupported()).toBe(false);
+    expect(await push.pushSupported()).toBe(false);
     expect(await push.pushPermission()).toBe("unavailable");
     expect(await push.enablePush()).toBe("unavailable");
     expect(PN.checkPermissions).not.toHaveBeenCalled();
@@ -79,16 +83,41 @@ describe("pushSupported / pushPermission", () => {
 
   it("iOS is supported", async () => {
     setNativePlatform("ios");
-    expect((await load()).pushSupported()).toBe(true);
+    expect(await (await load()).pushSupported()).toBe(true);
   });
 
   it("Android is supported only in builds with VITE_PUSH_ANDROID=1 (google-services.json present)", async () => {
     setNativePlatform("android");
-    expect((await load()).pushSupported()).toBe(false);
+    expect(await (await load()).pushSupported()).toBe(false);
     vi.stubEnv("VITE_PUSH_ANDROID", "0");
-    expect((await load()).pushSupported()).toBe(false);
+    expect(await (await load()).pushSupported()).toBe(false);
     vi.stubEnv("VITE_PUSH_ANDROID", "1");
-    expect((await load()).pushSupported()).toBe(true);
+    expect(await (await load()).pushSupported()).toBe(true);
+  });
+
+  it("Android with the updater: the shell's runtime flag wins over the build flag (D10)", async () => {
+    setNativePlatform("android");
+    vi.stubEnv("VITE_PUSH_ANDROID", "1");
+    updaterInfo.mockResolvedValue({ nativeVersion: "1.4.0", androidPushConfigured: false });
+    expect(await (await load()).pushSupported()).toBe(false);
+    vi.stubEnv("VITE_PUSH_ANDROID", "0");
+    updaterInfo.mockResolvedValue({ nativeVersion: "1.4.0", androidPushConfigured: true });
+    const push = await load();
+    expect(await push.pushSupported()).toBe(true);
+    expect(await push.pushPermission()).toBe("granted");
+  });
+
+  it("Android: an updater probe that throws falls back to the build flag", async () => {
+    setNativePlatform("android");
+    vi.stubEnv("VITE_PUSH_ANDROID", "1");
+    updaterInfo.mockRejectedValue(new Error("no plugin"));
+    expect(await (await load()).pushSupported()).toBe(true);
+  });
+
+  it("web never asks the updater", async () => {
+    setNativePlatform(null);
+    await (await load()).pushSupported();
+    expect(updaterInfo).not.toHaveBeenCalled();
   });
 
   it("maps the OS permission states", async () => {
@@ -235,6 +264,26 @@ describe("enablePush", () => {
     const f = stubFetch(() => jsonResponse(device, 201));
     await push.enablePush();
     expect((f.calls[0]?.body as { appVersion?: string } | undefined)?.appVersion).toBe("1.0.0");
+  });
+
+  it("the shell's own version (updater info().nativeVersion) is sent, not the web build's (D10)", async () => {
+    setNativePlatform("ios");
+    vi.stubEnv("VITE_APP_VERSION", "1.2.3");
+    updaterInfo.mockResolvedValue({ nativeVersion: "2.0.1", androidPushConfigured: false });
+    const push = await load();
+    const f = stubFetch(() => jsonResponse(device, 201));
+    expect(await push.enablePush()).toBe("enabled");
+    expect((f.calls[0]?.body as { appVersion?: string } | undefined)?.appVersion).toBe("2.0.1");
+  });
+
+  it("an invalid native version falls back to VITE_APP_VERSION", async () => {
+    setNativePlatform("ios");
+    vi.stubEnv("VITE_APP_VERSION", "1.2.3");
+    updaterInfo.mockResolvedValue({ nativeVersion: "bad version!", androidPushConfigured: false });
+    const push = await load();
+    const f = stubFetch(() => jsonResponse(device, 201));
+    await push.enablePush();
+    expect((f.calls[0]?.body as { appVersion?: string } | undefined)?.appVersion).toBe("1.2.3");
   });
 
   it("never logs the device token or stores it", async () => {

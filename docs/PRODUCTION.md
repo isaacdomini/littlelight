@@ -10,7 +10,8 @@ This guide takes Tinyglow from this repo to a running production server. It assu
 Work through the parts in order. Parts A–F get the web app live. Parts G–I are optional features
 and the phone apps, and you can do them later. Part J is the routine for spotting and stopping
 free-tier abuse once families start using it. Part K covers videos: limits, disk planning and
-what to do when one gets stuck.
+what to do when one gets stuck. Part L covers live updates, which deliver web fixes to the phone
+apps without a store release.
 
 ---
 
@@ -224,7 +225,8 @@ cap of 200 photos waiting for approval per guest is a database setting, not a `.
 `VIDEO_CONCURRENCY=1`, `VIDEO_FFMPEG_THREADS=2`, `VIDEO_TRANSCODE_TIMEOUT_SEC=3600`, and the
 commented-out `WORKER_CPUS`) are right for a 4-core box; Part K says when to touch them. Passkeys
 start off (`AUTH_PASSKEYS_ENABLED=false`, `WEBAUTHN_RP_ID=tinyglow.app`, `PASSKEY_MAX_PER_USER=5`,
-empty `WEBAUTHN_NATIVE_ORIGINS`); G2 says when and how to turn them on.
+empty `WEBAUTHN_NATIVE_ORIGINS`); G2 says when and how to turn them on. Live updates need only
+the key line (Part L). Leave `APP_UPDATE_ENABLED=true` and `APP_UPDATE_FILES_BASE_URL` empty.
 
 Never set:
 - `GOOGLE_IMPORT_PROVIDER=fake` or `PUSH_PROVIDER=fake`; production refuses fake providers.
@@ -257,6 +259,9 @@ your tunnel → Public hostnames**:
 4. **Recommended:** in Caching → Configuration, turn on the **CSAM Scanning Tool**.
 5. **Email DNS:** add the SPF, DKIM (and ideally DMARC) records your SMTP provider gives you for
    `tinyglow.app`, so sign-in emails don't land in spam.
+6. **Don't let Cloudflare rewrite files.** Keep Rocket Loader, Auto Minify and Email Address
+   Obfuscation off for `tinyglow.app`. If they rewrite files, the phone apps refuse every live
+   update (Part L3).
 
 ---
 
@@ -362,6 +367,10 @@ Other commands also run from `~/servers/tinyglow`:
 
 `down` never deletes data: there are no Docker volumes, and everything is in `/mnt/data/tinyglow`.
 
+Browsers get the new web at once. With live updates on (Part L), the phone apps download it at
+their next check (launch or return to the app, at most every 6 hours) and switch to it on the
+following launch. Native changes still need a store release (L6).
+
 ---
 
 ## Part G: Optional features (add to `.env`, then `docker compose up -d`)
@@ -379,6 +388,7 @@ Other commands also run from `~/servers/tinyglow`:
 | **Sign in with Apple** | `GOTRUE_EXTERNAL_APPLE_ENABLED=true`, `APPLE_CLIENT_ID=<Services ID>,app.tinyglow`, `APPLE_CLIENT_SECRET` | Apple Developer → Services ID + Sign in with Apple key. The secret is an ES256 JWT you must regenerate every 6 months. Return URL `https://tinyglow.app/auth/callback`. |
 | **iPhone push** | `PUSH_PROVIDER=live`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY_BASE64` | Apple Developer → Keys → APNs key (.p8). Encode with `base64 -w0 AuthKey_XXXX.p8` (on a Mac, `base64 -i … \| tr -d '\n'`). |
 | **Android push** | `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_BASE64` | Firebase → Project settings → Service accounts → Generate key. Encode with `base64 -w0 service-account.json`. |
+| **Live updates for the phone apps** | `APP_UPDATE_SIGNING_KEY_BASE64` (the line you were given), `APP_UPDATE_ENABLED=true`, `APP_UPDATE_FILES_BASE_URL` empty | See Part L. Set it before the first store release. |
 | **App Store review login** | `REVIEW_ACCOUNT_EMAIL`, `REVIEW_ACCOUNT_CODE_HASH='scrypt$…'` (keep the single quotes) | `sh app/docker/tools/review-code-hash.sh`, then follow the "Store-review family" steps in `app/packages/db/README.md` |
 
 ### G1. Google Photos import
@@ -480,7 +490,9 @@ The phone apps use the same server. Shipping them needs your developer accounts:
    - Submit the privacy label and Data Safety answers from `store/`.
    - Decide whether to declare the push token as "Device ID".
 7. **Done when:** a TestFlight build and a Play internal build install, and an invite link and a
-   family share link open in the app.
+   family share link open in the app. The first store build already contains the updater, so
+   turn on live updates (Part L) before or with the release. From then on, web fixes reach these
+   apps without a new store build.
 
 **Still to verify on real devices:**
 - Passkeys on an iPhone (iOS 16+) and an Android phone with Google Play services: add one, sign
@@ -857,6 +869,163 @@ limit, which needs about 1.4 Mbit/s upstream (a slower connection sees pieces re
 default to Wi-Fi only for files over 50 MB). Playback is ordinary range requests on the MP4 copy
 via `files.tinyglow.app` with 30-minute links (family-link viewers get the playback copy only,
 never the original), and the cache-bypass rule from Part D keeps them out of Cloudflare's cache.
+
+---
+
+## Part L: Live updates
+
+The iPhone and Android apps are a native shell around the same web app the server serves. With
+live updates, a fix to the web part reaches installed apps without a store release:
+
+- The app asks the server for an update at launch and when it comes back to the foreground, at
+  most every 6 hours, and only while no upload or album sync is running.
+- The server signs the description of the current web build (file names, SHA-256 and size). The
+  app checks that signature against the public key built into it, downloads only the changed
+  files from `tinyglow.app` and checks every file's SHA-256 and size.
+- The new version starts on the **next launch** (or right away with Settings → About →
+  Restart). If it doesn't start within 10 seconds, the app goes back to the previous version on
+  its own and never offers that version again.
+- Anything that doesn't verify is thrown away and the app keeps the version it has. A failed
+  update never breaks the app.
+- On mobile data, updates over 2 MB wait for Wi-Fi.
+- Settings → About shows the app and web versions and has **Reset app files** (back to the web
+  that came with the store build).
+
+**Who gets it:** only app builds that contain the updater. The first store build (Part H) does,
+so live updates reach phones from that build on. Browsers always load the latest web anyway.
+
+### L1. Turn it on
+
+1. Add these lines to `~/servers/tinyglow/.env`. For the key, paste the
+   `APP_UPDATE_SIGNING_KEY_BASE64=…` line you were given once during setup. Its public half is
+   built into the apps as key `prod-2026-10`. Keep a copy in your password manager. It is never
+   in this repo or this guide.
+   ```sh
+   APP_UPDATE_SIGNING_KEY_BASE64=<the line you were given>
+   APP_UPDATE_ENABLED=true
+   APP_UPDATE_FILES_BASE_URL=
+   ```
+   Leave `APP_UPDATE_FILES_BASE_URL` empty: it then uses `PUBLIC_URL` (`https://tinyglow.app`),
+   where the web container already serves the files.
+2. Optional: check which public key the value belongs to. Run
+   `sh app/docker/tools/app-update-keygen.sh --public`, then paste the value (it isn't shown on
+   screen). The printed `# public SPKI:` must equal `APP_UPDATE_PUBLIC_KEYS.prod` in
+   `app/packages/shared/src/app-update.ts`.
+3. `docker compose up -d api`. Only the api reads the key. The web image already contains the
+   update description and is rebuilt by every `up -d --build`.
+4. `docker compose logs api | grep "app updates"` should show `app updates: on` with
+   `keyId: "prod-2026-10"`, then `app updates: source available` (table in L4).
+
+### L2. Check it
+
+```sh
+# What an app gets (the header is what the apps send). `native` is the app's build number,
+# shown in Settings → About as "App 1.0.0 (<build>)"; 1 is the first store build.
+curl -s 'https://tinyglow.app/api/app-update/manifest?platform=ios&native=1' -H 'X-Tinyglow-Client: native' | head -c 300; echo
+#   {"update":{"manifestJson":"{\"schema\":1,\"version\":\"…   = on and signing
+#   {"update":null,"reason":"…"}                                 = see the reasons below
+# Without the header (a browser): always "disabled", so browsers never treat this as an update.
+curl -s 'https://tinyglow.app/api/app-update/manifest?platform=ios&native=1'; echo
+#   {"update":null,"reason":"disabled"}
+curl -sI https://tinyglow.app/app-update/manifest.json | grep -i '^cache-control'
+#   Cache-Control: no-cache
+```
+
+| `reason` | Meaning | What to do |
+| --- | --- | --- |
+| `disabled` | The key is empty, `APP_UPDATE_ENABLED=false`, the api refused the key at start, or the request had no `X-Tinyglow-Client: native` header | Check the start-up line (L4) |
+| `unavailable` | The api couldn't read a valid update description from the web container | `docker compose logs api \| grep "app updates: source"`; usually `docker compose up -d --build web` |
+| `native_too_old` | The app build is older than `minNativeBuild` (L6) | The person needs the store update |
+| `up_to_date` | The app already runs this version (only when the app sends `current=`) | Nothing |
+
+**After the first deploy, and after any Cloudflare change**, check the files the way phones
+download them, through Cloudflare (from `~/servers/tinyglow`; uses the api container's Node and
+reads only public files):
+
+```sh
+docker compose exec -T api node --input-type=module - --base-url https://tinyglow.app < app/.github/scripts/check-web-app-update.mjs
+#   manifest ok (schema 1, N files, …, version <16 hex>), …, every file sha256+size match (N read)
+```
+
+A `sha256 mismatch` or `size … != manifest` line means something between the server and the
+phones rewrites files. Fix it with L3, or no phone will accept an update.
+
+### L3. Cloudflare settings that must stay off
+
+The apps accept a file only if its bytes are exactly what the server built. Cloudflare features
+that rewrite HTML, JavaScript, CSS or images change those bytes. Phones then refuse the update
+and stay on the version they have. Nothing breaks, but no update ever arrives. In the
+`tinyglow.app` zone, keep these **off**:
+
+- **Rocket Loader** (Speed → Optimization → Content Optimization)
+- **Auto Minify** for HTML, CSS and JS, if your dashboard still shows it
+- **Email Address Obfuscation** (Scrape Shield)
+- Also anything else that injects into or recompresses responses: Web Analytics "automatic
+  setup" (beacon injection), Zaraz, Polish and Mirage.
+
+Don't add a "Cache Everything" rule that covers `/app-update/`. The server already marks
+`/app-update/manifest.json` as `no-cache`, so a new web is visible at once. The L2 file check
+proves the settings are right.
+
+### L4. Start-up log lines
+
+`docker compose logs api | grep "app updates"` prints one of these after each api start:
+
+| Line | `outcome` | Meaning |
+| --- | --- | --- |
+| `app updates: on` | `on`, with `keyId` | Signing with that key |
+| `app updates: off` | `disabled` | `APP_UPDATE_ENABLED=false` (kill switch, L5) |
+| `app updates: off` | `no_key` | `APP_UPDATE_SIGNING_KEY_BASE64` is empty |
+| `app updates: off` | `key_invalid` | The value isn't a base64 EC P-256 key. Usually a paste error: quotes, a line break or a missing character |
+| `app updates: off` | `key_untrusted` | A valid key, but the apps don't trust it: not the `prod-2026-10` key (the dev key from `.env.dev` is refused in production). See L7 |
+| `app updates: off` | `base_url_invalid` | `APP_UPDATE_FILES_BASE_URL` (or `PUBLIC_URL`) is not a usable `https://` address |
+| `app updates: source available` | `ok` | The api read the web container's update description |
+| `app updates: source unavailable` | `unreachable`, `timeout`, `http_error` (+ `status`), `invalid_manifest` | The web container is down, restarting, or runs an image without the description (`http_error`, `status: 404` = an old web image: `docker compose up -d --build web`). `stale: true` = still serving the last good one, for up to 24 hours |
+
+Each check from a phone logs `app update check` with only `outcome` (`update`, `disabled`,
+`unavailable`, `native_too_old`, `up_to_date`) and `platform`. The key, the signature, the
+update description, build numbers and addresses are never logged.
+
+### L5. Turning it off
+
+Set `APP_UPDATE_ENABLED=false`, then run `docker compose up -d api`. Every app gets `disabled`
+and keeps the web it has. To move phones off a bad web version, deploy a fixed web (phones
+update to it as usual). A person can also tap Settings → About → Reset app files. A new store
+build also replaces any downloaded web.
+
+### L6. When you still need a store release
+
+Live updates carry only the web part (HTML, JavaScript, CSS, images). Anything native needs a
+store release:
+
+- adding or changing a Capacitor plugin, including the updater itself
+- permissions, `Info.plist` or `AndroidManifest.xml` changes, entitlements
+- iOS or Android SDK upgrades, a Capacitor upgrade
+- the app icon, splash screen or push setup
+
+When a store release adds something native that the new web relies on, bump
+`minNativeBuild.ios` / `minNativeBuild.android` in `app/apps/mobile-web/app-update.json` to the
+new build numbers, in the same commit as that web. Older apps then get `native_too_old` and keep
+their current web until they install the store update. CI refuses a `minNativeBuild` higher than
+the build numbers in the native projects, so bump those in the same release.
+
+### L7. Changing the signing key
+
+The apps trust only the public keys built into them. A new key therefore needs a new store build
+first. The server alone can't switch: the api refuses an untrusted key with `key_untrusted`
+(L4) and keeps the feature off.
+
+1. `sh app/docker/tools/app-update-keygen.sh` prints a new pair. Keep the private line safe.
+2. Add the new public key under a **new keyId** (for example `prod-2027-01`) to the `trusted`
+   map in `LLUpdateKeys.swift` and `UpdateKeys.java`, as an extra entry next to the current
+   `prod` constants. Ship that store build.
+3. Once most people run it, switch `APP_UPDATE_PUBLIC_KEYS.prod` in
+   `app/packages/shared/src/app-update.ts` and the `prod` constants in both native files to the
+   new keyId and key. You can keep the old key as an extra entry. CI checks that the three `prod`
+   entries agree. Then deploy, put the new line in `.env` and run `docker compose up -d api`.
+   Apps still on an older build refuse the new signatures and keep their current web until they
+   update from the store.
+4. If the key may have leaked, use the kill switch (L5) first. Then rotate.
 
 ---
 

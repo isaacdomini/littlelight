@@ -35,6 +35,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             try? fm.createDirectory(at: ledger, withIntermediateDirectories: true)
             targets.append(ledger)
         }
+        // Live-update bundles (TinyglowUpdater): Capacitor's Library/NoCloud/ionic_built_snapshots.
+        let noCloud = library.appendingPathComponent("NoCloud", isDirectory: true)
+        try? fm.createDirectory(at: noCloud, withIntermediateDirectories: true)
+        targets.append(noCloud)
         for name in ["ll-uploads", "ll-share", "ll-sync-export"] {
             let dir = caches.appendingPathComponent(name, isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)

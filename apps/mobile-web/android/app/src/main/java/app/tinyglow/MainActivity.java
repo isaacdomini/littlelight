@@ -6,6 +6,7 @@ import android.os.Build;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 import app.tinyglow.passkeys.TinyglowPasskeysPlugin;
+import app.tinyglow.update.TinyglowUpdaterPlugin;
 import app.tinyglow.uploader.TinyglowUploaderPlugin;
 
 public class MainActivity extends BridgeActivity {
@@ -14,6 +15,8 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(TinyglowUploaderPlugin.class);
         registerPlugin(TinyglowPasskeysPlugin.class);
+        // Live updates: its load() settles Capacitor's persisted serverBasePath before the WebView loads.
+        registerPlugin(TinyglowUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
         createDefaultChannel();
     }

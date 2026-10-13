@@ -22,3 +22,10 @@ apps/mobile-web/src/platform/native/NativeEvents.tsx: window.sessionStorage.setI
 apps/mobile-web/src/platform/native/syncFlag.ts: return window.localStorage.getItem(KEY) === "1";
 apps/mobile-web/src/platform/native/syncFlag.ts: if (on) window.localStorage.setItem(KEY, "1");
 apps/mobile-web/src/platform/native/syncFlag.ts: else window.localStorage.removeItem(KEY);
+
+# Live-update check interval (step 14, docs/plans/step-14.md 2.3/2.8): `{ "lastCheckAt": <epoch ms> }`
+# under APP_UPDATE_STATE_KEY ("ll.app-update.v1"), so launch/resume checks run at most every 6 h.
+# No manifest, URL, signature, version id or token. Added in task 14.8; pending reviewer OK
+# (header above).
+apps/mobile-web/src/platform/native/appUpdate.ts: const raw = window.localStorage.getItem(APP_UPDATE_STATE_KEY);
+apps/mobile-web/src/platform/native/appUpdate.ts: window.localStorage.setItem(APP_UPDATE_STATE_KEY, JSON.stringify({ lastCheckAt: at }));

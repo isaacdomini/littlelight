@@ -5,7 +5,7 @@
 // captured across the push gate's and the export gate's container recreations/restarts;
 // runnable locally on any saved log files:
 //
-//   node .github/scripts/scan-logs-for-secrets.mjs [--pii] [--require <regex>]... <file|dir>...
+//   node .github/scripts/scan-logs-for-secrets.mjs [--pii] [--app-update] [--require <regex>]... <file|dir>...
 //
 // Directories are read for *.log files (not recursive). The gate itself also checks the exact
 // random tokens it generated; this scan has no access to those, so it looks for anything
@@ -59,6 +59,21 @@
 //                       logs ids, byte counts and durations, never paths)
 //   quicktime-location  `com.apple.quicktime.location…` or `ISO6709` (the QuickTime GPS tag
 //                       name; its value is a coordinate pair, caught by `coordinate` too)
+// Live updates, opt-in with `--app-update` (docs/plans/step-14.md 2.9 "dev-stack-smoke", 4.3; task
+// 14.11), for the OTA gate's api logs. The api logs `{ outcome, platform }` / `{ outcome, keyId }`
+// / `{ outcome, status, stale }` with fixed messages only:
+//   app-update-field     a manifestJson / signature / signing-key field with a real value
+//                        (manifestJson, manifest_json, signature, signingKey,
+//                        APP_UPDATE_SIGNING_KEY_BASE64; "[redacted]", null or empty is fine)
+//   manifest-body        manifest JSON in a log line: a "minNativeBuild" / "webVersion" /
+//                        "builtAt" key, or a "files": [{ … array
+//   ecdsa-signature      a base64 DER ECDSA signature (`ME?CI` + 56 or more base64 chars)
+//   ec-key-material      a base64 EC key: PKCS#8 (`MIG?AgEAMBMGByqGSM49AgEG`), SEC1
+//                        (`MHcCAQEEI`) or SPKI (`MFkwEwYHKoZIzj0CAQYI`) prefix + body
+//   app-update-query     the check's query values in a URL (`?platform=`, `&native=`,
+//                        `&current=`; the request serializer prints `?[redacted]`)
+//   url                  any http(s) URL, except Fastify's "Server listening at" lines (the
+//                        manifest source, the files base URL and the files are never logged)
 // Personal data, opt-in with `--pii` (docs/plans/step-11.md 4.3 / 4.4 step 8, task 11.9b; the
 // abuse gate's api + worker logs). Not on by default: the other gates' logs were never held to it.
 //   email     an email address `local@domain.tld` (alphabetic TLD of 2+ letters, so package
@@ -77,8 +92,10 @@ const args = process.argv.slice(2);
 const required = [];
 const inputs = [];
 let pii = false;
+let appUpdate = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--pii") pii = true;
+  else if (args[i] === "--app-update") appUpdate = true;
   else if (args[i] === "--require") {
     const re = args[++i];
     if (!re) usage();
@@ -88,7 +105,9 @@ for (let i = 0; i < args.length; i++) {
 if (inputs.length === 0) usage();
 
 function usage() {
-  console.error("usage: scan-logs-for-secrets.mjs [--pii] [--require <regex>]... <file|dir>...");
+  console.error(
+    "usage: scan-logs-for-secrets.mjs [--pii] [--app-update] [--require <regex>]... <file|dir>...",
+  );
   process.exit(2);
 }
 
@@ -169,6 +188,29 @@ if (pii) {
   );
 }
 
+if (appUpdate) {
+  PATTERNS.push(
+    [
+      "app-update-field",
+      /(?<![A-Za-z0-9_])["']?(manifestJson|manifest_json|signature|signingKey|signing_key|APP_UPDATE_SIGNING_KEY_BASE64)["']?\s*[:=]\s*(?!["']?\[redacted\])(?!["']?\s*[,}\]]|\s*$|null\b)["']?[^\s"',}]/i,
+    ],
+    [
+      "manifest-body",
+      /\\?["'](?:minNativeBuild|webVersion|builtAt)\\?["']\s*:|\\?["']files\\?["']\s*:\s*\[\s*\{/,
+    ],
+    ["ecdsa-signature", /(?<![A-Za-z0-9+/])ME[A-Za-z0-9+/]CI[A-Za-z0-9+/]{56,}={0,2}/],
+    [
+      "ec-key-material",
+      /MIG[A-Za-z0-9+/]AgEAMBMGByqGSM49AgEG|MHcCAQEEI[A-Za-z0-9+/]{20,}|MFkwEwYHKoZIzj0CAQYI/,
+    ],
+    ["app-update-query", /[?&](?:platform|native|current)=/],
+    [
+      "url",
+      { test: (row) => /\bhttps?:\/\/[^\s"'<>]/i.test(row) && !/Server listening at/.test(row) },
+    ],
+  );
+}
+
 const files = [];
 for (const p of inputs) {
   let st;
@@ -223,5 +265,5 @@ required.forEach((re, k) => {
 });
 if (fail) process.exit(1);
 console.log(
-  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL, upload-cache path, scratch path, QuickTime location tag or WebAuthn field value${pii ? ", email address or IPv4 address" : ""} in the logs`,
+  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL, upload-cache path, scratch path, QuickTime location tag or WebAuthn field value${pii ? ", email address or IPv4 address" : ""}${appUpdate ? ", app-update signature, manifest body, key material, query or URL" : ""} in the logs`,
 );

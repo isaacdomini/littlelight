@@ -974,3 +974,35 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   6.3" 8 (`store/screenshots-ios-6.3-iphone17/`, upload by hand if asked). Real AI description and
   chat answer; the demo video tile is visible. Real-model cost for the recapture ≈ $0.05 (over the
   stated budget because of retries; the chat wait now keys on the reply bubble).
+
+## Step 14: Live updates (OTA web bundle)
+
+- **User decisions (2026-10-11/13):** web deploys should reach installed apps without a store
+  release. The reference app (`isaacdomini/smymcolumbuschallenge`) loads the live site via
+  Capacitor `server.url`; the user chose the safe in-house design instead: signed per-file manifest,
+  apply on next launch with rollback, 2 MiB cellular limit, server-held signing key, Debug builds
+  trust a committed dev key, About shows the web version. Built on Opus (Fable credits ran out).
+- **Built:** manifest generator in every web build (`scripts/app-update-manifest.mjs`, content id =
+  sha256 of sorted path/hash lines); shared contracts with both public keys; API
+  `GET /api/app-update/manifest` signs the manifest (ECDSA P-256) with
+  `APP_UPDATE_SIGNING_KEY_BASE64`, enforces `minNativeBuild`, turns itself off on a bad/missing key;
+  nginx serves `/app-update/manifest.json` uncached; native `TinyglowUpdater` (iOS + Android) on
+  Capacitor's `serverBasePath`: signature + per-file hash checks, delta downloads reusing local
+  files, staging, apply on next cold launch, 10 s `notifyAppReady` watchdog rollback, failed list,
+  reset on a new native binary, dev key only in Debug; web client checks when idle (no uploads or
+  album sync), Settings → About with version, "Update ready — restart", check and reset; keygen
+  script; CI hygiene (keys identical, no private key outside `.env.dev`, no logging), web-image
+  manifest check, OTA gate, native unit tests and harness; `docs/PRODUCTION.md` Part L.
+- **Decisions:** stale manifest served ≤ 24 h only on transport errors (404/invalid clears it);
+  dev compose api gets `extra_hosts: host.docker.internal:host-gateway` for the OTA gate on Linux.
+- **Verified (2026-10-13):** lint clean; typecheck (6 + e2e); unit 4,387; api app-update integration
+  21; OTA gate 32/32 (envelope verifies with dev key and not prod, A→B delta 3.7 KB, tampered file →
+  verify_failed, native_too_old, up_to_date, upstream 404 → unavailable, kill switch, log scan);
+  Swift harness 134 + vectors (Debug and Release; Release binary has no dev key); Android
+  `UpdateBundleTest` 12; all nine CI hygiene scripts.
+- **Open:** the device-level OTA scenario (A → B → broken C rolls back → reset) on the iOS
+  simulator / Android emulator is not automated yet (`ios-gate.sh --ota`, `testAboutOta`); the
+  Android emulator still crashes on this Mac. Production needs the user to paste the
+  `APP_UPDATE_SIGNING_KEY_BASE64` line into the server `.env` and keep Cloudflare Rocket Loader,
+  Auto Minify and Email Obfuscation off. Local `pnpm` shim is broken on this Mac (global Node 25).
+- **Commit**: step 14: live updates

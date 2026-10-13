@@ -2,7 +2,8 @@
 # Tinyglow web app (React + Vite + Ionic). Build context: repo root (docs/plans/step-1.md 2.13).
 #   dev  : Vite dev server on :8080; docker-compose.dev.yml bind-mounts the src dirs over it
 #   prod : nginx serving the Vite build on :80, proxying /api/ and /auth/ (docker/nginx/default.conf,
-#          plus the CSP snippet rendered from docker/nginx/templates/csp.conf.template at start)
+#          plus the CSP snippet rendered from docker/nginx/templates/csp.conf.template at start),
+#          and the OTA manifest /app-update/manifest.json (docs/plans/step-14.md 2.5)
 ARG NODE_IMAGE=node:22.23.3-alpine
 ARG NGINX_IMAGE=nginx:1.28-alpine
 ARG PNPM_VERSION=12.10.1
@@ -46,6 +47,12 @@ ENV NODE_ENV=production
 # SENTRY_WEB_DSN here; the native builds (Capacitor) never set it. Vite reads VITE_* from the
 # process environment, which a build ARG is during RUN.
 ARG VITE_SENTRY_DSN=""
+# Live updates (docs/plans/step-14.md D10, 2.5): this build is also the native apps' OTA bundle,
+# so it bakes the apps' API origin. apiUrl() reads it only inside the native shells (isNative());
+# browsers keep using /api on their own origin. docker-compose.yml passes ${PUBLIC_URL}; empty
+# (default, e.g. a plain `docker build`) = the bundled-shell default of apiBase.ts. The `build`
+# script also writes dist/app-update/manifest.json (scripts/app-update-manifest.mjs).
+ARG VITE_API_URL=""
 RUN pnpm --filter @tinyglow/mobile-web build
 
 # ---------------------------------------------------------------------------

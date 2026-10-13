@@ -1,6 +1,7 @@
 export * from "./age";
 export * from "./ai-description";
 export * from "./api/ai";
+export * from "./api/app-update";
 export * from "./api/auth";
 export * from "./api/babies";
 export * from "./api/chat";
@@ -19,6 +20,7 @@ export * from "./api/search";
 export * from "./api/share-links";
 export * from "./api/share-viewer";
 export * from "./api/uploads";
+export * from "./app-update";
 export * from "./auth";
 export * from "./constants";
 export * from "./db-enums";

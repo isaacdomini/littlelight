@@ -86,6 +86,17 @@ describe("SettingsPage", () => {
     expect(screen.getByTestId("settings-account").textContent).not.toContain("Delete account");
   });
 
+  it.each([
+    ["ios", "ios"],
+    ["web", null],
+  ] as const)("%s: an About row opens /settings/about (step 14)", async (_n, platform) => {
+    setNativePlatform(platform);
+    const r = await open();
+    expect(screen.getByTestId("settings-about").textContent).toContain("About");
+    fireEvent.click(screen.getByTestId("settings-about"));
+    expect(r.location()).toBe("/settings/about");
+  });
+
   it("Sign out signs this device out (local scope)", async () => {
     setNativePlatform("ios");
     await open();

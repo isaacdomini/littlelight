@@ -20,12 +20,33 @@ export type EnablePushResult =
   | "unavailable" // web, Android build without FCM, or plugin missing
   | "failed"; // permission granted but registration (or the API) failed
 
-/** Android registration needs `google-services.json`; builds without it set VITE_PUSH_ANDROID != 1. */
-export function pushSupported(): boolean {
+/**
+ * Shell facts from the native updater (`info()`, docs/plans/step-14.md D10), or `null` on the web
+ * and in shells without it. A lazy chunk: the web bundle never loads the updater code.
+ */
+async function shellInfo(): Promise<{
+  nativeVersion: string;
+  androidPushConfigured: boolean;
+} | null> {
+  try {
+    return await (await import("./appUpdate")).updaterInfo();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Android registration needs `google-services.json` in the shell. The OTA web bundle is shared by
+ * every shell, so this is a runtime probe (`info().androidPushConfigured`); shells without the
+ * updater fall back to the build flag VITE_PUSH_ANDROID=1 (step 14 D10).
+ */
+export async function pushSupported(): Promise<boolean> {
   const p = nativePlatform();
   if (p === "ios") return true;
-  if (p === "android") return import.meta.env.VITE_PUSH_ANDROID === "1";
-  return false;
+  if (p !== "android") return false;
+  const info = await shellInfo();
+  if (info) return info.androidPushConfigured;
+  return import.meta.env.VITE_PUSH_ANDROID === "1";
 }
 
 // Never return the plugin itself from an async function (or resolve any promise with it): a
@@ -62,7 +83,7 @@ function toPermission(state: string): PushPermission {
 }
 
 export async function pushPermission(): Promise<PushPermission> {
-  if (!pushSupported()) return "unavailable";
+  if (!(await pushSupported())) return "unavailable";
   try {
     const { PN } = await plugin();
     const state = await withTimeout(
@@ -76,18 +97,24 @@ export async function pushPermission(): Promise<PushPermission> {
   }
 }
 
-function appVersion(): string {
+const APP_VERSION_RE = /^[0-9A-Za-z.+-]{1,32}$/;
+
+/** The shell's own version (`info().nativeVersion`), else the build's VITE_APP_VERSION (D10). */
+async function appVersion(): Promise<string> {
+  const native = (await shellInfo())?.nativeVersion;
+  if (native && APP_VERSION_RE.test(native)) return native;
   const v = import.meta.env.VITE_APP_VERSION as string | undefined;
-  return v && /^[0-9A-Za-z.+-]{1,32}$/.test(v) ? v : "1.0.0";
+  return v && APP_VERSION_RE.test(v) ? v : "1.0.0";
 }
 
 async function registerWithApi(token: string): Promise<boolean> {
   const platform = nativePlatform();
   if (!platform) return false;
+  const version = await appVersion();
   const body: PushDeviceRegisterRequest =
     platform === "ios"
-      ? { platform, provider: "apns", token, appVersion: appVersion() }
-      : { platform, provider: "fcm", token, appVersion: appVersion() };
+      ? { platform, provider: "apns", token, appVersion: version }
+      : { platform, provider: "fcm", token, appVersion: version };
   try {
     await apiFetch("/me/push-devices", { method: "POST", body, schema: pushDeviceResponseSchema });
     return true;
@@ -124,7 +151,7 @@ async function ensureListeners() {
  * with the API. Safe to call again to refresh the token (e.g. after sign-in on a shared phone).
  */
 export async function enablePush(): Promise<EnablePushResult> {
-  if (!pushSupported()) return "unavailable";
+  if (!(await pushSupported())) return "unavailable";
   try {
     const { PN } = await plugin();
     await ensureListeners();
@@ -175,6 +202,8 @@ const tapListeners = new Set<(data: PushData) => void>();
 /** Notification taps: `photos_analyzed` => select baby, open Chat; `share_viewed` => Family. */
 export function onPushTap(cb: (data: PushData) => void): () => void {
   tapListeners.add(cb);
-  if (pushSupported()) void ensureListeners().catch(() => undefined);
+  void pushSupported()
+    .then((ok) => (ok ? ensureListeners() : undefined))
+    .catch(() => undefined);
   return () => tapListeners.delete(cb);
 }

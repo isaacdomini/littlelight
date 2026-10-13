@@ -10,7 +10,8 @@ import { syncMayBeOn } from "./syncFlag";
 
 // Native app-level events (docs/plans/step-9.md 2.4, 2.5, 2.8). Renders nothing.
 // - appUrlOpen / launch URL: allow-listed deep links only (`toAppPath`), never logged.
-// - resume: refresh the session when the access token is near expiry.
+// - resume: refresh the session when the access token is near expiry, then a live-update check.
+// - signed in: push token refresh, album sync, and a live-update check 10 s later (step 14).
 // - Android back button: history back, else exit.
 // - push taps: photos_analyzed => select baby, Chat; share_viewed => select baby, Family.
 
@@ -54,6 +55,14 @@ function firstSightOfLaunchUrl(url: string): boolean {
   return true;
 }
 
+/** Live updates (step 14): idle-only, rate-limited inside `checkForUpdate`. Fire-and-forget. */
+function checkForUpdate(trigger: "launch" | "resume") {
+  void import("./appUpdate").then((m) => m.checkForUpdate(trigger)).catch(() => undefined);
+}
+
+/** Delay of the launch check after sign-in, so it never competes with the first screen. */
+const UPDATE_CHECK_DELAY_MS = 10_000;
+
 /** Album sync (iOS only; does nothing unless a parent set it up on this phone). */
 function syncNow(trigger: "launch" | "resume") {
   if (nativePlatform() !== "ios" || !syncMayBeOn()) return;
@@ -84,7 +93,9 @@ function useAppEvents(go: Go, goPushTap: (data: PushData) => void) {
       await add(App.addListener("appUrlOpen", (e) => route(e.url)));
       await add(
         App.addListener("resume", () => {
-          void refreshIfNeeded().catch(() => undefined);
+          void refreshIfNeeded()
+            .catch(() => undefined)
+            .then(() => checkForUpdate("resume"));
           syncNow("resume");
         }),
       );
@@ -121,10 +132,11 @@ export function NativeEvents() {
   );
 
   useEffect(() => {
-    if (signedIn && isNative()) {
-      void refreshPushRegistration().catch(() => undefined);
-      syncNow("launch");
-    }
+    if (!signedIn || !isNative()) return;
+    void refreshPushRegistration().catch(() => undefined);
+    syncNow("launch");
+    const timer = setTimeout(() => checkForUpdate("launch"), UPDATE_CHECK_DELAY_MS);
+    return () => clearTimeout(timer);
   }, [signedIn]);
 
   return null;

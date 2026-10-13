@@ -24,6 +24,7 @@ Needs from the user, in order. Tick as done.
 Before each submission:
 
 - [ ] `pnpm --filter @tinyglow/mobile-web native:build:release` with `VITE_API_URL=https://...` (no live reload, no mixed content)
+- [ ] (step 14) Bump `minNativeBuild` in `apps/mobile-web/app-update.json` when a native change ships (new or changed plugin, permission, SDK or Capacitor upgrade), to this release's build numbers, in the same commit as the web that needs it (`docs/PRODUCTION.md` L6)
 - [ ] `DEVELOPMENT_TEAM` set; archive and upload (`fastlane ios beta` or Xcode)
 - [ ] `./gradlew bundleRelease` with `android/keystore.properties`; first AAB uploaded by hand
 - [ ] `store/check-limits.sh` passes; placeholders (`REVIEW_*`, URLs) replaced in the consoles

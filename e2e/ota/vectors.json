@@ -1,0 +1,22 @@
+{
+  "comment": "Live-update vectors (docs/plans/step-14.md 2.10), signed with the committed DEV key from .env.dev. Written by `tsx e2e/ota/make-vectors.ts`; consumed by the iOS harness and Android UpdateBundleTest.",
+  "keyId": "dev",
+  "spkiBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmF4/OE/rfPgzXHUS+6VBcqWMWvqO4h+6HFhn1hGFzFJq2D8+w6JduoO6BU5aSmqyW74hxsVh1uqA79xVFlGFyw==",
+  "manifestJson": "{\"schema\":1,\"version\":\"9582b1ea9ee010c6\",\"webVersion\":\"1.0.0\",\"minNativeBuild\":{\"ios\":1,\"android\":1},\"builtAt\":\"2026-10-13T00:00:00.000Z\",\"files\":[{\"path\":\"assets/app-ota.js\",\"sha256\":\"b7b8566036d61187cacb5cf084434febafeced57371b2f858acdd6a66c575ad2\",\"size\":38},{\"path\":\"assets/style-ota.css\",\"sha256\":\"81db9f1974b70f819e6b13c105b3e599bb5c9332dd6777051f7b5187a3f17108\",\"size\":29},{\"path\":\"icons/dot.svg\",\"sha256\":\"38faf4153750fdb3d8b4ac3c34650dce4c2128f5c7b1dce0c1f5efb5c2522809\",\"size\":63},{\"path\":\"index.html\",\"sha256\":\"bf20c9d9b8d99ac6fdf890d89685254f84b064f6e940f89dc75c0ed7a5edae0a\",\"size\":121}],\"baseUrl\":\"http://localhost:18090\"}",
+  "signature": "MEQCIDw4vgWUOeR783GWG2x/3ODUoJESVzPyWblGSs223SicAiAgLD0LmPFMdKv1PMAarIZ5UNDX9gJ4O2GsPFAbWvuWFg==",
+  "expectedVersion": "9582b1ea9ee010c6",
+  "files": {
+    "index.html": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGhlYWQ+PHNjcmlwdCB0eXBlPSJtb2R1bGUiIHNyYz0iL2Fzc2V0cy9hcHAtb3RhLmpzIj48L3NjcmlwdD48L2hlYWQ+PGJvZHk+T1RBIHZlY3RvcjwvYm9keT48L2h0bWw+Cg==",
+    "assets/app-ota.js": "ZG9jdW1lbnQuYm9keS5kYXRhc2V0Lm90YSA9ICd2ZWN0b3InOwo=",
+    "assets/style-ota.css": "Ym9keXtjb2xvcjojMTIzfS8qIMOpIOKckyAqLwo=",
+    "icons/dot.svg": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiLz4K"
+  },
+  "tampered": {
+    "manifestJson": "{\"schema\":1,\"version\":\"9582b1ea9ee010c6\",\"webVersion\":\"1.0.0\",\"minNativeBuild\":{\"ios\":1,\"android\":1},\"builtAt\":\"2026-10-13T00:00:00.000Z\",\"files\":[{\"path\":\"assets/app-ota.js\",\"sha256\":\"b5c1fb2efc6d6b4674c2fdcc48ce01b43a3b7c03763c0c3355de0099ee0f8c73\",\"size\":38},{\"path\":\"assets/style-ota.css\",\"sha256\":\"81db9f1974b70f819e6b13c105b3e599bb5c9332dd6777051f7b5187a3f17108\",\"size\":29},{\"path\":\"icons/dot.svg\",\"sha256\":\"38faf4153750fdb3d8b4ac3c34650dce4c2128f5c7b1dce0c1f5efb5c2522809\",\"size\":63},{\"path\":\"index.html\",\"sha256\":\"bf20c9d9b8d99ac6fdf890d89685254f84b064f6e940f89dc75c0ed7a5edae0a\",\"size\":121}],\"baseUrl\":\"http://localhost:18090\"}",
+    "signature": "MEQCIDw4vgWUOeR783GWG2x/3ODUoJESVzPyWblGSs223SicAiAgLD0LmPFMdKv1PMAarIZ5UNDX9gJ4O2GsPFAbWvuWFg=="
+  },
+  "tamperedFile": {
+    "path": "assets/app-ota.js",
+    "contentBase64": "ZG9jdW1lbnQuYm9keS5kYXRhc2V0Lm90YSA9ICdldmlsJzsK"
+  }
+}

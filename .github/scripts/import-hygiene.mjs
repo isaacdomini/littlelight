@@ -30,11 +30,12 @@
 //     booked only through `import_book_photo(` (must be used). No migration grants INSERT (or
 //     ALL) on photos to `pipeline` / `tinyglow_worker`.
 //  4. The SSRF guard runs before every media fetch (D6, R5):
-//     a. every `mediaDownloadUrl(` call in the import code is the direct argument of
+//     a. every `mediaDownloadUrl(` / `googleMediaDownloadUrl(` call (the URL builders; step 12
+//        added the photo/video one, `=d` / `=dv`) in the import code is the direct argument of
 //        `parseAllowedMediaUrl(` or `isAllowedMediaUrl(` (at least one such call must exist);
 //     b. no request call (fetch, fetchImpl, once, withRetry, request, got, http(s).get) in the
 //        import code has an argument that names baseUrl / baseUrls / mediaFile /
-//        mediaDownloadUrl: media bytes are fetched only by downloadMedia();
+//        mediaDownloadUrl / googleMediaDownloadUrl: media bytes are fetched only by downloadMedia();
 //     c. in apps/worker/src/import/google/download.ts every request call's URL argument is a
 //        variable (or its `.href`) assigned only from guarded values: results of
 //        `parseAllowedMediaUrl(` / `resolveMediaRedirect(` that are null-checked with a throw
@@ -52,8 +53,8 @@
 //
 //
 // `--drift <base>` runs only the step-10 scope checks against a git base commit (CI and the step-10
-// gate use eb9343e, the review-fix commit step 10 starts from; docs/plans/step-10.md 4.1 names an
-// older commit, superseded):
+// gate use 10c3d55, the steps 12 + 13 commit: step 12's video frames changed packages/ai on
+// purpose; docs/plans/step-10.md 4.1 names an older commit, superseded):
 //  D1. No AI-path change: `git diff <base>` and untracked files under packages/ai,
 //      apps/worker/src/ai, apps/api/src/chat and apps/api/src/search are empty.
 //  D2. `@capacitor/browser` is the only new dependency: the dependency names of every
@@ -510,7 +511,7 @@ function lexFile(rel) {
   const LOG_CALL =
     /(?<![\w$])(?:[A-Za-z_$][\w$]*\s*(?:\?\.|\.)\s*)*(?:log|logger|[A-Za-z_$][\w$]*(?:Log|Logger))\s*(?:\?\.|\.)\s*(trace|debug|info|warn|error|fatal|child)\s*\(/g;
   const ALWAYS =
-    /(?<![\w$])(baseUrls?|pickerUri|mediaDownloadUrl|refresh_token|access_token|refreshToken|accessToken|id_token|idToken|authorization|Authorization|client_secret|clientSecret|GOOGLE_IMPORT_CLIENT_SECRET)(?![\w$])/g;
+    /(?<![\w$])(baseUrls?|pickerUri|mediaDownloadUrl|googleMediaDownloadUrl|refresh_token|access_token|refreshToken|accessToken|id_token|idToken|authorization|Authorization|client_secret|clientSecret|GOOGLE_IMPORT_CLIENT_SECRET)(?![\w$])/g;
   const VALUE =
     /(?<![\w$.])(tokens?|code|state|grant|creds|url|href|uri|location|headers)(?![\w$])/g;
   const RAW_ERROR_SHORTHAND = /(?:^|[{,])\s*(?:err|error|e|cause)\s*(?=[,}])/;
@@ -689,23 +690,27 @@ function grantsTo(table, privilege) {
   const serverFiles = [...apiImportFiles, ...workerImportFiles];
   const hits = [];
 
-  // a. mediaDownloadUrl( only as the direct argument of the guard.
+  // a. The URL builders (mediaDownloadUrl, step 12's googleMediaDownloadUrl) only as the direct
+  // argument of the guard.
   let guarded = 0;
   for (const f of serverFiles) {
     const { src, skel } = lexFile(f);
-    for (const m of skel.matchAll(/(?<![\w$])mediaDownloadUrl\s*\(/g)) {
+    for (const m of skel.matchAll(/(?<![\w$])(mediaDownloadUrl|googleMediaDownloadUrl)\s*\(/g)) {
       const before = skel.slice(Math.max(0, m.index - 80), m.index);
       if (/(?:parseAllowedMediaUrl|isAllowedMediaUrl)\s*\(\s*$/.test(before)) guarded++;
-      else hits.push(`${f}:${lineOf(src, m.index)}: mediaDownloadUrl( outside the URL guard`);
+      else hits.push(`${f}:${lineOf(src, m.index)}: ${m[1]}( outside the URL guard`);
     }
   }
   if (guarded === 0)
-    hits.push("no guarded mediaDownloadUrl( call found (the check would be vacuous)");
+    hits.push(
+      "no guarded mediaDownloadUrl( / googleMediaDownloadUrl( call found (the check would be vacuous)",
+    );
 
   // b. No request call takes a media URL directly.
   const REQUEST_CALL =
     /(?<![\w$])(fetch|fetchImpl|once|withRetry|request|got|undici\.request|https?\.(?:get|request))\s*\(/g;
-  const MEDIA_NAMES = /(?<![\w$])(baseUrls?|mediaFile|mediaDownloadUrl)(?![\w$])/;
+  const MEDIA_NAMES =
+    /(?<![\w$])(baseUrls?|mediaFile|mediaDownloadUrl|googleMediaDownloadUrl)(?![\w$])/;
   const requestSites = [];
   for (const f of serverFiles) {
     const { src, skel } = lexFile(f);
@@ -803,7 +808,7 @@ function grantsTo(table, privilege) {
     }
   }
   report(
-    `the URL guard (parseAllowedMediaUrl / resolveMediaRedirect, null-checked) precedes every media request (${guardedFetches} in ${DOWNLOAD_TS}, ${guarded} guarded mediaDownloadUrl)`,
+    `the URL guard (parseAllowedMediaUrl / resolveMediaRedirect, null-checked) precedes every media request (${guardedFetches} in ${DOWNLOAD_TS}, ${guarded} guarded media URL builder call(s))`,
     hits,
   );
 }

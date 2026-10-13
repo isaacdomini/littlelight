@@ -52,6 +52,8 @@ export function SettingsPage() {
       "/settings/account",
       native ? t("native.settings.deleteAccount") : t("settings.account"),
     ],
+    // Versions, and on the apps the live-update status (step 14).
+    ["settings-about", "/settings/about", t("settings.about")],
   ];
   return (
     <IonPage>

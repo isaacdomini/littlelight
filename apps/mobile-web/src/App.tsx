@@ -48,6 +48,7 @@ import { InviteCoParentPage } from "./pages/onboarding/InviteCoParentPage";
 import { PlanPage } from "./pages/onboarding/PlanPage";
 import { ProfilePage } from "./pages/onboarding/ProfilePage";
 import { ShareLinkPhotosPage } from "./pages/ShareLinkPhotosPage";
+import { AboutPage } from "./pages/settings/AboutPage";
 import { AccountPage } from "./pages/settings/AccountPage";
 import { DevicesPage } from "./pages/settings/DevicesPage";
 import { ExportPage } from "./pages/settings/ExportPage";
@@ -199,6 +200,10 @@ function ParentApp() {
                     <Route
                       path="/settings/uploads"
                       element={app("/settings/uploads", <UploadsPage />, true)}
+                    />
+                    <Route
+                      path="/settings/about"
+                      element={app("/settings/about", <AboutPage />, true)}
                     />
                     <Route path="/" element={<RootRedirect />} />
                   </IonRouterOutlet>

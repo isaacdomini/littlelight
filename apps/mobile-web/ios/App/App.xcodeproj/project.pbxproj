@@ -12,6 +12,9 @@
 		A1B2C3D400000000000000E1 /* LLPartFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000E2 /* LLPartFile.swift */; };
 		A1B2C3D400000000000000F1 /* TinyglowPasskeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000F2 /* TinyglowPasskeys.swift */; };
 		A1B2C3D400000000000000F3 /* LLPasskeyCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000F4 /* LLPasskeyCodec.swift */; };
+		A1B2C3D40000000000000101 /* TinyglowUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000102 /* TinyglowUpdater.swift */; };
+		A1B2C3D40000000000000103 /* LLUpdateBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000104 /* LLUpdateBundle.swift */; };
+		A1B2C3D40000000000000105 /* LLUpdateKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000000000106 /* LLUpdateKeys.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
@@ -30,6 +33,9 @@
 		A1B2C3D400000000000000E2 /* LLPartFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLPartFile.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000F2 /* TinyglowPasskeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinyglowPasskeys.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000F4 /* LLPasskeyCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLPasskeyCodec.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000102 /* TinyglowUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinyglowUpdater.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000104 /* LLUpdateBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLUpdateBundle.swift; sourceTree = "<group>"; };
+		A1B2C3D40000000000000106 /* LLUpdateKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLUpdateKeys.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000A4 /* App-Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "App-Debug.entitlements"; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
@@ -87,6 +93,9 @@
 				A1B2C3D400000000000000E2 /* LLPartFile.swift */,
 				A1B2C3D400000000000000F2 /* TinyglowPasskeys.swift */,
 				A1B2C3D400000000000000F4 /* LLPasskeyCodec.swift */,
+				A1B2C3D40000000000000102 /* TinyglowUpdater.swift */,
+				A1B2C3D40000000000000104 /* LLUpdateBundle.swift */,
+				A1B2C3D40000000000000106 /* LLUpdateKeys.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -192,6 +201,9 @@
 				A1B2C3D400000000000000E1 /* LLPartFile.swift in Sources */,
 				A1B2C3D400000000000000F1 /* TinyglowPasskeys.swift in Sources */,
 				A1B2C3D400000000000000F3 /* LLPasskeyCodec.swift in Sources */,
+				A1B2C3D40000000000000101 /* TinyglowUpdater.swift in Sources */,
+				A1B2C3D40000000000000103 /* LLUpdateBundle.swift in Sources */,
+				A1B2C3D40000000000000105 /* LLUpdateKeys.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

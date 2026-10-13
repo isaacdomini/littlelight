@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/app-update-manifest.mjs dist",
     "preview": "vite preview",
-    "native:build": "VITE_API_URL=\"${VITE_API_URL:-http://localhost:8080}\" VITE_DEEPLINK_DEV_SCHEME=\"${VITE_DEEPLINK_DEV_SCHEME:-1}\" vite build",
-    "native:build:release": "case \"${VITE_API_URL:-}\" in https://?*) ;; *) echo \"native:build:release: set VITE_API_URL=https://<api origin>\" >&2; exit 1 ;; esac; if [ -n \"${CAP_LIVE_RELOAD_URL:-}\" ] || [ -n \"${CAP_DEV_MIXED_CONTENT:-}\" ]; then echo \"native:build:release: unset CAP_LIVE_RELOAD_URL and CAP_DEV_MIXED_CONTENT (dev only)\" >&2; exit 1; fi; VITE_DEEPLINK_DEV_SCHEME=0 vite build",
+    "native:build": "VITE_API_URL=\"${VITE_API_URL:-http://localhost:8080}\" VITE_DEEPLINK_DEV_SCHEME=\"${VITE_DEEPLINK_DEV_SCHEME:-1}\" vite build && node scripts/app-update-manifest.mjs dist",
+    "native:build:release": "case \"${VITE_API_URL:-}\" in https://?*) ;; *) echo \"native:build:release: set VITE_API_URL=https://<api origin>\" >&2; exit 1 ;; esac; if [ -n \"${CAP_LIVE_RELOAD_URL:-}\" ] || [ -n \"${CAP_DEV_MIXED_CONTENT:-}\" ]; then echo \"native:build:release: unset CAP_LIVE_RELOAD_URL and CAP_DEV_MIXED_CONTENT (dev only)\" >&2; exit 1; fi; VITE_DEEPLINK_DEV_SCHEME=0 vite build && node scripts/app-update-manifest.mjs dist",
     "native:sync": "pnpm run native:build && cap sync",
     "native:sync:ios": "pnpm run native:build && cap sync ios",
     "native:sync:android": "pnpm run native:build && cap sync android",

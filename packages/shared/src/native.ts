@@ -76,3 +76,10 @@ export const SYNC_CONFIG_KEY = "ll.sync.v1";
  * native storage hygiene allow-list.
  */
 export const PASSKEY_PROMPT_KEY = "ll.passkey.prompt.v1";
+
+/**
+ * localStorage entry of the live-update client (docs/plans/step-14.md 2.3, 2.8):
+ * `{ lastCheckAt }` only (epoch ms of the last automatic check), never a manifest, URL or
+ * signature. Listed in the native storage hygiene allow-list.
+ */
+export const APP_UPDATE_STATE_KEY = "ll.app-update.v1";

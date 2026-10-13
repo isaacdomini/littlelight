@@ -27,8 +27,16 @@ export async function bootstrapNative(): Promise<void> {
   }
 }
 
-/** After the first render: reveal the app (splash is `launchAutoHide: false`) and style the bar. */
+/**
+ * After the first render: reveal the app (splash is `launchAutoHide: false`), style the bar, then
+ * tell the live updater this web bundle booted (cancels its rollback watchdog, docs/plans/step-14.md
+ * 2.7). Both entry paths (signed-in app and share viewer) reach this from `main.tsx`. Never throws.
+ */
 export async function afterFirstRender(): Promise<void> {
-  await syncStatusBar();
-  await hideSplash();
+  try {
+    await syncStatusBar();
+    await hideSplash();
+  } finally {
+    void import("./appUpdate").then((m) => m.notifyAppReady()).catch(() => undefined);
+  }
 }

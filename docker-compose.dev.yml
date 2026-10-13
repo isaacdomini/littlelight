@@ -101,6 +101,11 @@
 # (they reach api + worker only; blanked on migrate and web), register
 # http://localhost:${WEB_PORT:-8080}/api/import/google/callback on the OAuth client, then
 #   GOOGLE_IMPORT_PROVIDER=live docker compose -f docker-compose.dev.yml up -d --no-deps api worker
+# Live updates (docs/plans/step-14.md 2.9): the api signs OTA manifests with the committed DEV
+# key from .env.dev (api only, x-dev-no-app-update-key blanks it elsewhere; Debug app builds
+# trust it, Release builds never do). Nothing extra starts: the Vite dev server has no
+# manifest, so GET /api/app-update/manifest answers "unavailable" until the OTA gate points
+# APP_UPDATE_SOURCE_URL / APP_UPDATE_FILES_BASE_URL (Compose INTERPOLATION) at its own server.
 name: tinyglow-dev
 
 x-dev: &dev
@@ -237,6 +242,12 @@ x-dev-no-google-import-keys: &dev-no-google-import-keys
   GOOGLE_IMPORT_CLIENT_ID: ""
   GOOGLE_IMPORT_CLIENT_SECRET: ""
 
+# Live updates (docs/plans/step-14.md D6, 2.9): the OTA manifest signing key is api only. The
+# committed DEV key in .env.dev (trusted by Debug app builds only) reaches every service that
+# loads the env_file; blanked on migrate, worker and web.
+x-dev-no-app-update-key: &dev-no-app-update-key
+  APP_UPDATE_SIGNING_KEY_BASE64: ""
+
 # api and worker: provider switch + where the fake lives (used only when the provider is fake).
 x-dev-google-import-env: &dev-google-import-env
   GOOGLE_IMPORT_PROVIDER: ${GOOGLE_IMPORT_PROVIDER:-fake}
@@ -294,7 +305,7 @@ services:
     <<: [*dev, *dev-db-tools]
     command: ["sh", "-c", "pnpm db:migrate && pnpm db:seed"]
     environment:
-      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys]
+      <<: [*dev-bootstrap-env, *dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys, *dev-no-app-update-key]
       DATA_ENCRYPTION_KEY: *dev-data-encryption-key
     volumes:
       - ./packages/db/src:/repo/packages/db/src:ro
@@ -499,6 +510,12 @@ services:
       target: dev
     command: ["pnpm", "--filter", "@tinyglow/api", "dev"]
     init: true
+    # The OTA gate (e2e/ota/gate.ts, docs/plans/step-14.md 2.10) points APP_UPDATE_SOURCE_URL at
+    # its static server on the host (http://host.docker.internal:18090). Docker Desktop resolves
+    # that name by itself; on Linux (the CI runner) it only exists with this mapping to the
+    # bridge gateway. Harmless otherwise: nothing else in the api uses the name.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       <<: [*dev-app-env, *dev-no-anthropic-key, *dev-no-push-keys, *dev-google-import-env]
       DATABASE_URL: *dev-api-db-url
@@ -558,6 +575,19 @@ services:
       # Photo import (docs/plans/step-10.md 2.10): GOOGLE_IMPORT_PROVIDER (fake by default),
       # GOOGLE_IMPORT_FAKE_URL and GOOGLE_IMPORT_FAKE_PUBLIC_URL come from *dev-google-import-env
       # (see the header); GOOGLE_IMPORT_CLIENT_ID / _SECRET for a live run from .env.local.
+      # Live updates (docs/plans/step-14.md 2.6, 2.9): APP_UPDATE_SIGNING_KEY_BASE64 is the
+      # committed DEV key from .env.dev (this service only; blanked elsewhere). The api reads the
+      # web build's manifest from APP_UPDATE_SOURCE_URL and hands phones APP_UPDATE_FILES_BASE_URL
+      # as the files' base. The Vite dev server has no manifest, so by default the endpoint
+      # answers "unavailable" (inert). Compose INTERPOLATION (shell or the git-ignored project
+      # `.env`), so the OTA gate (pnpm e2e:ota-gate) can point the api at its own static server
+      # and a plain `up -d --no-deps api` restores these defaults:
+      #   APP_UPDATE_SOURCE_URL=http://host.docker.internal:18090/manifest.json \
+      #   APP_UPDATE_FILES_BASE_URL=http://localhost:18090 \
+      #     docker compose -f docker-compose.dev.yml up -d --no-deps api
+      APP_UPDATE_ENABLED: ${APP_UPDATE_ENABLED:-true}
+      APP_UPDATE_SOURCE_URL: ${APP_UPDATE_SOURCE_URL:-http://web:8080/app-update/manifest.json}
+      APP_UPDATE_FILES_BASE_URL: ${APP_UPDATE_FILES_BASE_URL:-http://localhost:${WEB_PORT:-8080}}
     volumes:
       - ./apps/api/src:/repo/apps/api/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -585,7 +615,7 @@ services:
     command: ["pnpm", "--filter", "@tinyglow/worker", "dev"]
     init: true
     environment:
-      <<: [*dev-app-env, *dev-no-review-account, *dev-google-import-env]
+      <<: [*dev-app-env, *dev-no-review-account, *dev-google-import-env, *dev-no-app-update-key]
       DATABASE_URL: *dev-worker-db-url
       # Bucket-scoped MinIO user (api's rights + delete incl. object versions; no admin).
       S3_ACCESS_KEY: *dev-s3-worker-access-key
@@ -735,7 +765,7 @@ services:
     command: ["pnpm", "--filter", "@tinyglow/mobile-web", "dev", "--host", "0.0.0.0", "--port", "8080"]
     init: true
     environment:
-      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys]
+      <<: [*dev-no-ai-keys, *dev-no-push-keys, *dev-no-review-account, *dev-no-sentry, *dev-no-google-import-keys, *dev-no-app-update-key]
     volumes:
       - ./apps/mobile-web/src:/repo/apps/mobile-web/src
       - ./packages/shared/src:/repo/packages/shared/src

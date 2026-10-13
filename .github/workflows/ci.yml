@@ -18,7 +18,7 @@
 #                    logs a baseUrl/pickerUri/token/code, the worker never reads google_accounts
 #                    nor inserts into photos, the URL guard precedes every media fetch, the fake
 #                    Google provider is refused in production (static + runtime), no AI-path
-#                    change and no new dependency but @capacitor/browser since eb9343e), the
+#                    change and no new dependency but @capacitor/browser since 10c3d55), the
 #                    step-11 free-tier abuse hygiene (.github/scripts/abuse-hygiene.sh: the
 #                    family_starts ledger has no email/user-agent/raw-IP column, the vendored
 #                    disposable-domain list keeps its CC0 license and its generated module is
@@ -137,7 +137,7 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     steps:
-      # Full history: the import hygiene's drift check diffs against eb9343e (below).
+      # Full history: the import hygiene's drift check diffs against 10c3d55 (below).
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -219,7 +219,7 @@ jobs:
       # every media request goes through parseAllowedMediaUrl / resolveMediaRedirect, null-checked,
       # redirect "manual"; GOOGLE_IMPORT_CLIENT_SECRET never in the client app or the web image.
       # Runtime (tsx, needs the install above): the env schema, startFakeGoogleServer and the
-      # google-fake CLI all refuse NODE_ENV=production (controls start). Drift vs eb9343e (hence
+      # google-fake CLI all refuse NODE_ENV=production (controls start). Drift vs 10c3d55 (hence
       # fetch-depth 0): no change under packages/ai, apps/worker/src/ai, apps/api/src/chat and
       # apps/api/src/search, and @capacitor/browser is the only new dependency. The plist keys and
       # the Photos-prompt call sites are in native-hygiene.sh above. Same script runs locally.
@@ -268,6 +268,21 @@ jobs:
       # must exist, so a rename fails the step. Same script runs locally.
       - name: Video hygiene (no URLs to ffmpeg, outcome-only logs, GPS tripwire, scratch mount)
         run: bash .github/scripts/video-hygiene.sh
+
+      # docs/plans/step-14.md 2.9 "CI" / 5.3 (task 14.11), static
+      # (.github/scripts/app-update-hygiene.mjs): (a) the prod/dev update keys (keyId + SPKI) are
+      # identical in packages/shared/src/app-update.ts, LLUpdateKeys.swift and UpdateKeys.java;
+      # (b) the dev SPKI ships only inside #if DEBUG / if (BuildConfig.DEBUG); (c) no EC private
+      # key (PKCS#8 / SEC1, base64 or hex) in any repo file except .env.dev's dev key line; (d)
+      # APP_UPDATE_SIGNING_KEY_BASE64 empty in .env.example and the dev key in .env.dev; (e) no
+      # api logger call names a signature, manifestJson or key, app-update logs outcome fields
+      # only, telemetry scrubs them; (f) no log call in the updater sources (Swift, Java, TS);
+      # (g) no @capgo / @ionic-enterprise / capacitor-updater / appflow dependency; (h) the web
+      # build scripts end with the manifest step; (i) minNativeBuild <= the shells' build
+      # numbers; (j) VITE_* flags on the OTA allow-list. No Docker, no install needed; every path
+      # it reads must exist, so a rename fails the step. Same script runs locally.
+      - name: Live-update hygiene (one key set, dev key Debug-only, no private key, no updater logs)
+        run: bash .github/scripts/app-update-hygiene.sh
 
       - name: Typecheck
         run: pnpm typecheck
@@ -483,7 +498,8 @@ jobs:
             apps/api/src/auth/passkeys.integration.test.ts \
             packages/db/video.integration.test.ts \
             apps/api/src/uploads/video.integration.test.ts \
-            apps/worker/src/video/video.integration.test.ts
+            apps/worker/src/video/video.integration.test.ts \
+            apps/api/src/app-update/routes.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -544,7 +560,8 @@ jobs:
 
       # Provider-key placement (docs/plans/step-7.md 2.11, step-10.md 2.10): OPENAI_API_KEY reaches
       # worker + api, ANTHROPIC_API_KEY the worker only, GOOGLE_IMPORT_CLIENT_ID / _SECRET api +
-      # worker only; none reaches migrate/web/google-fake/anything else. Rendered with throwaway
+      # worker only, APP_UPDATE_SIGNING_KEY_BASE64 (OTA signing key, step-14 2.9) the api only;
+      # none reaches migrate/web/google-fake/anything else. Rendered with throwaway
       # canary values (not secrets) that `check-compose-keys.mjs --print-env` prints, so the key
       # list lives in one place (the script prints service names only, never values): dev via a
       # temporary .env.local (its env_file), production via the shell environment (x-app-env
@@ -588,6 +605,9 @@ jobs:
           - image: web
             file: apps/mobile-web/Dockerfile
             target: prod
+            # Production bakes ${PUBLIC_URL} (docker-compose.yml web.build.args, D10); a fixed
+            # placeholder origin here lets check-web-app-update.sh prove it lands in the bundle.
+            build_args: VITE_API_URL=https://example.test
           # Single-purpose image: its final (unnamed) stage is the production image.
           - image: migrate
             file: packages/db/Dockerfile
@@ -608,6 +628,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
+          build-args: ${{ matrix.build_args || '' }}
           push: false
           # Only the web image is run below; the others stay in the builder.
           load: ${{ matrix.image == 'web' }}
@@ -626,6 +647,19 @@ jobs:
         timeout-minutes: 5
         run: bash .github/scripts/check-web-csp.sh tinyglow-web:ci
 
+      # docs/plans/step-14.md 2.5 / 4.2 (task 14.11): the image's build wrote
+      # app-update/manifest.json and nginx serves it. Runs the image standalone and asserts:
+      # 200 + application/json + exactly one `Cache-Control: no-cache` + the server-level
+      # security headers kept; the manifest validates (schema 1, content id == version,
+      # index.html listed, nothing under app-update/ .well-known/ email-templates/); every listed
+      # file is served with the listed sha256 and size (Accept-Encoding: identity); the
+      # VITE_API_URL build arg is baked into a listed .js file; /app-update/x and
+      # /app-update/nope.json are 404, never the SPA shell.
+      - name: Web image live-update manifest (valid, hashes match, no-cache, 404 elsewhere)
+        if: matrix.image == 'web'
+        timeout-minutes: 5
+        run: bash .github/scripts/check-web-app-update.sh tinyglow-web:ci https://example.test
+
   dev-stack-smoke:
     name: Dev stack smoke + e2e
     runs-on: ubuntu-24.04
@@ -637,8 +671,10 @@ jobs:
     # each polled to ready within 120 s, one api restart, a purge job; capped at 15), push
     # gate + log scan (~3-5 min, capped at 15), Google import gate + log scan (~20-30 s
     # locally, capped at 15), api + worker recreate, abuse gate + log scan (two api recreates
-    # and several `compose run migrate` report/suspend calls; capped at 15).
-    timeout-minutes: 180
+    # and several `compose run migrate` report/suspend calls; capped at 15), passkey and video
+    # gates (capped at 15 and 20), OTA gate (one web build + three api recreates, a few minutes,
+    # capped at 15) + log scan.
+    timeout-minutes: 195
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1408,6 +1444,78 @@ jobs:
           --require 'ingest: '
           "$RUNNER_TEMP/video-logs"
 
+      # ---- Step 14: live-update (OTA) gate (docs/plans/step-14.md 2.10, 4.3; task 14.11) -------
+      # The gate recreates the api itself (APP_UPDATE_SOURCE_URL / APP_UPDATE_FILES_BASE_URL at
+      # its static server on :18090, then APP_UPDATE_ENABLED=false) and restores the stack
+      # defaults in a finally, so the tap follows every api container it starts. api only: the
+      # signer and the manifest source live there; the worker never sees the key.
+      - name: Start api log tap (OTA gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/ota-logs" api
+
+      # Step-14 OTA gate (e2e/ota/gate.ts), dev key from .env.dev, keyless otherwise: builds the
+      # web once (VITE_API_URL=http://localhost:8080), serves variant B (new content id) and C
+      # (never calls notifyAppReady) from :18090, and asserts through /api/app-update/manifest:
+      # the envelope verifies with the dev SPKI, native_too_old, up_to_date, disabled (kill
+      # switch and web clients), a tampered file -> verify_failed in the reference verifier, the
+      # B-vs-A delta < 2 MiB. Prints PASS/FAIL per check and `PASS n/n`, exits 1 on any miss.
+      - name: OTA gate (step-14 live updates, dev key)
+        id: ota-gate
+        timeout-minutes: 15
+        env:
+          OTA_GATE_LOG: ${{ runner.temp }}/ota-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$OTA_GATE_LOG")"
+          rc=0
+          pnpm e2e:ota-gate 2>&1 | tee "$OTA_GATE_LOG" || rc=$?
+          {
+            echo '### OTA gate (step 14)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$OTA_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |^(PASS|FAIL) [0-9]+/[0-9]+$' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Stop api log tap (OTA gate)
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/ota-logs"
+
+      # The gate's finally put the api back on the stack defaults: Vite dev serves no manifest,
+      # so the feature stays inert ("unavailable") and nothing points at :18090 any more.
+      - name: api restored to the app-update defaults after the OTA gate
+        run: |
+          set -euo pipefail
+          src="$(docker compose -f docker-compose.dev.yml exec -T api printenv APP_UPDATE_SOURCE_URL)"
+          on="$(docker compose -f docker-compose.dev.yml exec -T api printenv APP_UPDATE_ENABLED)"
+          [ "$src" = "http://web:8080/app-update/manifest.json" ] \
+            || { echo "::error::api APP_UPDATE_SOURCE_URL was not restored"; exit 1; }
+          [ "$on" = "true" ] || { echo "::error::api APP_UPDATE_ENABLED was not restored"; exit 1; }
+          echo "api on the stack defaults (source http://web:8080/app-update/manifest.json, enabled)"
+
+      # docs/plans/step-14.md 2.6 / 4.3: nothing the api printed while the gate ran holds a
+      # signature (field or base64 DER ECDSA), manifestJson or a manifest body (minNativeBuild /
+      # webVersion / builtAt keys, a files array, 64-hex file hashes), EC key material (PKCS#8,
+      # SEC1 or SPKI base64), the check's query values (platform= native= current=) or any URL
+      # (the source, the files base URL; Fastify's "Server listening at" lines excepted), nor
+      # the default token/JWT shapes. Prints file:line + pattern name only. The `--require`s make
+      # it non-vacuous: the feature came up with the dev key and served checks while tapped.
+      - name: No signatures, manifest bodies, key material, query values or URLs in api logs (OTA gate)
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs --app-update
+          --require 'app updates: on'
+          --require 'app update check'
+          "$RUNNER_TEMP/ota-logs"
+
+      - name: Upload OTA gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ota-gate
+          path: ${{ runner.temp }}/ota-gate
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload video gate output
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1633,6 +1741,16 @@ jobs:
         working-directory: apps/mobile-web/android
         run: ./gradlew lintDebug
 
+      # docs/plans/step-14.md 2.7 / 4.4 (task 14.11): JVM unit tests of the live-update core
+      # (UpdateBundleTest): content id vectors, path and base-URL rules, ECDSA verification with
+      # the dev key + a flipped-byte rejection, minNativeBuild, the stage/launch/rollback state
+      # machine and pruning, against src/test/resources/.../vectors.fixture.json and, when
+      # committed, e2e/ota/vectors.json (app/build.gradle passes its path). Reports land in
+      # app/build/reports/tests (uploaded with the lint report on failure).
+      - name: Live-update unit tests (testDebugUnitTest app.tinyglow.update.*)
+        working-directory: apps/mobile-web/android
+        run: ./gradlew testDebugUnitTest --tests 'app.tinyglow.update.*'
+
       # docs/plans/step-9.md 9.3: the merged manifest holds none of the media/storage/location/
       # audio permissions (nor anything the source manifest removes with tools:node="remove"),
       # and android:allowBackup="false".
@@ -1713,6 +1831,14 @@ jobs:
           plutil -lint apps/mobile-web/ios/App/App/Info.plist apps/mobile-web/ios/App/App/Info-Debug.plist
           pnpm --filter @tinyglow/mobile-web check:ios-plists
 
+      # docs/plans/step-14.md 2.7 / 4.4 (task 14.11): host-side harness of the live-update core
+      # (LLUpdateBundle.swift + LLUpdateKeys.swift compiled with swiftc, no simulator, ~10 s):
+      # content id, path rules, signature + tamper, minNativeBuild, state machine, pruning; then
+      # compiled without DEBUG it must not trust or contain the dev key. This job is manual
+      # (workflow_dispatch); the same script is part of the local step-14 gate on the dev Mac.
+      - name: Live-update harness (Swift, Debug + Release compiles)
+        run: bash apps/mobile-web/ios/scripts/update-bundle-harness.sh
+
       - name: Sync the web build into the iOS project
         run: pnpm --filter @tinyglow/mobile-web native:sync:ios
 
@@ -1760,3 +1886,12 @@ jobs:
             fi
           done
           echo "Release Info.plist: no NSAppTransportSecurity, no CFBundleURLTypes"
+          # docs/plans/step-14.md 4.4: the Release binary neither contains nor trusts the dev
+          # live-update key (its SPKI sits under #if DEBUG in LLUpdateKeys.swift).
+          dev_spki="$(sed -n 's/.*static let devSpkiBase64 = "\([^"]*\)".*/\1/p' ios/App/App/LLUpdateKeys.swift)"
+          test -n "$dev_spki" || { echo "::error::devSpkiBase64 not found in LLUpdateKeys.swift"; exit 1; }
+          if strings "$app/App" | grep -qF "$dev_spki"; then
+            echo "::error::the Release App binary contains the dev live-update key"
+            exit 1
+          fi
+          echo "Release App binary: no dev live-update key"

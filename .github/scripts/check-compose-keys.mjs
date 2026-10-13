@@ -7,12 +7,15 @@
 //   ANTHROPIC_API_KEY            worker only    (fallback vision adapter; never the api, migrate or web)
 //   GOOGLE_IMPORT_CLIENT_ID      worker + api   (Google Photos import OAuth client)
 //   GOOGLE_IMPORT_CLIENT_SECRET  worker + api   (never web, migrate, google-fake or anything else)
+//   APP_UPDATE_SIGNING_KEY_BASE64  api only     (OTA manifest signing key, docs/plans/step-14.md
+//                                               2.9; dev: the committed dev key from .env.dev,
+//                                               blanked on migrate, worker and web)
 //
 // Reads `docker compose ... config --format json` on stdin, rendered with CANARY key values (the
 // CI step puts them in a throwaway .env.local for the dev file and in the shell environment for
 // the production file), and fails if a canary shows up in a service that must not hold that key,
 // or does not reach a service that needs it. Values are never printed, only service names.
-// Every key below needs its canary supplied (all four, exactly the CANARY strings).
+// Every key below needs its canary supplied (all of them, exactly the CANARY strings).
 //
 //   docker compose -f docker-compose.dev.yml config --format json \
 //     | node .github/scripts/check-compose-keys.mjs dev
@@ -36,12 +39,14 @@ const CANARY = {
   ANTHROPIC_API_KEY: "ci-canary-anthropic-key-not-a-secret",
   GOOGLE_IMPORT_CLIENT_ID: "ci-canary-google-import-client-id",
   GOOGLE_IMPORT_CLIENT_SECRET: "ci-canary-google-import-secret-not-a-secret",
+  APP_UPDATE_SIGNING_KEY_BASE64: "ci-canary-app-update-signing-key-not-a-secret",
 };
 const ALLOWED = {
   OPENAI_API_KEY: new Set(["api", "worker"]),
   ANTHROPIC_API_KEY: new Set(["worker"]),
   GOOGLE_IMPORT_CLIENT_ID: new Set(["api", "worker"]),
   GOOGLE_IMPORT_CLIENT_SECRET: new Set(["api", "worker"]),
+  APP_UPDATE_SIGNING_KEY_BASE64: new Set(["api"]),
 };
 
 if (process.argv[2] === "--print-env") {

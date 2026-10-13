@@ -63,7 +63,10 @@
 # Family-start safeguards (docs/plans/step-11.md 2.10): FAMILIES_PER_IP_PER_DAY,
 # BLOCK_DISPOSABLE_EMAIL and EMAIL_DOMAIN_DENYLIST / _ALLOWLIST go to the api only (operator
 # tools in migrate need none; the pending-photo cap is a database setting, docs/PRODUCTION.md
-# Part J). A new app variable must be added to .env.example AND to the x-app-env anchor (or the service's own
+# Part J). Live updates (docs/plans/step-14.md 2.9): the OTA manifest signing key
+# (APP_UPDATE_SIGNING_KEY_BASE64) and APP_UPDATE_* go to the api only, never x-app-env; the web
+# image bakes VITE_API_URL=${PUBLIC_URL} (build arg) so its bundle is also the phones' OTA bundle.
+# A new app variable must be added to .env.example AND to the x-app-env anchor (or the service's own
 # block) below.
 #
 # Auth topology (docs/plans/step-3.md 2.1): browsers reach GoTrue only at /auth/health,
@@ -480,6 +483,16 @@ services:
       # is sent). See .env.example for how to generate the hash; quote it there with '...'.
       REVIEW_ACCOUNT_EMAIL: ${REVIEW_ACCOUNT_EMAIL:-}
       REVIEW_ACCOUNT_CODE_HASH: ${REVIEW_ACCOUNT_CODE_HASH:-}
+      # Live updates (docs/plans/step-14.md D2, D7, 2.6), api only. The api signs the web
+      # image's /app-update/manifest.json (fetched over the compose network) with this ECDSA
+      # P-256 key (base64 PKCS#8 DER from sh docker/tools/app-update-keygen.sh) and hands the
+      # phones the signed manifest + APP_UPDATE_FILES_BASE_URL. Empty key => the feature is off
+      # (reason "disabled"); APP_UPDATE_ENABLED=false is the kill switch. The key's public half
+      # must be the `prod` key compiled into the apps, else the api refuses the feature at boot.
+      APP_UPDATE_ENABLED: ${APP_UPDATE_ENABLED:-true}
+      APP_UPDATE_SIGNING_KEY_BASE64: ${APP_UPDATE_SIGNING_KEY_BASE64:-}
+      APP_UPDATE_SOURCE_URL: http://web/app-update/manifest.json
+      APP_UPDATE_FILES_BASE_URL: ${APP_UPDATE_FILES_BASE_URL:-${PUBLIC_URL:-https://tinyglow.app}}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -637,6 +650,11 @@ services:
         # Baked in at build time: rebuild the image after changing it, and put the DSN's ingest
         # origin in WEB_CSP_CONNECT_EXTRA. Native builds never get it.
         VITE_SENTRY_DSN: ${SENTRY_WEB_DSN:-}
+        # Live updates (docs/plans/step-14.md D10, 2.5): this bundle is also the phones' OTA
+        # bundle, so it carries the native apps' API origin. apiUrl() uses it only inside the
+        # native shells (isNative()); browsers keep calling /api on their own origin. Rebuild the
+        # image after changing PUBLIC_URL.
+        VITE_API_URL: ${PUBLIC_URL:-https://tinyglow.app}
     restart: unless-stopped
     logging: *logging
     environment:

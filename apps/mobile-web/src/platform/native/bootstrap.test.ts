@@ -10,7 +10,9 @@ const mods = vi.hoisted(() => ({
   hideSplash: vi.fn(),
   syncStatusBar: vi.fn(),
   store: { id: "secure-store" },
+  notifyAppReady: vi.fn(),
 }));
+vi.mock("./appUpdate", () => ({ notifyAppReady: mods.notifyAppReady }));
 vi.mock("../tokenStore", () => ({ setTokenStore: mods.setTokenStore }));
 vi.mock("../uploader", () => ({ setUploader: mods.setUploader }));
 vi.mock("./nativeUploader", () => ({ nativeUploader: { id: "native-uploader" } }));
@@ -23,6 +25,7 @@ import { afterFirstRender, bootstrapNative } from "./bootstrap";
 beforeEach(() => {
   for (const f of [mods.setTokenStore, mods.setUploader, mods.hideSplash, mods.syncStatusBar])
     f.mockReset();
+  mods.notifyAppReady.mockReset().mockResolvedValue(undefined);
   mods.refreshIfNeeded.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
@@ -53,5 +56,24 @@ describe("afterFirstRender", () => {
     expect(mods.syncStatusBar.mock.invocationCallOrder[0]).toBeLessThan(
       mods.hideSplash.mock.invocationCallOrder[0] as number,
     );
+  });
+
+  it("tells the live updater the bundle booted (notifyAppReady) after the splash is hidden", async () => {
+    await afterFirstRender();
+    await vi.waitFor(() => expect(mods.notifyAppReady).toHaveBeenCalledTimes(1));
+    expect(mods.hideSplash.mock.invocationCallOrder[0]).toBeLessThan(
+      mods.notifyAppReady.mock.invocationCallOrder[0] as number,
+    );
+  });
+
+  it("still calls notifyAppReady when hideSplash throws (no rollback of a good bundle)", async () => {
+    mods.hideSplash.mockRejectedValue(new Error("no splash"));
+    await afterFirstRender().catch(() => undefined);
+    await vi.waitFor(() => expect(mods.notifyAppReady).toHaveBeenCalledTimes(1));
+  });
+
+  it("a failing notifyAppReady (older shell without the updater) never throws", async () => {
+    mods.notifyAppReady.mockRejectedValue(new Error("no plugin"));
+    await expect(afterFirstRender()).resolves.toBeUndefined();
   });
 });

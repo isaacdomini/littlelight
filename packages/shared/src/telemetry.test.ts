@@ -81,6 +81,8 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
         "iso6709",
         // step 13 (passkeys)
         "webauthnPair",
+        "appUpdatePair",
+        "ecPrivateKeyPkcs8",
       ].sort(),
     );
     for (const re of Object.values(TELEMETRY_SCRUB_PATTERNS)) expect(re.flags).not.toContain("g");
@@ -128,6 +130,9 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
     ["webauthnPair", "challengeId: 3f2c1b0a-1234-4abc-8def-0123456789ab"],
     ["webauthnPair", "rawId=AQIDBA"],
     ["webauthnPair", "userHandle=dXNlcg"],
+    ["appUpdatePair", 'manifestJson={"schema":1,"version":"0123456789abcdef"}'],
+    ["appUpdatePair", "APP_UPDATE_SIGNING_KEY_BASE64=MIGHAgEAMBMG"],
+    ["ecPrivateKeyPkcs8", "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgUfqOAXwie8r258"],
   ] as [keyof typeof TELEMETRY_SCRUB_PATTERNS, string][])("%s matches %j", (name, sample) => {
     expect(TELEMETRY_SCRUB_PATTERNS[name].test(sample)).toBe(true);
   });
@@ -763,5 +768,59 @@ describe("scrubTelemetryString: passkeys (step 13)", () => {
   it("leaves a plain outcome log line alone", () => {
     const line = "passkey verify refused outcome=no_user_verification";
     expect(scrubTelemetryString(line)).toBe(line);
+  });
+});
+
+describe("scrubTelemetryString: live updates (step 14)", () => {
+  // A throwaway P-256 key in the PKCS#8 DER shape of APP_UPDATE_SIGNING_KEY_BASE64 (not a real key).
+  const KEY = `MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg${"A".repeat(60)}hRANCAAS${"B".repeat(80)}==`;
+
+  it("removes a bare base64 EC private key", () => {
+    const out = scrubTelemetryString(`boot failed with ${KEY} trailing`);
+    expect(out).not.toContain("MIGHAgEAMBMG");
+    expect(out).not.toContain("AAAAAAAAAA");
+    expect(out).toContain("[private-key]");
+    expect(out).toContain("trailing");
+  });
+
+  it("removes the key named in an env-style pair", () => {
+    const out = scrubTelemetryString(`APP_UPDATE_SIGNING_KEY_BASE64=${KEY}`);
+    expect(out).not.toContain("MIGHAgEAMBMG");
+    expect(out).not.toContain("BBBBBBBB");
+  });
+
+  it.each([
+    'manifestJson={"schema":1,"version":"0123456789abcdef","baseUrl":"https://tinyglow.app"}',
+    'manifestJson: {"schema":1,"version":"0123456789abcdef","baseUrl":"https://tinyglow.app"}',
+  ])("replaces a manifestJson value (JSON to end of line): %s", (sample) => {
+    const out = scrubTelemetryString(`stage failed ${sample}\nnext line`);
+    expect(out).not.toContain("0123456789abcdef");
+    expect(out).not.toContain("tinyglow.app");
+    expect(out).toContain("manifestJson");
+    expect(out).toContain("next line");
+  });
+
+  it("drops manifestJson / signature / signing-key fields from events", () => {
+    const out = JSON.stringify(
+      scrubTelemetryEvent({
+        contexts: {
+          app_update: {
+            manifestJson: '{"version":"0123456789abcdef"}',
+            signature: "MEUCIQDsecretsig",
+            APP_UPDATE_SIGNING_KEY_BASE64: "c2VjcmV0a2V5",
+            outcome: "staged",
+          },
+        },
+      }),
+    );
+    expect(out).not.toContain("0123456789abcdef");
+    expect(out).not.toContain("MEUCIQDsecretsig");
+    expect(out).not.toContain("c2VjcmV0a2V5");
+    expect(out).toContain("staged");
+  });
+
+  it("is idempotent on the redacted output", () => {
+    const once = scrubTelemetryString(`k ${KEY} manifestJson={"a":1}`);
+    expect(scrubTelemetryString(once)).toBe(once);
   });
 });

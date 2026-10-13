@@ -1,0 +1,21 @@
+{
+  "comment": "Live-update test vectors (docs/plans/step-14.md 2.7). Signed with the committed DEV key (.env.dev); harness fixture until e2e/ota/vectors.json exists.",
+  "keyId": "dev",
+  "spkiBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmF4/OE/rfPgzXHUS+6VBcqWMWvqO4h+6HFhn1hGFzFJq2D8+w6JduoO6BU5aSmqyW74hxsVh1uqA79xVFlGFyw==",
+  "manifestJson": "{\"schema\":1,\"version\":\"ce73967cf7297fb1\",\"webVersion\":\"1.0.0\",\"minNativeBuild\":{\"ios\":1,\"android\":1},\"builtAt\":\"2026-10-13T00:00:00.000Z\",\"files\":[{\"path\":\"assets/a b+c.js\",\"sha256\":\"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\",\"size\":1},{\"path\":\"assets/app-1.js\",\"sha256\":\"0a286891c11c056e1ab5bfc25bf5d6b2f5b06d38eac10944f678fd8a2e70c393\",\"size\":14},{\"path\":\"index.html\",\"sha256\":\"56f4add89211845d20300ba74538c35d64cc5c07bf909cf0a2324f2735585251\",\"size\":43}],\"baseUrl\":\"https://files.example.test/web\"}",
+  "signature": "MEUCIGIwq+tPkJANDMre+OP0j3bLHpSku/diQZZM/HPmnggjAiEA6njXiwdGshZEQoD5EtJ0faiTMwhJ+y7DlLCSNxZPDxY=",
+  "expectedVersion": "ce73967cf7297fb1",
+  "files": {
+    "index.html": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+QjwvYm9keT48L2h0bWw+Cg==",
+    "assets/app-1.js": "Y29uc29sZS5sb2coMSk=",
+    "assets/a b+c.js": "eA=="
+  },
+  "tampered": {
+    "manifestJson": "{\"schema\":1,\"version\":\"ce73967cf7297fb1\",\"webVersion\":\"1.0.0\",\"minNativeBuild\":{\"ios\":1,\"android\":1},\"builtAt\":\"2026-10-13T00:00:00.000Z\",\"files\":[{\"path\":\"assets/a b+c.js\",\"sha256\":\"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4880\",\"size\":1},{\"path\":\"assets/app-1.js\",\"sha256\":\"0a286891c11c056e1ab5bfc25bf5d6b2f5b06d38eac10944f678fd8a2e70c393\",\"size\":14},{\"path\":\"index.html\",\"sha256\":\"56f4add89211845d20300ba74538c35d64cc5c07bf909cf0a2324f2735585251\",\"size\":43}],\"baseUrl\":\"https://files.example.test/web\"}",
+    "signature": "MEUCIGIwq+tPkJANDMre+OP0j3bLHpSku/diQZZM/HPmnggjAiEA6njXiwdGshZEQoD5EtJ0faiTMwhJ+y7DlLCSNxZPDxY="
+  },
+  "tamperedFile": {
+    "path": "assets/app-1.js",
+    "contentBase64": "Y29uc29sZS5sb2coMik="
+  }
+}

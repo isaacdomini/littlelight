@@ -8,6 +8,7 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import pkg from "../package.json" with { type: "json" };
+import { type AppUpdateRoutesOptions, appUpdateRoutes } from "./app-update";
 import { createGoTrueClient, type GoTrueClient, registerAuth } from "./auth";
 import { chatRoutes } from "./chat";
 import { type ApiConfig, chatSettings, nativeSettings, searchSettings } from "./config";
@@ -74,6 +75,11 @@ export interface BuildAppOptions {
    * throttles. Default: built from `config` (docs/plans/step-10.md 2.6).
    */
   imports?: ImportsRoutesOptions;
+  /**
+   * Live-update overrides (tests): the manifest upstream's `fetch`, clock, cache timings and
+   * the boot warm-up fetch (docs/plans/step-14.md 2.6).
+   */
+  appUpdate?: AppUpdateRoutesOptions;
 }
 
 /**
@@ -181,6 +187,7 @@ function registerRoutes(
   app: FastifyInstance,
   config: ApiConfig,
   imports: ImportsRoutesOptions = {},
+  appUpdate: AppUpdateRoutesOptions = {},
 ): void {
   healthzRoutes(app, {
     bucket: config.S3_BUCKET,
@@ -192,6 +199,9 @@ function registerRoutes(
   meRoutes(app);
   // Step 9: native push device registration (docs/plans/step-9.md 2.8).
   pushRoutes(app);
+  // Step 14: live-update manifest for the native shells (docs/plans/step-14.md 2.6). Public; no
+  // database. A missing/bad signing key turns it off (`disabled`) with one log line.
+  appUpdateRoutes(app, appUpdate);
   babiesRoutes(app);
   // Step 4: uploads, photos (docs/plans/step-4.md 2.4).
   uploadsRoutes(app);
@@ -286,7 +296,7 @@ export async function buildApp(opts: BuildAppOptions) {
   // search, `/babies`), and the viewer hook never reads `ll_access` or a GoTrue bearer.
   registerViewerAuth(app, config);
 
-  registerRoutes(app, config, opts.imports);
+  registerRoutes(app, config, opts.imports, opts.appUpdate);
   // Admin share-link routes + viewer routes (`apps/api/src/sharing`, tasks 8.6/8.7). They read
   // `app.config` (`shareSettings`), `app.jobs.enqueueShareApply` and `app.signer`.
   await registerSharing(app);

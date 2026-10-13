@@ -35,6 +35,16 @@ android {
             }
         }
     }
+    buildFeatures {
+        // BuildConfig.DEBUG gates the dev live-update key (update/UpdateKeys.java).
+        buildConfig = true
+    }
+    testOptions {
+        unitTests.all {
+            // UpdateBundleTest also runs the OTA gate's vectors when they exist (task 14.10).
+            systemProperty 'tinyglow.otaVectors', rootProject.file('../../../e2e/ota/vectors.json').absolutePath
+        }
+    }
     buildTypes {
         release {
             if (keystorePropsFile.exists()) {

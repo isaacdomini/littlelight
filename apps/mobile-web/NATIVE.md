@@ -379,6 +379,114 @@ Tests (no device, no simulator):
    Play services or no screen lock.
 4. Record both runs in `docs/PROGRESS.md`; only then add the listing line (`store/README.md`, P5).
 
+## Live updates (`TinyglowUpdater`, step 14)
+
+The installed apps pick up a new web build without a store release (`docs/plans/step-14.md`). The
+store build keeps its bundled web (`public/`) as the fallback; the api hands out a manifest signed
+with ECDSA P-256 (`GET /api/app-update/manifest`), the plugin verifies it with a key compiled into
+the app, downloads only the files it does not already have, checks every file's sha256 and size,
+and the new bundle runs from the **next cold launch** (or `applyNow()`). No third-party updater,
+no new permission (Android uses `INTERNET` and the `ACCESS_NETWORK_STATE` WorkManager already merges in).
+
+**Rule: bump `minNativeBuild.<platform>` in `apps/mobile-web/app-update.json` in the same commit
+that adds or changes a native plugin method (or permission, SDK, Capacitor version) the web calls.**
+The value is the iOS `CFBundleVersion` / Android `versionCode` of the first store build that has
+the change; older shells then get `native_too_old` and keep their bundled web. The release lanes
+bump the build numbers. Any native change still needs a store release.
+
+### Plugin interface (`TinyglowUpdater`, both platforms)
+
+```ts
+interface TinyglowUpdaterPlugin {
+  /** Shell + bundle facts for the UI and for the manifest query. */
+  info(): Promise<{
+    nativeVersion: string;          // CFBundleShortVersionString / versionName
+    nativeBuild: number;            // CFBundleVersion / versionCode (0 if unreadable)
+    builtinVersion: string;         // content id of public/app-update/manifest.json ("unknown" if missing)
+    currentVersion: string;         // what this WebView runs: builtinVersion or the active OTA bundle
+    currentSource: "builtin" | "ota";
+    stagedVersion: string | null;   // applies on next launch; equals builtinVersion when the server went back to the bundled web
+    androidPushConfigured: boolean; // Android: google-services resources (google_app_id) present; iOS: always true
+  }>;
+  /** Verify the signed manifest, download the missing files, stage the bundle. Never rejects for
+   *  network or verification problems (only "bad-args" when a field is missing). Can take minutes. */
+  stage(args: { manifestJson: string; signature: string; keyId: string }): Promise<{
+    outcome: "staged" | "up_to_date" | "already_staged" | "native_too_old" | "wifi_required"
+           | "constrained" | "no_space" | "network" | "verify_failed" | "rejected";
+    version?: string;  // the manifest's version (absent for verify_failed)
+    bytes?: number;    // bytes that had to / would have to download (0 for up_to_date, already_staged, staged builtin)
+  }>;
+  /** JS booted: cancels the watchdog, marks the running bundle good. Call on every launch. */
+  notifyAppReady(): Promise<void>;
+  /** Reload into the staged bundle now (no-op when nothing is staged). The JS side checks idle first. */
+  applyNow(): Promise<void>;
+  /** Back to the bundled web ("Reset app files"); deletes every OTA bundle. Failed versions stay refused. */
+  reset(): Promise<void>;
+}
+```
+
+`stage()` order: signature (`keyId` selects the key: `prod-2026-10` always, `dev` in Debug builds
+only) → strict parse (`schema` 1, ≤ 2000 files, ≤ 64 MiB, paths relative without `..`/empty/`.`
+segments, NUL or backslash, no excluded prefix, `index.html` listed, unique paths, `version` = content
+id of `files`, `baseUrl` rules) → anything failing so far is `verify_failed` → `minNativeBuild` →
+`native_too_old` → previously failed version → `rejected` → equals what runs now → `up_to_date`
+(and drops a pending switch) → equals staged → `already_staged` → equals the bundled web →
+staged with 0 bytes (switch back to builtin at next launch) → otherwise plan: files whose sha256
+exists locally (bundled `public/`, current/previous/staged bundle) are copied, the rest download.
+Network policy only when bytes > 0: Low Data Mode / Data Saver (metered), Low Power / power save,
+thermal serious+ → `constrained`; offline → `network`; metered and > 2 MiB → `wifi_required`. Free
+space must be ≥ bundle size + 64 MiB (`no_space`). Downloads: foreground, 4 in flight, 20 s per file,
+`Accept-Encoding: identity`, URL = `baseUrl + "/" + encodeURIComponent(each segment)`. A wrong hash or
+size is `verify_failed`, a transport error `network`; either deletes the temp dir.
+
+### Storage and launch
+
+- iOS: `Library/NoCloud/ionic_built_snapshots/<version>/` (the exact place Capacitor maps its persisted
+  `serverBasePath` to), excluded from backup in `AppDelegate`. Android: `filesDir/ll-updates/<version>/`.
+  Each bundle holds its signed manifest at `app-update/manifest.json`. Temp: `tmp-<version>/` (deleted on
+  failure; leftovers older than a day pruned). Kept: current + previous (+ staged until the next launch).
+- `state.json` next to the bundles: `{ binary, current, staged, previous, good[], failed[] (≤ 20), attempts }`
+  (version ids and counters only).
+- Capacitor's own persisted path is the switch: iOS `KeyValueStore.standard["serverBasePath"]`,
+  Android `SharedPreferences("CapWebViewSettings").serverBasePath`. The launch decision runs before
+  Capacitor reads it: iOS `TinyglowViewController.instanceDescriptor()` → `LLUpdater.prepareLaunch()`;
+  Android `TinyglowUpdaterPlugin.load()` (plugins load before `Bridge.loadWebView()`). It promotes a
+  staged bundle, falls back when a bundle directory is missing, and on a **new native binary**
+  (version name or build changed) deletes every bundle and starts on the bundled web (Capacitor
+  clears its key then too).
+- **Watchdog**: a bundle not yet in `good` gets 10 s from the first page load (fallback 25 s from
+  plugin load) to call `notifyAppReady()`. Expiry while the app is in the foreground → the version
+  joins `failed`, the WebView switches to the previous good bundle or the bundled web and reloads,
+  and the bundle is deleted. A backgrounded app re-arms 10 s when it is active again. Kill
+  protection: a bundle launched 4 times without `notifyAppReady()` is failed at launch.
+- Nothing logs (no URL, path, signature, manifest or file name); outcomes only travel to JS.
+
+### Keys
+
+`ios/App/App/LLUpdateKeys.swift` and `android/.../update/UpdateKeys.java` mirror
+`APP_UPDATE_PUBLIC_KEYS` (`packages/shared/src/app-update.ts`). The dev key is only inside `#if DEBUG`
+(Swift) / `if (BuildConfig.DEBUG)` (Java; `buildConfig = true` in `app/build.gradle`, javac drops the
+constant-false block). Verified 2026-10-13: the Release simulator binary and the release
+`UpdateKeys.class` do not contain the dev SPKI; Debug ones do. Rotation: add the new key here, ship
+a store build, then switch the server.
+
+### Tests (host-side, no simulator/emulator)
+
+- iOS: `sh apps/mobile-web/ios/scripts/update-bundle-harness.sh` (macOS; SKIP elsewhere). Compiles
+  `LLUpdateBundle.swift` + `LLUpdateKeys.swift` twice (with and without `-D DEBUG`), runs content id
+  vectors, path/base-URL/URL rules, signature + tamper, parsing, network policy, the state machine,
+  staging (reuse, tampered file, network failure), pruning; then checks the release compile lacks the
+  dev SPKI and the updater sources have no logging calls.
+- Android: `JAVA_HOME=<jdk 21> ./gradlew testDebugUnitTest --tests 'app.tinyglow.update.*'` (`UpdateBundleTest`).
+- Vectors: `ios/scripts/update-bundle-harness/vectors.fixture.json` (= `android/app/src/test/resources/app/tinyglow/update/vectors.fixture.json`),
+  dev-signed; both harnesses also run `e2e/ota/vectors.json` when it exists. Shape (only
+  `manifestJson` and `signature` are required):
+  `{ keyId, spkiBase64, manifestJson, signature, expectedVersion, files: { <path>: <base64 bytes> },
+  tampered: { manifestJson, signature }, tamperedFile: { path, contentBase64 } }`. `files` must
+  hold every listed file's bytes for the staging test (first vector file only).
+- Device scenario (A → B → broken C → rollback → reset): `pnpm e2e:native-ios -- --ota` /
+  `pnpm e2e:native-android -- --ota` (task 14.10).
+
 ## Pitfalls
 
 Three iOS bugs have already been fixed. Do not reintroduce them.
