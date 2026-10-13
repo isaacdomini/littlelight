@@ -5,8 +5,11 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.pm.ServiceInfo;
+import android.net.Uri;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.concurrent.futures.CallbackToFutureAdapter;
 import androidx.core.app.NotificationCompat;
 import androidx.work.Data;
@@ -16,21 +19,28 @@ import androidx.work.Worker;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.channels.Channels;
 
 /**
- * Raw-body HTTP PUT of one file (docs/plans/step-9.md 2.6). No multipart, no custom headers
- * (the presigned URL signs none). The input URL carries X-Amz-Signature: it is never logged, and
- * only the HTTP status or a short error code leaves this class.
+ * Raw-body HTTP PUT of one byte range of a file (docs/plans/step-9.md 2.6; ranged parts
+ * docs/plans/step-12.md 2.9). No multipart, no custom headers (the presigned URL signs none). The
+ * range is streamed from the source (RandomAccessFile for files, a seeked descriptor for content
+ * URIs): nothing is copied, so there is nothing to clean up. The input URL carries
+ * X-Amz-Signature: it is never logged, and only the HTTP status or a short error code leaves this class.
  */
 public class UploadWorker extends Worker {
     static final String TAG = "ll-upload";
     static final String KEY_URL = "url";
     static final String KEY_PATH = "path";
+    static final String KEY_OFFSET = "offset";
+    static final String KEY_LENGTH = "length";
     static final String KEY_SENT = "sent";
     static final String KEY_TOTAL = "total";
     static final String KEY_STATUS = "status";
@@ -38,9 +48,6 @@ public class UploadWorker extends Worker {
     static final String CHANNEL_ID = "uploads";
     private static final int NOTIFICATION_ID = 4711;
     private static final int MAX_ATTEMPTS = 3;
-
-    /** Uploads queued or running in this process; only used for the notification text. */
-    static final AtomicInteger ACTIVE = new AtomicInteger();
 
     private volatile HttpURLConnection connection;
 
@@ -61,14 +68,13 @@ public class UploadWorker extends Worker {
         Context ctx = getApplicationContext();
         NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            nm.createNotificationChannel(
-                new NotificationChannel(CHANNEL_ID, "Photo uploads", NotificationManager.IMPORTANCE_LOW)
-            );
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL_ID, "Uploads", NotificationManager.IMPORTANCE_LOW));
         }
-        int n = Math.max(1, ACTIVE.get());
+        // One notification for every queued part; a count would count parts, not photos, so none is shown.
         Notification notification = new NotificationCompat.Builder(ctx, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle(n == 1 ? "Uploading 1 photo" : "Uploading " + n + " photos")
+            .setContentTitle("Uploading photos and videos")
+            .setContentText("Tinyglow keeps uploading while you do other things.")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -79,17 +85,79 @@ public class UploadWorker extends Worker {
         return new ForegroundInfo(NOTIFICATION_ID, notification);
     }
 
+    /** The opened, range-positioned source and its total size. */
+    private static final class Source implements AutoCloseable {
+        final InputStream in;
+        final long fileSize;
+        private final AutoCloseable owner;
+
+        Source(InputStream in, long fileSize, AutoCloseable owner) {
+            this.in = in;
+            this.fileSize = fileSize;
+            this.owner = owner;
+        }
+
+        @Override
+        public void close() {
+            try {
+                in.close();
+            } catch (Exception ignored) {
+                // closing
+            }
+            try {
+                if (owner != null) owner.close();
+            } catch (Exception ignored) {
+                // closing
+            }
+        }
+    }
+
+    /** Opens the source and seeks to {@code offset}; null when unreadable. */
+    @Nullable
+    private Source open(String path, long offset) throws IOException {
+        if (path.startsWith("content://")) {
+            ParcelFileDescriptor pfd = getApplicationContext().getContentResolver().openFileDescriptor(Uri.parse(path), "r");
+            if (pfd == null) return null;
+            long size = pfd.getStatSize();
+            if (size < 0) {
+                pfd.close();
+                return null;
+            }
+            FileInputStream fis = new FileInputStream(pfd.getFileDescriptor());
+            try {
+                fis.getChannel().position(offset);
+            } catch (IOException notSeekable) {
+                ByteRange.skipFully(fis, offset);
+            }
+            return new Source(fis, size, pfd);
+        }
+        if (path.startsWith("file://")) path = Uri.parse(path).getPath();
+        File file = path == null ? null : new File(path);
+        if (file == null || !file.isFile() || !file.canRead()) return null;
+        RandomAccessFile raf = new RandomAccessFile(file, "r");
+        raf.seek(offset);
+        return new Source(Channels.newInputStream(raf.getChannel()), raf.length(), raf);
+    }
+
     @NonNull
     @Override
     public Result doWork() {
         String url = getInputData().getString(KEY_URL);
         String path = getInputData().getString(KEY_PATH);
-        if (url == null || path == null) return fail("bad-args");
-        if (path.startsWith("file://")) path = android.net.Uri.parse(path).getPath();
-        File file = path == null ? null : new File(path);
-        if (file == null || !file.isFile() || !file.canRead()) return fail("file-unreadable");
-        long total = file.length();
-        try {
+        long offset = getInputData().getLong(KEY_OFFSET, 0);
+        long length = getInputData().getLong(KEY_LENGTH, -1);
+        if (url == null || path == null || offset < 0) return fail("bad-args");
+        try (Source src = open(path, 0)) {
+            if (src == null) return fail("file-unreadable");
+            ByteRange range = ByteRange.of(src.fileSize, offset, length);
+            if (range == null) return fail(src.fileSize == 0 ? "file-unreadable" : "bad-range");
+            length = range.length;
+        } catch (IOException e) {
+            return fail("file-unreadable");
+        }
+        final long total = length;
+        try (Source src = open(path, offset)) {
+            if (src == null) return fail("file-unreadable");
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             connection = c;
             c.setRequestMethod("PUT");
@@ -98,21 +166,23 @@ public class UploadWorker extends Worker {
             c.setReadTimeout(120_000);
             c.setUseCaches(false);
             c.setFixedLengthStreamingMode(total);
-            long sent = 0;
-            long lastReport = 0;
-            try (InputStream in = new FileInputStream(file); OutputStream out = c.getOutputStream()) {
-                byte[] buf = new byte[64 * 1024];
-                int r;
-                while ((r = in.read(buf)) != -1) {
-                    if (isStopped()) return Result.failure(error("cancelled"));
-                    out.write(buf, 0, r);
-                    sent += r;
-                    long now = System.currentTimeMillis();
-                    if (now - lastReport > 250) {
-                        lastReport = now;
-                        setProgressAsync(new Data.Builder().putLong(KEY_SENT, sent).putLong(KEY_TOTAL, total).build());
+            try (OutputStream out = c.getOutputStream()) {
+                ByteRange.copy(
+                    src.in,
+                    out,
+                    total,
+                    new ByteRange.Progress() {
+                        @Override
+                        public void onProgress(long sent) {
+                            setProgressAsync(new Data.Builder().putLong(KEY_SENT, sent).putLong(KEY_TOTAL, total).build());
+                        }
+
+                        @Override
+                        public boolean isStopped() {
+                            return UploadWorker.this.isStopped();
+                        }
                     }
-                }
+                );
             }
             int status = c.getResponseCode();
             try {
@@ -124,7 +194,12 @@ public class UploadWorker extends Worker {
             return Result.success(
                 new Data.Builder().putInt(KEY_STATUS, status).putLong(KEY_SENT, total).putLong(KEY_TOTAL, total).build()
             );
-        } catch (java.io.IOException e) {
+        } catch (InterruptedIOException e) {
+            return Result.failure(error("cancelled"));
+        } catch (java.io.EOFException e) {
+            // The file shrank or vanished under us: not a network problem, do not retry.
+            return fail("file-unreadable");
+        } catch (IOException e) {
             if (isStopped()) return Result.failure(error("cancelled"));
             if (getRunAttemptCount() + 1 < MAX_ATTEMPTS) return Result.retry();
             return fail("network");

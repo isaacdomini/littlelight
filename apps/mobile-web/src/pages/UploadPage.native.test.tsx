@@ -121,7 +121,7 @@ describe("UploadPage on native", () => {
     await open();
     fireEvent.click(screen.getByTestId("upload-choose"));
     await waitFor(() => expect(manager.addNative).toHaveBeenCalledTimes(1));
-    expect(manager.addNative).toHaveBeenCalledWith(BABY.id, files, undefined);
+    expect(manager.addNative).toHaveBeenCalledWith(BABY.id, files, undefined, { plan: BABY.plan });
     expect(manager.add).not.toHaveBeenCalled();
     expect(screen.queryByTestId("upload-pick-error")).toBeNull();
   });
@@ -147,7 +147,9 @@ describe("UploadPage on native", () => {
     picker.takePhoto.mockResolvedValue({ status: "picked", files: shot, failed: 0 });
     await open();
     fireEvent.click(screen.getByTestId("upload-camera"));
-    await waitFor(() => expect(manager.addNative).toHaveBeenCalledWith(BABY.id, shot, undefined));
+    await waitFor(() =>
+      expect(manager.addNative).toHaveBeenCalledWith(BABY.id, shot, undefined, { plan: BABY.plan }),
+    );
     expect(picker.pickPhotos).not.toHaveBeenCalled();
   });
 

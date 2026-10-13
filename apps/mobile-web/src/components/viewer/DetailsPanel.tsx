@@ -1,5 +1,5 @@
 import { IonIcon } from "@ionic/react";
-import type { AiDescriptionV1, Milestone, Photo } from "@tinyglow/shared";
+import { type AiDescriptionV1, formatDuration, type Milestone, type Photo } from "@tinyglow/shared";
 import { eyeOffOutline } from "ionicons/icons";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -258,6 +258,17 @@ export function DetailsPanel({
   const milestone = d?.milestoneId ? milestones.find((m) => m.id === d.milestoneId) : null;
   const camera = [photo.exif?.cameraMake, photo.exif?.cameraModel].filter(Boolean).join(" ");
   const place = isAdmin ? photo.exif?.placeLabel : null;
+  const video = photo.mediaKind === "video";
+  // "3840 × 2160, HEVC" (+ "no sound"); the original's byte size is not in the DTO.
+  const original = video
+    ? [
+        photo.width && photo.height ? `${photo.width} × ${photo.height}` : null,
+        photo.videoCodec ? t(`details.codec.${photo.videoCodec}`) : null,
+        photo.hasAudio === false ? t("details.noAudio") : null,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
 
   return (
     <dl data-testid="viewer-details" className="flex flex-col gap-4">
@@ -279,6 +290,16 @@ export function DetailsPanel({
       <Row label={t("details.date")} testId="details-date">
         {formatTaken(photo.takenAt, timeZone, photo.takenAtEstimated)}
       </Row>
+      {video && photo.durationMs !== null ? (
+        <Row label={t("details.duration")} testId="details-duration">
+          {formatDuration(photo.durationMs)}
+        </Row>
+      ) : null}
+      {video && original ? (
+        <Row label={t("details.original")} testId="details-original">
+          {original}
+        </Row>
+      ) : null}
       {place ? <Row label={t("details.place")}>{place}</Row> : null}
       {camera ? <Row label={t("details.camera")}>{camera}</Row> : null}
       <Row label={t("details.milestone")} testId="details-milestone-value">

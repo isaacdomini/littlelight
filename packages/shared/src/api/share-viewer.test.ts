@@ -3,6 +3,9 @@ import { viewerPhotoSchema } from "./share-viewer";
 
 const photo = (over: Record<string, unknown> = {}) => ({
   id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  // step 12: viewers learn the kind and the duration, never the file or a GPS fix
+  mediaKind: "photo",
+  durationMs: null,
   takenAt: "2026-06-14",
   takenAtEstimated: false,
   ageDays: 105,

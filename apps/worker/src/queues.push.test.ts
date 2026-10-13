@@ -28,7 +28,7 @@ describe("push.notify queue definition", () => {
       expireInSeconds: 300,
     });
     const others = Object.entries(QUEUES).filter(([name]) => name !== JOBS.pushNotify);
-    expect(others).toHaveLength(15);
+    expect(others).toHaveLength(16);
     expect(others.every(([, q]) => q.policy === "exclusive")).toBe(true);
   });
 

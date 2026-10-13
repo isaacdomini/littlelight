@@ -29,6 +29,15 @@ import { hybridSearch } from "../search/hybrid";
 // model, so nothing else can leak: `search_photos` never returns `search_text` or a parent note;
 // only `get_photo` returns the note and `text_in_image` (the system prompt declares both data).
 // Never GPS, `raw_json`, storage keys or signed URLs. Arguments and results are never logged.
+// Step 12 (docs/plans/step-12.md 2.7): `search_photos` takes `media` (photo | video | any) and
+// every item of `search_photos` / `get_photo` carries `media_kind` and `duration_seconds`, so the
+// model can say "video" and give its length (chat prompt rule 9).
+
+/** `photos.duration_ms` → whole seconds for the model (null for photos / unprobed). */
+export function durationSeconds(ms: number | null | undefined): number | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return null;
+  return Math.max(1, Math.round(ms / 1000));
+}
 
 export interface ToolContext {
   babyId: string;
@@ -181,6 +190,7 @@ async function searchPhotos(
       ageFromDays: ages.from,
       ageToDays: ages.to,
       place: null,
+      media: args.media ?? "any",
       limit,
       timezone: ctx.timezone,
     };
@@ -274,8 +284,13 @@ async function searchPhotos(
     const summary = {
       tool: "search_photos" as const,
       set: Object.entries(args)
-        .filter(([, v]) => v !== null && !(Array.isArray(v) && v.length === 0))
-        .map(([k, v]) => (Array.isArray(v) ? `${k}[${v.length}]` : k)),
+        .filter(
+          ([k, v]) =>
+            v !== null && !(Array.isArray(v) && v.length === 0) && !(k === "media" && v === "any"),
+        )
+        .map(([k, v]) =>
+          Array.isArray(v) ? `${k}[${v.length}]` : k === "media" ? `media:${v}` : k,
+        ),
       ageWindow:
         args.age_from_days !== null || args.age_to_days !== null
           ? (args.age_to_days ?? 0) - (args.age_from_days ?? 0)
@@ -298,6 +313,8 @@ async function searchPhotos(
         : (
             await client.query<{
               photo_id: string;
+              media_kind: "photo" | "video";
+              duration_ms: number | null;
               taken_at: string | null;
               age_days: number | null;
               caption: string | null;
@@ -306,7 +323,7 @@ async function searchPhotos(
               milestone: string | null;
               tags: string[];
             }>(
-              `SELECT s.photo_id,
+              `SELECT s.photo_id, p.media_kind, p.duration_ms,
                       to_char(s.taken_at AT TIME ZONE $2, 'YYYY-MM-DD') AS taken_at,
                       s.age_days, s.people, s.place, s.tags,
                       COALESCE(
@@ -330,6 +347,8 @@ async function searchPhotos(
     const body: SearchPhotosResult = {
       results: ordered.map((r) => ({
         photo_id: r.photo_id,
+        media_kind: r.media_kind === "video" ? "video" : "photo",
+        duration_seconds: r.media_kind === "video" ? durationSeconds(r.duration_ms) : null,
         taken_at: r.taken_at,
         age: ageText(r.age_days),
         caption: r.caption,
@@ -497,6 +516,8 @@ async function getPhoto(
   return ctx.runClaims(async (client) => {
     const { rows } = await client.query<{
       id: string;
+      media_kind: "photo" | "video";
+      duration_ms: number | null;
       taken_on: string | null;
       age_days: number | null;
       note: string | null;
@@ -506,7 +527,7 @@ async function getPhoto(
       milestone: string | null;
       description: unknown;
     }>(
-      `SELECT p.id,
+      `SELECT p.id, p.media_kind, p.duration_ms,
               to_char(p.sort_at AT TIME ZONE $3, 'YYYY-MM-DD') AS taken_on, p.age_days,
               d.note, d.people, d.location_label, e.place_label,
               (SELECT m.name FROM public.milestones m WHERE m.id = d.milestone_id) AS milestone,
@@ -533,6 +554,8 @@ async function getPhoto(
     const measurements = ms.map((m) => toMeasurementItem(ctx, m));
     const body: GetPhotoResult = {
       photo_id: r.id,
+      media_kind: r.media_kind === "video" ? "video" : "photo",
+      duration_seconds: r.media_kind === "video" ? durationSeconds(r.duration_ms) : null,
       taken_at: r.taken_on,
       age: ageText(r.age_days),
       caption: desc?.caption ?? null,

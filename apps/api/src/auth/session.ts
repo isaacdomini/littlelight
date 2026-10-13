@@ -5,6 +5,7 @@ import {
   type AuditMetadata,
   type ClientKind,
   type SessionResponse,
+  type SignInMethod,
   WEB_SESSION_IDLE_DAYS,
 } from "@tinyglow/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -79,18 +80,28 @@ export type IssueKind = "sign_in" | "refresh";
 export interface IssueOptions {
   /** `sign_in`: profile upsert, audit `auth.sign_in`, new-device detection. `refresh`: liveness only. */
   kind: IssueKind;
-  /** Sign-in method recorded in the audit metadata; only the store-review sign-in sets it (D4). */
-  method?: "review";
+  /**
+   * How the session was created, recorded in the `auth.sign_in` audit metadata (`SIGN_IN_METHODS`):
+   * `otp` (email code or magic link), `apple` / `google` (OAuth or native id token), `passkey`
+   * (step 13), `review` (store-review sign-in, step 9 D4). Omitted only when the OAuth provider
+   * cannot be told from GoTrue's session (`GoTrueUser.provider` absent).
+   */
+  method?: SignInMethod;
 }
 
 type SessionTxResult = { ctx: TxContext; newDevice: boolean };
 
-/** `auth.sign_in` (+ `auth.new_device` when another live session exists), inside the claims tx. */
+/**
+ * `auth.sign_in` (+ `auth.new_device` when another live session exists), inside the claims tx.
+ * The metadata names the new GoTrue session (`session_id`, step 13) so the devices list can show
+ * how each session was created (`sessions.ts` reads the latest `auth.sign_in` row per session).
+ */
 async function signInBookkeeping(
   client: Tx,
   ctx: TxContext,
-  metadata: AuditMetadata,
+  base: AuditMetadata,
 ): Promise<SessionTxResult> {
+  const metadata: AuditMetadata = { ...base, session_id: ctx.sessionId };
   const { rows } = await client.query<{ n: number }>("SELECT public.count_user_sessions() AS n");
   const liveSessions = rows[0]?.n ?? 1;
   await audit(client, "auth.sign_in", { actorUserId: ctx.uid, metadata });
@@ -153,7 +164,7 @@ export async function issueSession(
     client: kind,
     user_agent_label: deviceLabel,
     ...(country ? { ip_country: country } : {}),
-    ...(opts.method === "review" ? { method: "review" as const } : {}),
+    ...(opts.method ? { method: opts.method } : {}),
   };
 
   let result: SessionTxResult;

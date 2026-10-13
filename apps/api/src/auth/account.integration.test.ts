@@ -51,6 +51,8 @@ describe.skipIf(!databaseUrl)("account deletion", () => {
         blockingBabies: [],
         babiesKept: [],
         freshSignIn: false,
+        // step 13: counted from GoTrue's list; 0 when passkeys are off (the harness default)
+        passkeys: 0,
       });
       expect((await h.inject(null, "GET", "/me/deletion-preview")).statusCode).toBe(401);
     });

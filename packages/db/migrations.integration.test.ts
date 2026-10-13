@@ -11,7 +11,7 @@ import { databaseUrl, env } from "./test/harness";
 // auth.users is created by GoTrue in the dev stack; on a bare pgvector (CI) the harness stubs it.
 // WARNING: reverts every migration, so only point it at a disposable database.
 
-const EXPECTED_MIGRATIONS = 21;
+const EXPECTED_MIGRATIONS = 22;
 const quiet = () => undefined;
 
 const APP_TABLES = [

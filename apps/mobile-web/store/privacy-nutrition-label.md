@@ -8,7 +8,7 @@ Functionality** only (no analytics, no advertising, no personalisation, no devel
 | --- | --- | --- |
 | Contact Info > Email Address | Yes | Sign-in and invites |
 | Contact Info > Name | Yes | Display name shown to family |
-| User Content > Photos or Videos | Yes | The baby photos the user uploads |
+| User Content > Photos or Videos | Yes | The baby photos and short videos the user uploads (videos since step 12; same type, so the manifest is unchanged) |
 | User Content > Other User Content | Yes | Notes, milestones, measurements, chat messages, baby name and birth date |
 | Search History > Search History | Yes | Search and chat queries, to return results |
 | Identifiers > User ID | Yes | Account id |
@@ -23,8 +23,22 @@ none. Photos are read only after a parent turns the feature on, and the app neve
 for any other purpose. `PrivacyInfo.xcprivacy` is unchanged for the same reason; the Photos
 permission text lives in `Info.plist`.
 
+Videos (step 12): a video is "Photos or Videos" like a photo. Its soundtrack stays inside the file we
+store; there is no "Audio Data" collection (the app never records audio, never asks for the
+microphone, never transcribes). Capture time and GPS come from the QuickTime metadata exactly as EXIF
+does for photos (Precise Location row above), stored encrypted and stripped from every playback copy.
+The system picker is used with the original ("current") representation, so no Photos permission is
+added; album sync's full-access request now also covers videos in the chosen album.
+
+Passkeys (step 13): an optional faster sign-in for an existing account (the email code remains the
+primary and recovery path). The private key is created and kept by iOS / iCloud Keychain (the user's
+own sync); the server stores only the public key, a name the user types and a last-used time. **No new
+data type**: a public key is an account credential (covered by Identifiers > User ID and Contact Info >
+Email Address), the app never receives biometric data (Face ID / Touch ID results stay in the OS), and
+`PrivacyInfo.xcprivacy` is unchanged.
+
 Not collected: Coarse Location, Contacts, Health and Fitness, Financial Info, Browsing History,
-Purchases, Usage Data, Diagnostics, Sensitive Info, Device ID, Advertising Data. No face data.
+Purchases, Usage Data, Diagnostics, Sensitive Info, Device ID, Advertising Data, Audio Data. No face data.
 
 Third-party processing: our AI model provider processes photos and queries for albums with AI features enabled only,
 as our processor under a data-processing agreement, with training on the data excluded. It is not a

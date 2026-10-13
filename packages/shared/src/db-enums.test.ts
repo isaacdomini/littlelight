@@ -32,7 +32,12 @@ const CASES = [
     photoMimeSchema,
     ["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"],
   ],
-  ["derivativeKind", derivativeKindSchema, ["thumb", "display", "analysis"]],
+  // step 12 (migration 22 `1792500000100_video.sql`): `web` rendition + three AI keyframes
+  [
+    "derivativeKind",
+    derivativeKindSchema,
+    ["thumb", "display", "analysis", "web", "keyframe1", "keyframe2", "keyframe3"],
+  ],
   ["measurementKind", measurementKindSchema, ["weight", "height", "head"]],
   ["measurementUnit", measurementUnitSchema, ["g", "kg", "oz", "lb", "mm", "cm", "in"]],
   [

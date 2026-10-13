@@ -1,30 +1,30 @@
-Tinyglow is a private photo album for parents of a baby. Parents add photos, browse them by the baby's age, and can share a private, expiring link with family.
+Tinyglow is a private photo and video album for parents of a baby. Parents add photos and short videos, browse them by the baby's age, and can share a private, expiring link with family.
 
 HOW TO SIGN IN
 The app uses passwordless sign-in. For review we provide a static code so no email is needed.
 1. Tap "Continue with email".
 2. Enter this email: REVIEW_ACCOUNT_EMAIL
 3. When asked for the 6-digit code, enter: REVIEW_ACCOUNT_CODE
-The account is preloaded with one sample baby album ("Maya") with 24 photos. All sample photos are illustrations of non-real babies; no real child appears anywhere in the app.
+The screen may also show "Sign in with a passkey" (optional). The review account cannot add one; use the code above.
+The account is preloaded with one sample baby album ("Maya") with 24 photos and one short video clip. All sample photos and the clip are illustrations of non-real babies; no real child appears anywhere in the app.
 
 WHAT TO LOOK AT
 - Timeline: photos grouped by the baby's age; tap one for the full-screen viewer and details.
-- Upload: the Upload tab, "Choose photos", opens the system photo picker or the camera. Photos you pick are uploaded to the album.
+- Upload: Upload tab > "Choose photos" opens the system picker (photos and videos) or the camera. Videos show a play badge with their length while a 1080p playback copy is prepared on our server ("Preparing video..."). Videos over 50 MB wait for Wi-Fi unless the "Use cellular" switch on that upload is on.
 - Search and Chat (the AI features) are available on this account. They describe and search the sample photos using AI from our model provider. Photos are only analysed in albums where AI features are turned on. Photos are never used to train models.
 - Family: "Share" creates a private link that expires after 24 hours by default. People opening the link see only the photos the parent chose, without an account.
 - Notifications: not requested at launch. Settings > Notifications turns them on. Notification text is generic ("12 new photos are ready to search.") and never contains names or photo content.
 - Account deletion: Settings > Account > Delete account (requires re-entering the email code; for the review account use the static code above).
 
 ALBUM SYNC AND IMPORT (optional, parents only)
-- Album sync (iPhone): Upload tab > "Album sync" card > "Set up". The controls (pause, Wi-Fi only, change album, "Stop syncing") are also in Settings > "Photo import". This is the only place the app asks for Photos access, and only when a parent turns sync on. It asks for full Photos library access because iOS only lets an app read an album, with originals and their capture date and location, with full access. The regular "Choose photos" upload uses the system photo picker and needs no permission.
-- Only the one album the parent picks is read. Nothing else in the library is read or uploaded. Photos are never deleted from the library or from Tinyglow when they are removed from the source. Sync is Wi-Fi only by default, runs in the background when iOS allows, and the parent can stop it with "Stop syncing" on that card or in Settings > "Photo import".
-- To test: tap Set up, tap Allow Full Access, pick an album (create one in Photos with a few pictures first), and tap Sync now. If you deny access, the app keeps working and explains how to change it in Settings.
-- Google Photos import (Upload tab > "Google Photos" card > "Import from Google Photos"; the button reads "Connect Google Photos" until the account is connected, "Reconnect Google Photos" if it needs reconnecting; the same card is in Settings > "Photo import") opens Google's picker in the system browser and needs a Google account. The review account has none; use this test account: GOOGLE_TEST_ACCOUNT_EMAIL / GOOGLE_TEST_ACCOUNT_PASSWORD (placeholder). Only photos chosen in Google's picker are downloaded. The connection can be removed in Settings > "Photo import" > "Disconnect Google Photos", then confirm "Disconnect".
+- Album sync (iPhone): Upload tab > "Album sync" card > "Set up"; controls (pause, Wi-Fi only, change album, "Stop syncing") also in Settings > "Photo import". This is the only place the app asks for Photos access, and only when a parent turns sync on. It needs full library access because iOS only exposes an album's originals with capture date and location that way. Only the one chosen album is read (photos and videos); nothing is ever deleted from the library or from Tinyglow. Wi-Fi only by default; runs in the background when iOS allows.
+- To test: tap Set up, tap Allow Full Access, pick an album (create one in Photos with a few pictures first), tap Sync now. Denying access keeps the app working and explains how to change it in Settings.
+- Google Photos import (Upload tab > "Google Photos" card > "Import from Google Photos"; the button reads "Connect Google Photos" until connected, "Reconnect Google Photos" if needed; same card in Settings > "Photo import") opens Google's picker in the system browser and needs a Google account. The review account has none; use GOOGLE_TEST_ACCOUNT_EMAIL / GOOGLE_TEST_ACCOUNT_PASSWORD (placeholder). Only items chosen in Google's picker are downloaded. Disconnect in Settings > "Photo import" > "Disconnect Google Photos", then confirm.
 
 PERMISSIONS
-- Photo library: the regular upload uses the system picker and needs no permission. Full library access is requested only if a parent turns on Album sync (above), and only the chosen album is read.
-- Camera: only to take a photo to add to the album.
-- Location: the app never asks for your location. If a photo contains GPS in its metadata (iPhone photos do), we store it encrypted and show only a coarse place name to the parent; it is never shown to people who receive a share link.
+- Photo library: the regular upload uses the system picker and needs no permission. Full access is requested only for Album sync (above), and only the chosen album is read.
+- Camera: only to take a photo to add to the album. The app never records video or audio itself and never asks for the microphone.
+- Location: the app never asks for your location. GPS inside a photo or video's metadata is stored encrypted, shown to the parent only as a coarse place name, and never to people with a share link.
 - No tracking, no ads, no analytics SDKs, no face recognition.
 
 PURCHASES

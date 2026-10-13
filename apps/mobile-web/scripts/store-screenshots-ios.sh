@@ -68,7 +68,7 @@ ut() {
     xcodebuild -project "$UITEST/LLUITests.xcodeproj" -scheme LLUITests \
       -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath "$UIDD" \
       test-without-building -only-testing:"LLUITests/LLUITests/$name" >"$WORK/$name.log" 2>&1
-  grep -q "^Test Suite 'Selected tests' passed" "$WORK/$name.log" || { echo "  UI step failed: $name $*" >&2; grep -E "error|XCTAssert" "$WORK/$name.log" | head -5 >&2; return 1; }
+  grep -q "^Test Suite 'Selected tests' passed" "$WORK/$name.log" || { echo "  UI step failed: $name $*" >&2; [ -n "${IOS_SHOT_DEBUG_DIR:-}" ] && xcrun simctl io "$UDID" screenshot "$IOS_SHOT_DEBUG_DIR/fail-$name.png" >/dev/null 2>&1; grep -E "error|XCTAssert" "$WORK/$name.log" | head -5 >&2; return 1; }
 }
 tab() { ut testTapText "LL_TAP=$1" || exit 1; sleep "${2:-4}"; }
 relaunch() { xcrun simctl terminate "$UDID" "$BUNDLE_ID" >/dev/null 2>&1; xcrun simctl launch "$UDID" "$BUNDLE_ID" >/dev/null; sleep 5; }
@@ -85,14 +85,23 @@ ut testSignIn "LL_EMAIL=demo-mom@tinyglow.local" || die "demo-mom sign-in failed
 relaunch
 
 tab Timeline 5;                                  shot 01-timeline.png
-ut testTapText "LL_TAP=wobbly steps toward Dad" || exit 1; sleep 4
+# the filter chips and the demo video tile push the first-steps tile to the fold: scroll it into view
+ut testDragUp "LL_FROM=0.80" "LL_TO=0.68" || true; sleep 2
+# a taller screen scrolls further on the same drag: if the tile is above, drag back down and retry
+for _ in 1 2 3; do
+  ut testTapText "LL_TAP=toward Dad" && break
+  ut testDragUp "LL_FROM=0.45" "LL_TO=0.65" || true; sleep 2
+done
+[ -f "$WORK/testTapText.log" ] && grep -q "^Test Suite 'Selected tests' passed" "$WORK/testTapText.log" || exit 1
+sleep 4
 shot 02-viewer.png
 relaunch
 tab Milestones 5;                                shot 03-milestones.png
 tab Family 5;                                    shot 04-family.png
 tab Upload 4;                                    shot 05-upload.png
 tab Chat 4
-ut testAsk "LL_ASK=Show me her first steps" "LL_EXPECT=June 14" || exit 1; sleep 4; shot 06-chat.png
+# the real model words its answer differently each time: wait on the question bubble, then give the answer and photo time to render
+ut testAsk "LL_ASK=Show me her first steps" "LL_EXPECT=Show me her first steps" || exit 1; sleep 20; shot 06-chat.png
 tab Milestones 4; tab Growth 4;                  shot 07-growth.png
 ut testOpenPhotoImport || exit 1; sleep 3;       shot 08-album-sync.png
 

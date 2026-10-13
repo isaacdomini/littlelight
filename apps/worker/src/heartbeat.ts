@@ -56,6 +56,18 @@ export interface HeartbeatDeps {
    * (docs/plans/step-7.md 2.7).
    */
   searchStats?: () => Promise<SearchStats | undefined>;
+  /**
+   * Free bytes of the video scratch folder (`WORKER_SCRATCH_PATH`, docs/plans/step-12.md 2.6);
+   * undefined = not configured or the sample failed. Reported as `details.scratchFreeBytes`;
+   * `createScratchSampler` raises the "scratch low" alert.
+   */
+  scratchFree?: () => Promise<number | undefined>;
+  /**
+   * Ingested videos whose rendition has been `pending` longer than `VIDEO_TRANSCODE_STUCK_MINUTES`
+   * (`countStuckVideos`); undefined = not configured or the sample failed. Reported as
+   * `details.videosPendingStuck`; `createStuckVideosSampler` warns once while it is non-zero.
+   */
+  videosPendingStuck?: () => Promise<number | undefined>;
 }
 
 export interface SearchStats {
@@ -72,6 +84,8 @@ export interface HeartbeatResult {
   aiQueueAgeMin?: number;
   searchStale?: number;
   searchUnembedded?: number;
+  scratchFreeBytes?: number;
+  videosPendingStuck?: number;
 }
 
 /** Storage reachable: refresh `last_seen_at`. */
@@ -154,6 +168,14 @@ export async function beatOnce(deps: HeartbeatDeps): Promise<HeartbeatResult> {
     result.searchStale = search.stale;
     result.searchUnembedded = search.unembedded;
   }
+  const scratchFreeBytes = deps.scratchFree
+    ? await deps.scratchFree().catch(() => undefined)
+    : undefined;
+  if (scratchFreeBytes !== undefined) result.scratchFreeBytes = scratchFreeBytes;
+  const videosPendingStuck = deps.videosPendingStuck
+    ? await deps.videosPendingStuck().catch(() => undefined)
+    : undefined;
+  if (videosPendingStuck !== undefined) result.videosPendingStuck = videosPendingStuck;
   const details = {
     storageLatencyMs: result.storageLatencyMs,
     ...(result.storageOk ? {} : { storageError: result.storageError }),
@@ -162,6 +184,8 @@ export async function beatOnce(deps: HeartbeatDeps): Promise<HeartbeatResult> {
     ...(search !== undefined
       ? { searchStale: search.stale, searchUnembedded: search.unembedded }
       : {}),
+    ...(scratchFreeBytes !== undefined ? { scratchFreeBytes } : {}),
+    ...(videosPendingStuck !== undefined ? { videosPendingStuck } : {}),
   };
   await deps.db.query(result.storageOk ? UPSERT_OK_SQL : UPSERT_STORAGE_DOWN_SQL, [
     deps.workerId,
@@ -324,6 +348,103 @@ export function createSearchStatsSampler(
       return cached;
     } catch (err) {
       opts.log.debug({ db: errorCategory(err) }, "search: stats sample failed");
+      cached = undefined;
+      return undefined;
+    }
+  };
+}
+
+export interface ScratchSamplerOptions {
+  /** `scratchFreeBytes(WORKER_SCRATCH_PATH)`. */
+  freeBytes: () => Promise<number>;
+  /** `VIDEO_SCRATCH_MIN_FREE_BYTES`: below it `video.transcode` defers. */
+  minFreeBytes: number;
+  log: Pick<HeartbeatLogger, "warn" | "info" | "debug">;
+  /** Minimum time between two statfs calls (default 60 s); the cached value is returned in between. */
+  minIntervalMs?: number;
+  now?: () => number;
+}
+
+/**
+ * Heartbeat dep for `details.scratchFreeBytes` (docs/plans/step-12.md 2.6, Q8): samples the
+ * scratch folder's free space at most once per `minIntervalMs`, logs `warn` once when it drops
+ * under `minFreeBytes` ("scratch low": transcodes are deferred) and `info` once when it is back.
+ * Logs byte counts and the threshold only, never the path. A failed sample resolves undefined.
+ */
+export function createScratchSampler(
+  opts: ScratchSamplerOptions,
+): () => Promise<number | undefined> {
+  const minIntervalMs = opts.minIntervalMs ?? 60_000;
+  const now = opts.now ?? Date.now;
+  let sampledAt = Number.NEGATIVE_INFINITY;
+  let cached: number | undefined;
+  let alerting = false;
+
+  return async () => {
+    if (now() - sampledAt < minIntervalMs) return cached;
+    sampledAt = now();
+    try {
+      cached = await opts.freeBytes();
+      const low = cached < opts.minFreeBytes;
+      if (low && !alerting) {
+        opts.log.warn(
+          { scratchFreeBytes: cached, minFreeBytes: opts.minFreeBytes },
+          "video: scratch low, transcodes deferred",
+        );
+      } else if (!low && alerting) {
+        opts.log.info(
+          { scratchFreeBytes: cached, minFreeBytes: opts.minFreeBytes },
+          "video: scratch space back over threshold",
+        );
+      }
+      alerting = low;
+      return cached;
+    } catch (err) {
+      opts.log.debug({ err: errorCategory(err) }, "video: scratch sample failed");
+      cached = undefined;
+      return undefined;
+    }
+  };
+}
+
+export interface StuckVideosSamplerOptions {
+  /** `countStuckVideos(pool)`. */
+  count: () => Promise<number>;
+  log: Pick<HeartbeatLogger, "warn" | "info" | "debug">;
+  /** Minimum time between two queries (default 5 minutes); the cached value is returned in between. */
+  minIntervalMs?: number;
+  now?: () => number;
+}
+
+/**
+ * Heartbeat dep for `details.videosPendingStuck` (review fix S2): samples at most once per
+ * `minIntervalMs`, warns once when videos are stuck `pending` past the reconcile threshold and
+ * logs `info` once when none is left. Counts only; a failed sample resolves undefined.
+ */
+export function createStuckVideosSampler(
+  opts: StuckVideosSamplerOptions,
+): () => Promise<number | undefined> {
+  const minIntervalMs = opts.minIntervalMs ?? 300_000;
+  const now = opts.now ?? Date.now;
+  let sampledAt = Number.NEGATIVE_INFINITY;
+  let cached: number | undefined;
+  let alerting = false;
+
+  return async () => {
+    if (now() - sampledAt < minIntervalMs) return cached;
+    sampledAt = now();
+    try {
+      cached = await opts.count();
+      const stuck = cached > 0;
+      if (stuck && !alerting) {
+        opts.log.warn({ videosPendingStuck: cached }, "video: renditions stuck pending");
+      } else if (!stuck && alerting) {
+        opts.log.info({ videosPendingStuck: 0 }, "video: no rendition stuck pending");
+      }
+      alerting = stuck;
+      return cached;
+    } catch (err) {
+      opts.log.debug({ db: errorCategory(err) }, "video: stuck sample failed");
       cached = undefined;
       return undefined;
     }

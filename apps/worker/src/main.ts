@@ -1,5 +1,10 @@
 import os from "node:os";
-import { googleImportMediaAllowList, IMPORT_MAX_FILE_BYTES } from "@tinyglow/shared";
+import path from "node:path";
+import {
+  googleImportMediaAllowList,
+  IMPORT_MAX_FILE_BYTES,
+  VIDEO_SCRATCH_MIN_FREE_BYTES,
+} from "@tinyglow/shared";
 import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
 import { aiPipelineConfig, createAiRuntime, searchIndexerConfig } from "./ai-runtime";
@@ -10,7 +15,9 @@ import { createDiskMonitor } from "./disk";
 import { createExportMailer, type ExportMailer } from "./email/mailer";
 import {
   createAiQueueAgeSampler,
+  createScratchSampler,
   createSearchStatsSampler,
+  createStuckVideosSampler,
   startHeartbeat,
   workerId,
 } from "./heartbeat";
@@ -26,10 +33,12 @@ import {
   sendReindex,
   startWorkers,
 } from "./queues";
+import { countStuckVideos } from "./reconcile";
 import { createAutoSharer } from "./sharing/autoshare";
 import { createStorage } from "./storage";
 import { captureJobError, closeTelemetry, initTelemetry } from "./telemetry";
 import { WORKER_VERSION } from "./version";
+import { ensureScratchDir, scratchFreeBytes } from "./video/scratch";
 
 // Worker entry (docs/plans/step-1.md 2.9, docs/plans/step-4.md 2.5–2.9). pg-boss runs as
 // `tinyglow_worker` (owns the pgboss schema: migrations, maintenance, cron); every app-table
@@ -55,7 +64,10 @@ import { WORKER_VERSION } from "./version";
 // (docs/plans/step-10.md 2.7): the Google Picker client is created from `GOOGLE_IMPORT_PROVIDER`
 // (none ⇒ null: a stray batch fails `internal`; one boot line names the mode, never a value) and
 // serves `import.google` with the download allow-list (`googleImportMediaAllowList`) and
-// `IMPORT_CONCURRENCY`; `import.sweep` runs hourly.
+// `IMPORT_CONCURRENCY`; `import.sweep` runs hourly. Step 12 (docs/plans/step-12.md 2.6): the
+// video settings (`videoEnvSchema`) feed the ingest's video path and the `video.transcode`
+// handler (`VIDEO_CONCURRENCY` ffmpeg processes); the scratch folder is created at boot and its
+// free space is sampled by the heartbeat (`details.scratchFreeBytes`, "scratch low" alert).
 
 function readConfig() {
   try {
@@ -92,10 +104,11 @@ try {
 // docs/plans/review-fixes.md 2.3: short transactions only, never one held across the stream), and
 // the import.google lanes plus import.sweep (IMPORT_CONCURRENCY + 1, docs/plans/step-10.md 2.7:
 // short transactions only, none held across a download).
+// Step 12: + VIDEO_CONCURRENCY transcode handlers (short transactions around one ffmpeg run).
 const pool = createPool(
   config,
   `tinyglow-worker:${id}`,
-  config.INGEST_CONCURRENCY + 10 + config.IMPORT_CONCURRENCY + 1,
+  config.INGEST_CONCURRENCY + 10 + config.IMPORT_CONCURRENCY + 1 + config.VIDEO_CONCURRENCY,
 );
 pool.on("error", (err) => log.warn({ db: errorCategory(err) }, "pg pool idle client error"));
 const s3 = createS3Client(config);
@@ -168,6 +181,12 @@ const heartbeat = startHeartbeat(
         }
       : {}),
     searchStats: createSearchStatsSampler({ stats: () => indexer.stats(), log }),
+    scratchFree: createScratchSampler({
+      freeBytes: () => scratchFreeBytes(config.WORKER_SCRATCH_PATH),
+      minFreeBytes: VIDEO_SCRATCH_MIN_FREE_BYTES,
+      log,
+    }),
+    videosPendingStuck: createStuckVideosSampler({ count: () => countStuckVideos(pool), log }),
   },
   config.HEARTBEAT_INTERVAL_MS,
   log,
@@ -196,6 +215,9 @@ process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
 
 try {
+  await ensureScratchDir(config.WORKER_SCRATCH_PATH).catch((err: unknown) =>
+    log.warn({ err: errorCategory(err) }, "video: scratch folder not writable"),
+  );
   await boss.start();
   await ensureQueues(boss, log);
   await ensureSchedules(boss, config);
@@ -228,9 +250,22 @@ try {
       storage,
       dataKey: config.DATA_ENCRYPTION_KEY,
       google: googleClient,
-      download: { allowList: mediaAllowList, maxBytes: IMPORT_MAX_FILE_BYTES },
+      download: {
+        allowList: mediaAllowList,
+        maxBytes: IMPORT_MAX_FILE_BYTES,
+        // Videos (up to 2 GB) stage on the disk-backed scratch folder, not the 1 GiB /tmp tmpfs.
+        videoTmpDir: path.join(config.WORKER_SCRATCH_PATH, "import"),
+      },
       concurrency: config.IMPORT_CONCURRENCY,
       log,
+    },
+    video: {
+      ffmpegPath: config.FFMPEG_PATH,
+      ffprobePath: config.FFPROBE_PATH,
+      scratchPath: config.WORKER_SCRATCH_PATH,
+      threads: config.VIDEO_FFMPEG_THREADS,
+      timeoutSec: config.VIDEO_TRANSCODE_TIMEOUT_SEC,
+      concurrency: config.VIDEO_CONCURRENCY,
     },
     log,
     ingestConcurrency: config.INGEST_CONCURRENCY,
@@ -243,13 +278,24 @@ try {
       exportMail: exportMailer ? "smtp" : "off",
       googleImport: config.GOOGLE_IMPORT_PROVIDER,
       importConcurrency: config.IMPORT_CONCURRENCY,
+      videoConcurrency: config.VIDEO_CONCURRENCY,
+      videoThreads: config.VIDEO_FFMPEG_THREADS,
     },
     "worker started",
   );
   if (demoMediaEnabled(process.env, config.NODE_ENV)) {
-    void ensureDemoMedia({ pool, s3, bucket: config.S3_BUCKET, storage, log }).catch((err) =>
-      log.warn({ err: errorCategory(err) }, "demo media: skipped"),
-    );
+    void ensureDemoMedia({
+      pool,
+      s3,
+      bucket: config.S3_BUCKET,
+      storage,
+      log,
+      video: {
+        ffmpegPath: config.FFMPEG_PATH,
+        ffprobePath: config.FFPROBE_PATH,
+        threads: config.VIDEO_FFMPEG_THREADS,
+      },
+    }).catch((err) => log.warn({ err: errorCategory(err) }, "demo media: skipped"));
   }
 } catch (err) {
   log.error({ err: errorCategory(err) }, "worker failed to start");

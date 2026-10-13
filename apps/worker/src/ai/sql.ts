@@ -45,9 +45,12 @@ FROM ai_eligible_photos($1::int + cardinality($7::uuid[]), $2::text, $3::text, $
 WHERE e.id <> ALL($7::uuid[])
 LIMIT $1`;
 
-/** Baby and attempt number of each eligible photo (failed attempts for these versions since the retry flag). */
+/**
+ * Baby, media kind (the budget weighs a video at `AI_VIDEO_COST_FACTOR` photos; step 12) and
+ * attempt number of each eligible photo (failed attempts for these versions since the retry flag).
+ */
 export const CLAIM_INFO_SQL = `
-SELECT p.id, p.baby_id,
+SELECT p.id, p.baby_id, p.media_kind,
        (SELECT count(*) FROM ai_batch_items i
         WHERE i.photo_id = p.id AND i.state = 'failed'
           AND i.prompt_version = $2 AND i.schema_version = $3
@@ -59,13 +62,17 @@ ORDER BY p.created_at, p.id`;
 /**
  * Month-to-date spend of one baby (UTC), plus the estimate for its items still in flight
  * (their cost is unknown until results arrive), so a large claim cannot overshoot the budget.
+ * `$3` is the per-photo estimate, `$4` the per-video estimate (step 12: a video item carries up
+ * to four frames, `AI_VIDEO_COST_FACTOR`).
  */
 export const BABY_MONTH_SPEND_SQL = `
 SELECT ai_baby_month_cost_usd($1::uuid, $2::date)::float8
-     + $3::float8 * (SELECT count(*) FROM ai_batch_items i
-                     WHERE i.baby_id = $1::uuid AND i.cost_usd IS NULL
-                       AND i.state IN ('pending', 'submitted')
-                       AND i.created_at >= (date_trunc('month', $2::date::timestamp) AT TIME ZONE 'UTC'))::float8
+     + (SELECT COALESCE(sum(CASE WHEN p.media_kind = 'video' THEN $4::float8 ELSE $3::float8 END), 0)
+          FROM ai_batch_items i
+          JOIN photos p ON p.id = i.photo_id
+         WHERE i.baby_id = $1::uuid AND i.cost_usd IS NULL
+           AND i.state IN ('pending', 'submitted')
+           AND i.created_at >= (date_trunc('month', $2::date::timestamp) AT TIME ZONE 'UTC'))::float8
        AS spent`;
 
 /**
@@ -109,13 +116,19 @@ FOR UPDATE SKIP LOCKED`;
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Pending items with what the request needs: the analysis derivative key and the per-photo
- * context (age, capture time + offset, coarse place labels, parent people/note/milestone name).
- * Selects NO GPS column, no `raw_json`, no baby name.
+ * Pending items with what the request needs: the analysis derivative key (a video's poster),
+ * the video's keyframe keys (`keyframe1..3`, in kind order; empty for photos; step 12), its
+ * `media_kind` / `duration_ms`, and the per-photo context (age, capture time + offset, coarse
+ * place labels, parent people/note/milestone name). Selects NO GPS column, no `raw_json`, no
+ * baby name, never the original or the `web` rendition key.
  */
 export const LOAD_PENDING_SQL = `
 SELECT i.photo_id, i.baby_id, i.attempt,
        d.storage_key,
+       p.media_kind, p.duration_ms,
+       ARRAY(SELECT k.storage_key FROM photo_derivatives k
+              WHERE k.photo_id = p.id AND k.kind IN ('keyframe1', 'keyframe2', 'keyframe3')
+              ORDER BY k.kind) AS keyframe_keys,
        p.age_days, p.taken_at, p.taken_at_estimated,
        e.taken_at AS exif_taken_at, e.tz_offset_minutes, e.place_label,
        pd.people, pd.note, pd.location_label,

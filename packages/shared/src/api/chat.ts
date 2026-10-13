@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { SEARCH_RESULT_LIMIT, SEARCH_TOOL_MAX_RESULTS } from "../constants";
-import { chatMessageStatusSchema, measurementKindSchema } from "../db-enums";
+import { chatMessageStatusSchema, measurementKindSchema, mediaKindSchema } from "../db-enums";
 import { toStrictJsonSchema } from "../json-schema";
 import { isoDateSchema, isoDateTimeSchema } from "./common";
 import { apiErrorCodeSchema } from "./errors";
 import { photoSummarySchema } from "./photos";
-import { SEARCH_AGE_MAX_DAYS, SEARCH_AGE_MIN_DAYS } from "./search";
+import { SEARCH_AGE_MAX_DAYS, SEARCH_AGE_MIN_DAYS, searchMediaFilterSchema } from "./search";
 
 // Chat contracts (docs/plans/step-7.md 2.4, 2.8; PRD FR-7, "Chat and RAG pipeline"). Admins of a
 // paid baby only (FR-7.7): contributors get 403 `forbidden`, free/expired babies 403
@@ -156,6 +156,15 @@ function searchPhotosShape(mode: Mode) {
       SEARCH_TOOL_MAX_RESULTS,
       `How many photos to return (1 to ${SEARCH_TOOL_MAX_RESULTS}); null for ${SEARCH_RESULT_LIMIT}`,
     ),
+    // Step 12: items may be photos or short video clips. Validate mode: blank/null/missing ⇒ "any".
+    media:
+      mode === "validate"
+        ? z.preprocess((v) => (blankToNull(v) === null ? "any" : v), searchMediaFilterSchema)
+        : searchMediaFilterSchema
+            .nullable()
+            .describe(
+              '"video" for video clips only, "photo" for still photos only; "any" or null for both',
+            ),
   };
 }
 
@@ -258,12 +267,14 @@ export const CHAT_TOOL_JSON_SCHEMAS: Readonly<
 /** What the model reads about each tool (fixed text; versioned by `CHAT_PROMPT_VERSION`). */
 export const CHAT_TOOL_DESCRIPTIONS: Readonly<Record<ChatToolName, string>> = Object.freeze({
   search_photos:
-    "Find photos in this baby's album. Combines filters (capture dates, age in days, milestones, " +
-    "people, tags) with meaning and keyword search, and returns the best matches first with " +
-    "photo ids, dates, ages, captions, people, place, milestone and tags. Resolve relative time " +
-    '("last summer", "at 6 months", "month 3") into date_from/date_to or ' +
+    "Find photos and short video clips in this baby's album. Combines filters (capture dates, " +
+    "age in days, milestones, people, tags, media kind) with meaning and keyword search, and " +
+    "returns the best matches first with photo ids, dates, ages, captions, people, place, " +
+    "milestone, tags and whether each item is a photo or a video (with its length). Resolve " +
+    'relative time ("last summer", "at 6 months", "month 3") into date_from/date_to or ' +
     "age_from_days/age_to_days before calling. Send every key; use null (or []) for anything " +
-    "you are not filtering on. For comparisons, call it once per age or period.",
+    'you are not filtering on and media "any" unless the user asked for videos or photos ' +
+    "specifically. For comparisons, call it once per age or period.",
   get_measurements:
     "Exact recorded measurements of this baby (weight, height, head circumference), oldest " +
     "first, with measurement ids, values in the user's units, dates and ages. Use it for any " +
@@ -338,8 +349,14 @@ export function parseChatToolArguments(name: string, raw: unknown): ParsedChatTo
 /** Human age at capture (`formatAge`, e.g. "11 months 2 weeks"). */
 const ageTextSchema = z.string().max(40).nullable();
 
+/** Whole seconds of a video's duration (the model reads it: "a 42-second clip"); null for photos. */
+const durationSecondsSchema = z.number().int().min(0).max(86_400).nullable();
+
 export const searchPhotosResultItemSchema = z.strictObject({
   photo_id: z.uuid(),
+  /** `photo` or `video` (step 12): the prompt asks the model to say "video" when citing one. */
+  media_kind: mediaKindSchema,
+  duration_seconds: durationSecondsSchema,
   /** Local capture date. */
   taken_at: isoDateSchema.nullable(),
   age: ageTextSchema,
@@ -412,6 +429,8 @@ export type GetMilestonesResult = z.infer<typeof getMilestonesResultSchema>;
  */
 export const getPhotoResultSchema = z.strictObject({
   photo_id: z.uuid(),
+  media_kind: mediaKindSchema,
+  duration_seconds: durationSecondsSchema,
   taken_at: isoDateSchema.nullable(),
   age: ageTextSchema,
   caption: z.string().nullable(),
@@ -554,17 +573,23 @@ export const chatSendRequestSchema = z.object({
 export type ChatSendRequest = z.infer<typeof chatSendRequestSchema>;
 
 /** A photo in an answer's grid: the summary fields the grid and the viewer need. */
-export const chatPhotoSchema = photoSummarySchema.pick({
-  id: true,
-  babyId: true,
-  takenAt: true,
-  ageDays: true,
-  isSensitive: true,
-  thumbUrl: true,
-  urlExpiresAt: true,
-  caption: true,
-  milestoneId: true,
-});
+export const chatPhotoSchema = photoSummarySchema
+  .pick({
+    id: true,
+    babyId: true,
+    takenAt: true,
+    ageDays: true,
+    isSensitive: true,
+    thumbUrl: true,
+    urlExpiresAt: true,
+    caption: true,
+    milestoneId: true,
+  })
+  .extend({
+    /** Step 12: optional so older stored grids still parse; the grid badges a `video` with `durationMs`. */
+    mediaKind: photoSummarySchema.shape.mediaKind.optional(),
+    durationMs: photoSummarySchema.shape.durationMs.optional(),
+  });
 export type ChatPhoto = z.infer<typeof chatPhotoSchema>;
 
 export const chatMessageRoleSchema = z.enum(["user", "assistant"]);

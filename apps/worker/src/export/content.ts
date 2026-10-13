@@ -6,6 +6,7 @@ import {
   aiOverrideValueSchema,
   applyAiOverrides,
   EXPORT_FORMAT_VERSION,
+  EXPORT_PHOTOS_CSV_VIDEO_COLUMNS,
 } from "@tinyglow/shared";
 import { type CsvValue, csvHeader, csvRow } from "./csv";
 
@@ -13,7 +14,10 @@ import { type CsvValue, csvHeader, csvRow } from "./csv";
 // `EXPORT_FORMAT_VERSION`). No I/O: the handler feeds database rows in and appends the output.
 // GPS appears only when the row carries `gps_lat`/`gps_lng`, which only the decrypting
 // statement selects (sql.ts); without `includeLocation` the `gps_*` columns are omitted from
-// `photos.csv` (not blank) and `photos.json` has no `gps` key.
+// `photos.csv` (not blank) and `photos.json` has no `gps` key. Step 12 (docs/plans/step-12.md
+// 2.6): videos are exported like photos (`originals/<date>_<id>.mov|mp4`, byte-identical) and
+// `photos.csv` / `photos.json` carry `media_kind`, `duration_ms`, `video_codec`
+// (`EXPORT_PHOTOS_CSV_VIDEO_COLUMNS`).
 
 /** One photo of the export's photo set, in ZIP order (manifest pass). */
 export interface ManifestEntry {
@@ -33,6 +37,8 @@ const EXT_BY_MIME: Readonly<Record<string, string>> = Object.freeze({
   "image/heic": "heic",
   "image/heif": "heif",
   "image/webp": "webp",
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
 });
 
 /** File extension of an original (`bin` while the type is not known yet). */
@@ -62,6 +68,10 @@ export interface PhotoMetaRow {
   bytes: string | null;
   mime: string | null;
   sha256: string | null;
+  /** Step 12: `photo` | `video`; `duration_ms` / `video_codec` for videos. */
+  media_kind?: string | null;
+  duration_ms?: number | null;
+  video_codec?: string | null;
   milestone_id: string | null;
   milestone_name: string | null;
   milestone_category: string | null;
@@ -112,6 +122,7 @@ export const PHOTOS_CSV_COLUMNS = [
   "ai_tags",
   "ai_sensitive_flags",
   "ai_model",
+  ...EXPORT_PHOTOS_CSV_VIDEO_COLUMNS,
 ] as const;
 
 export const PHOTOS_CSV_GPS_COLUMNS = ["gps_lat", "gps_lng"] as const;
@@ -188,6 +199,9 @@ export function photoCsvRow(file: string, row: PhotoMetaRow, includeLocation: bo
     ai ? ai.search_tags.join(";") : null,
     (row.ai_sensitive_flags ?? []).join(";"),
     row.ai_model,
+    row.media_kind ?? "photo",
+    row.duration_ms ?? null,
+    row.video_codec ?? null,
   ];
   if (includeLocation) {
     const gps = hasGps(row);
@@ -231,6 +245,9 @@ export function photoJson(
     bytes: num(row.bytes),
     mime: row.mime,
     sha256: row.sha256,
+    mediaKind: row.media_kind ?? "photo",
+    durationMs: row.duration_ms ?? null,
+    videoCodec: row.video_codec ?? null,
     details: {
       milestone: row.milestone_name
         ? { name: row.milestone_name, category: row.milestone_category }
@@ -393,12 +410,14 @@ export function readmeText(input: { exportedAt: Date; includeLocation: boolean }
     "",
     "What is in this ZIP",
     "-------------------",
-    "originals/        Every photo of the album (trash, rejected and failed uploads are not",
-    "                  included), named <capture date>_<photo id>.<extension>. Original files",
-    "                  are byte-identical to what was uploaded and keep their own embedded",
-    "                  metadata, including any location the camera recorded.",
-    "photos.csv        One row per photo: dates, age, milestone, people, notes, place, camera,",
-    "                  AI caption and tags. Multiple people / tags are separated by ';'.",
+    "originals/        Every photo and video of the album (trash, rejected and failed uploads",
+    "                  are not included), named <capture date>_<photo id>.<extension>. Original",
+    "                  files are byte-identical to what was uploaded and keep their own embedded",
+    "                  metadata, including any location the camera recorded; videos (.mov/.mp4)",
+    "                  are included as uploaded.",
+    "photos.csv        One row per photo or video: dates, age, milestone, people, notes, place,",
+    "                  camera, AI caption and tags, media_kind (photo/video), duration_ms and",
+    "                  video_codec for videos. Multiple people / tags are separated by ';'.",
     "                  Cells that a spreadsheet would treat as a formula start with an",
     "                  apostrophe ('); photos.json has the exact text.",
     "photos.json       The same photos with full details, EXIF summary and the AI description",

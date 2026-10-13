@@ -1331,7 +1331,7 @@ describe.skipIf(!databaseUrl)("free-tier abuse safeguards (migration 21, family 
   });
 
   // -----------------------------------------------------------------------------------------
-  describe("backfill of migration 21 (down 1, up 1)", () => {
+  describe("backfill of migration 21 (down 2, up 2 since migration 22)", () => {
     it("assigns albums that share an admin to one family and separate ones to their own", async () => {
       const u1 = await mkUser();
       const u2 = await mkUser();
@@ -1346,7 +1346,8 @@ describe.skipIf(!databaseUrl)("free-tier abuse safeguards (migration 21, family 
       try {
         await runMigrations({
           direction: "down",
-          count: 1,
+          // migration 22 (video) sits on top of 21: both come down, both go back up.
+          count: 2,
           bootstrap: false,
           databaseUrl,
           env,
@@ -1417,7 +1418,8 @@ describe.skipIf(!databaseUrl)("free-tier abuse safeguards (migration 21, family 
       try {
         await runMigrations({
           direction: "down",
-          count: 1,
+          // migration 22 (video) sits on top of 21: both come down, both go back up.
+          count: 2,
           bootstrap: false,
           databaseUrl,
           env,

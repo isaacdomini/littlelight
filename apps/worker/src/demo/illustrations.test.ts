@@ -20,9 +20,9 @@ import { isMetadataFree, jpegMetadataSegments } from "./media";
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
 describe("scene sets", () => {
-  it("has one scene per seeded demo photo (12) and 24 review scenes", () => {
+  it("has one scene per seeded demo PHOTO (12; the clip uses DEMO_CLIP_SCENES) and 24 review scenes", () => {
     expect(DEMO_SCENES).toHaveLength(12);
-    expect(DEMO_SCENES).toHaveLength(DEMO_IDS.photos.length);
+    expect(DEMO_SCENES).toHaveLength(DEMO_IDS.photos.length - 1);
     expect(REVIEW_SCENES).toHaveLength(24);
   });
 

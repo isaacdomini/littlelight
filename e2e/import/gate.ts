@@ -374,12 +374,13 @@ async function walkthrough(mom: ApiClient, nanny: ApiClient, browser: Browser) {
     90_000,
   );
   check(
-    "5. done: total 8, imported 5, duplicate 1, skipped 1, failed 1",
+    // step 12: V-1 (a video) is imported rather than skipped
+    "5. done: total 8, imported 6, duplicate 1, skipped 0, failed 1",
     done.status === "done" &&
       done.itemsTotal === 8 &&
-      done.itemsImported === 5 &&
+      done.itemsImported === 6 &&
       done.itemsDuplicate === 1 &&
-      done.itemsSkipped === 1 &&
+      done.itemsSkipped === 0 &&
       done.itemsFailed === 1,
     JSON.stringify(done),
   );
@@ -399,8 +400,11 @@ async function walkthrough(mom: ApiClient, nanny: ApiClient, browser: Browser) {
     `select approval || '|' || (approved_by = uploaded_by)::text || '|' || mime || '|' || (status in ('ingested','ready','queued','analyzing')  )::text || '|' || (uploaded_by = '${momId}')::text from photos where id in (${list})`,
   );
   check(
-    "6. five photos: approved, approved_by = uploader = mom, image/jpeg, ingested",
-    rows.length === 5 && rows.every((r) => r === "approved|true|image/jpeg|true|true"),
+    // step 12: six booked items, five JPEGs and the V-1 video
+    "6. six items: approved, approved_by = uploader = mom, five image/jpeg + one video/mp4, ingested",
+    rows.length === 6 &&
+      rows.filter((r) => r === "approved|true|image/jpeg|true|true").length === 5 &&
+      rows.filter((r) => r === "approved|true|video/mp4|true|true").length === 1,
     rows.join(" ; "),
   );
   const [withDate] = await q(
@@ -426,8 +430,8 @@ async function walkthrough(mom: ApiClient, nanny: ApiClient, browser: Browser) {
   );
   const originalsAfter = await objectLines(`babies/${MAYA}/originals/`);
   check(
-    "6. exactly five new original objects (none for the duplicate, video or oversize item)",
-    originalsAfter - originalsBefore === 5,
+    "6. exactly six new original objects (the video included; none for the duplicate or oversize item)",
+    originalsAfter - originalsBefore === 6,
     `${originalsAfter - originalsBefore}`,
   );
   const sessions = await fake<{ id: string; deleted: boolean }[]>("GET", "/__fake/sessions");

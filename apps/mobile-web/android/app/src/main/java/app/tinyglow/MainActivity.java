@@ -5,6 +5,7 @@ import android.app.NotificationManager;
 import android.os.Build;
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
+import app.tinyglow.passkeys.TinyglowPasskeysPlugin;
 import app.tinyglow.uploader.TinyglowUploaderPlugin;
 
 public class MainActivity extends BridgeActivity {
@@ -12,6 +13,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(TinyglowUploaderPlugin.class);
+        registerPlugin(TinyglowPasskeysPlugin.class);
         super.onCreate(savedInstanceState);
         createDefaultChannel();
     }

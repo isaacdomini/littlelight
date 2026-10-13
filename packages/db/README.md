@@ -1145,10 +1145,11 @@ body verbatim).
 | **1013** | `hashtext(email_canonical)` | `babies_set_family` on a family start (inbox arbiter), always after 1012 |
 | **1014** | `hashtext(family_id || ':' || uploaded_by)` | `photos_pending_cap` |
 | **1015** | `hashtext(encode(ip_hash, 'hex'))` | the API's family-start guard transaction (`apps/api/src/auth/family-guards.ts`): count and reserve per network |
+| **1016** | `hashtext(family_id)` | `photos_free_tier_video_cap` (the free video sub-cap, step 12; always after 1011, by trigger-name order) |
 
 A hash collision only serialises two unrelated keys. The other two-key locks use
 `hashtext('<name>')` as the class (`'ai.budget_exceeded'`, `'chat.turn'`, `'share.passcode'`;
-none hashes to 1011–1015) and `register_push_device` uses the single-`bigint` form, a separate
+none hashes to 1011–1016) and `register_push_device` uses the single-`bigint` form, a separate
 key space. Pick a new class for any new lock.
 
 **Canonical email (a lookup, not a rule).** `email_canonical(text) RETURNS text` (plpgsql,
@@ -1211,6 +1212,127 @@ stack. Pixel's family is **permanently full** for the perf owner (10,000 approve
 the 1,000 pool; grandfathered): signed in as `perf-owner@tinyglow.local`, every upload into a free
 album of that family is refused with `free_tier_limit`, and a new album by the owner joins that
 family (they are its parent) rather than starting a fresh pool. Use another account to test uploads.
+
+## Video (step 12)
+
+Migration `1792500000100_video.sql` (docs/plans/step-12.md 2.2 A–E; decisions Q1–Q4, D1, D2, D8).
+**A video is a row of `photos`** (`media_kind = 'video'`), so RLS, the family pool, the pending cap,
+approval, trash/purge, the share gate, export and dedupe apply to it with no new code. One video is
+one item of the 1,000-item pool. Every RAISE is fixed text.
+
+**Columns.** `photos.media_kind` (`photo` | `video`, default `photo`), `duration_ms`, `video_codec`
+(`h264` | `hevc`), `has_audio`, `rendition_status` (`none` | `pending` | `ready` | `failed`, default
+`none`); `photos.mime` admits `video/mp4`, `video/quicktime`; partial index `photos_baby_video_idx`.
+`photos_media_shape` (BEFORE INSERT OR UPDATE, every role) raises **`media columns inconsistent
+with media_kind`** unless a photo row has the three video columns NULL and `rendition_status =
+'none'`, and a video row has `rendition_status <> 'none'`. The worker may flip a row's kind (its
+sniff is the truth) only by setting every column in the same statement.
+
+| Role | On `photos` |
+| --- | --- |
+| `authenticated` | INSERT gains `media_kind`, `rendition_status` (the api inserts the registered kind and `pending` for a video); no UPDATE on any media column |
+| `pipeline` | UPDATE gains `media_kind`, `duration_ms`, `video_codec`, `has_audio`, `rendition_status` |
+| `viewer` | SELECT gains `media_kind`, `duration_ms` (badge); still never `storage_key_original`, `video_codec`, `has_audio`, `rendition_status` |
+
+**Q3: at most 100 videos per free family.** `photos_free_tier_video_cap` (BEFORE INSERT OR UPDATE OF
+`approval`, `deleted_at`, `media_kind`, `status`; every role) fires whenever a *video* starts counting
+(the pool predicate AND `media_kind = 'video'`): inserted approved, approved, restored while
+approved, an approved photo flipped to video, or an approved row whose status leaves
+`failed`/`duplicate` (the worker's `failed -> ingested` retry). Migration 22 also re-creates the
+step-11 triggers `photos_free_tier_cap` (pool) and `photos_pending_cap` (per-guest pending) with
+`UPDATE OF approval, deleted_at, status` for the same reason (their functions are unchanged; the
+down restores the migration-21 lists). No cap re-checks a row that was already counting:
+`uploaded -> ingested` of a fresh row and `ingested -> ingested` on a retried ingest pass; a
+pending upload's `failed -> ingested` at the guest's pending limit is refused with the step-11
+message. For a free album it takes `pg_advisory_xact_lock(1016,
+hashtext(family_id))` (after the pool's 1011), counts the family's videos in a fresh snapshot and
+raises `check_violation` **`free tier video limit reached (per family)`** at ≥
+`free_tier_video_limit()`. Prefix `free tier video limit reached` (API `CHECK_VIOLATIONS` → 409
+`free_tier_limit` with `details.kind = 'video'`; `import_book_photo` → `'free_tier_limit'`). Plus
+albums are exempt; a pending video never counts; the pool cap (1,000) still counts it as an item.
+
+| Function | Returns | Grants |
+| --- | --- | --- |
+| `free_tier_video_limit()` | `integer`: 100, or the `app.free_tier_video_limit` setting (minimum 1; `FREE_TIER_VIDEO_LIMIT` in shared mirrors the 100) | `authenticated`, `pipeline`, `service_role` |
+| `free_tier_pool_videos(baby_id uuid)` | `integer`: counting videos across the family's free live albums (`free_tier_pool_used` restricted to videos; same STABLE SECURITY DEFINER semantics: 0 for a non-member with claims, full value without claims). The API's `freeTier.videos` | same |
+
+Operator override: `ALTER DATABASE tinyglow SET app.free_tier_video_limit = '50';` (`RESET` to go
+back to 100); tests may `SET` it per session. Grandfathering as for the pool: a family can exceed
+the limit by whole-album moves and keeps its videos; the next counting change is refused.
+
+**AI.** `ai_eligible_photos(...)` adds `AND (p.media_kind = 'photo' OR p.rendition_status =
+'ready')`: a video is claimable only once its keyframes exist. Free albums never appear (unchanged).
+
+**Derivatives.** `photo_derivatives.kind` admits `web` (the H.264/AAC MP4 rendition, key
+`…/derivatives/<id>/web.mp4`) and `keyframe1..3` (AI only). `photo_derivatives_viewer_select` =
+`thumb`/`display` of `viewer_media_photo_ids()` **or** `web` of **`viewer_web_photo_ids()`** (new
+SECURITY DEFINER set helper: the same rows restricted to `media_kind = 'video'`; `viewer`,
+`service_role`). A `web` row attached to a photo is invisible to viewers; keyframes and `analysis`
+always are; a sensitive, hand-shared, unreleased video has no readable derivative (D4 unchanged).
+
+**Uploads and imports.** `upload_files`: `media_kind` (default `photo`), `declared_duration_ms`,
+`declared_bytes` ≤ 2 GiB (`2147483648`), `client_mime` admits the video mimes, `error` appends
+`video_too_long`, `transcode_failed` (shared `uploadFileErrorSchema` order); `authenticated` INSERT
+gains the two columns. `import_items`: `media_kind`, `duration_ms_hint`, `mime_hint` admits the
+video mimes, `bytes` ≤ 2 GiB, `error` appends `video_too_long`; `pipeline` UPDATE gains the two
+columns. **Per-plan limits are not CHECKs** (a plan can change): the api refuses at register, the
+worker after ffprobe; the CHECKs are the Plus ceilings. `import_book_photo()` (migration-21 body
+plus): selects `media_kind`, `duration_ms_hint` and the album's plan; for a **free** album's video
+returns `'video_too_long'` (`round(duration_ms_hint / 1000.0) > 60`, the api/worker's rounded
+whole-seconds rule; a NULL hint passes) or `'file_too_large'`
+(`bytes > 262144000`) before inserting; inserts `media_kind` and `rendition_status` (`pending` for
+a video); maps the Q3 message to `'free_tier_limit'`. Outcomes: `booked | duplicate |
+free_tier_limit | pending_limit | video_too_long | file_too_large | not_member | baby_trashed`.
+
+**GPS tripwire.** `jsonb_has_gps_keys` also matches keys containing `location` or `iso6709`
+(QuickTime `com.apple.quicktime.location.ISO6709`, ffprobe `location`), so a clip's location tag can
+never land in `photo_exif.raw_json`; the worker keeps writing GPS only through `encrypt_coord`.
+Clean QuickTime tags (`com.apple.quicktime.make`, `creationdate`, `encoder`) pass.
+
+**Down migration.** Restores the migration-21 `import_book_photo`, the step-6 `ai_eligible_photos`
+and the step-2 `jsonb_has_gps_keys` (bodies and comments verbatim; verified with
+`pg_get_functiondef`), the sharing-v1 derivatives policy, the migration-21 `photos_free_tier_cap` and
+`photos_pending_cap` trigger definitions and every step-4/10/11 CHECK. **It deletes
+video rows** (`photos` with `media_kind = 'video'` or a video mime, cascading their derivatives,
+exif, details, search and share rows; a NOTICE with the count only), video `upload_files` /
+`import_items` and `web`/`keyframe*` derivative rows, because they cannot satisfy the restored
+CHECKs. Verified: `pg_dump -s` after down equals the step-11 schema on a fresh and on a seeded
+database; up → down → up is identical; a re-seed after the round trip yields the first run's counts.
+
+**Dev database.** Another job may be using the dev stack; apply with the one-shot service (migrate +
+seed, idempotent): `docker compose -f docker-compose.dev.yml run --rm migrate`. Hand checks:
+docs/plans/step-12.md 4.2.
+
+## GoTrue passkey tables (step 13)
+
+Passkeys (docs/plans/step-13.md 2.2, task 13.2) add **no app migration**. GoTrue's own migration
+`20260302000000_add_passkeys` (`supabase/auth:v2.197.0`, applied by the `auth` container before
+ours run) creates two tables in the `auth` schema, owner `supabase_auth_admin`:
+
+| Table | Columns of interest | FK |
+| --- | --- | --- |
+| `auth.webauthn_credentials` | `id`, `user_id` (NOT NULL), `credential_id bytea` (unique), `public_key bytea`, `attestation_type`, `aaguid`, `sign_count`, `transports jsonb`, `backup_eligible`, `backed_up`, `friendly_name`, `created_at`, `updated_at`, `last_used_at` | `user_id → auth.users (id) ON DELETE CASCADE` |
+| `auth.webauthn_challenges` | `id`, `user_id` (NULL for an authentication challenge before the user is known), `challenge_type` (`signup` \| `registration` \| `authentication`), `session_data jsonb`, `created_at`, `expires_at` | `user_id → auth.users (id) ON DELETE CASCADE` |
+
+- **Deletion.** Account deletion's existing GoTrue hard delete (`adminDeleteUser` → `DELETE
+  /admin/users/{id}`, i.e. `DELETE FROM auth.users` as `supabase_auth_admin`) cascades to both
+  tables, so `apps/api/src/auth/account.ts` needs no pre-delete step. Hand-checked 2026-10-11 on a
+  throwaway `pgvector/pgvector:0.8.7-pg17` + `supabase/auth:v2.197.0 auth migrate` database: one
+  credential and one `registration` challenge inserted for a test user, `DELETE FROM auth.users`
+  as `supabase_auth_admin` → 0 users, 0 credentials, 0 challenges for that user (an anonymous
+  `authentication` challenge with `user_id NULL` is untouched; GoTrue consumes those atomically
+  and purges expired ones itself).
+- **No app role can read them.** Table privileges exist for `supabase_auth_admin` only, and the
+  app roles hold no `USAGE` on the `auth` schema at all: `authenticated`, `viewer`, `pipeline`,
+  `service_role` and the login role `tinyglow_api` get `permission denied for schema auth` on
+  either table (hand-checked). Nothing in `public`
+  references them (`rg webauthn packages/db` finds only this section; no function body or
+  dependency in `pg_depend`). The deletion preview's **`passkeys: n` comes from GoTrue's
+  `GET /admin/users/{uid}/passkeys/` list, never from SQL**, and the API never stores a
+  credential id, public key or challenge.
+- Credentials and challenges hold no photo, child or location data; they are GoTrue's and follow
+  its retention (challenges expire after `GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION`, default 5
+  minutes).
 
 ## Store-review family (`src/review-family.ts`)
 
@@ -1287,7 +1409,7 @@ From the repo root (`pnpm db:*` forwards to this package) or from `packages/db`:
 | `pnpm db:migrate:down [n\|all]` | Revert the last `n` migrations (default 1); `all` reverts everything |
 | `pnpm db:seed` | Demo family (needs `SEED_DEMO_FAMILY=true`, `DATA_ENCRYPTION_KEY`; refuses in production) |
 | `pnpm db:plan <babyId> plus\|free [--owner <userId>] [--expires <iso>]` | Dev/operator plan switch, audited (`baby.plan_changed`); refuses in production without `--i-know-this-is-production` (see "AI pipeline") |
-| `pnpm admin:abuse-report [--days N=7] [--limit N=20] [--show-emails] [--json]` | Operator report (read-only), per family: family starts per network (IP hash), families near/over the cap, top storage (albums and families), recent family starts with flags, guests' pending queues; ids/counts/bytes only unless `--show-emails` (step 11, task 11.4b) |
+| `pnpm admin:abuse-report [--days N=7] [--limit N=20] [--show-emails] [--json]` | Operator report (read-only), per family: family starts per network (IP hash), families near/over the cap (with `videos` and a `VIDEOS` marker at `free_tier_video_limit()`), top storage (albums and families, with `videos`, `video_bytes` and a `FAIR-USE` marker at 200 GiB per family: information only, step 12 Q4), recent family starts with flags, guests' pending queues; ids/counts/bytes only unless `--show-emails` (step 11, task 11.4b) |
 | `pnpm admin:suspend <userId> [--lift] [--reason abuse\|other] [--i-know-this-is-production]` | Suspend / lift an account: sets `profiles.suspended_at`, deletes its `auth.sessions`, audits `account.suspended` / `account.unsuspended` (step 11, task 11.4) |
 | `pnpm db:review-family --email <addr> [--confirm-production]` | Store-review family for an existing user (see "Store-review family"); refuses in production without the flag |
 | `pnpm --filter @tinyglow/db db:types` | Regenerate `src/generated/tables.ts` from the migrated DB (CI diffs it) |
@@ -1316,10 +1438,13 @@ Mom), `demo-dad@…` (admin, Dad), `demo-nanny@…` (contributor); baby `…-000
 "Grandparents" (dev token `demo-grandparents-share-token` = `DEMO_IDS.shareToken`, only its sha256
 stored; `ttl_hours = 24`, re-upserted so it always expires 24 h after the last seed run, no
 passcode; a revoked demo link is deleted and recreated because a revoked link cannot be revived
-with the same token; rule `milestones`); 12 photos `…-0000000003NN` (all `image/jpeg`, originals `babies/<baby>/originals/<photo>.jpg`): 8 approved, 1 approved and
-sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny;
+with the same token; rule `milestones`); 13 items `…-0000000003NN`: 12 photos (all `image/jpeg`, originals `babies/<baby>/originals/<photo>.jpg`): 8 approved, 1 approved and
+sensitive (bath, with a `photo_ai` row), 1 approved and trashed, 2 pending from the nanny; and
+**one demo clip** (photo 13, step 12: `media_kind = 'video'`, `video/mp4` at `…/originals/<id>.mp4`,
+4,000 ms, `h264`, no audio, `rendition_status = 'ready'`, approved, uploaded by mom, derivatives
+`thumb`/`display` (poster) + `web` at `…/derivatives/<id>/web.mp4`; not on the share link);
 4 shared photos, all hand-picked by mom: 2, 9, 10 and the bath photo 4, which is **not released**
-(viewers get a hidden tile and cannot read its derivatives); 3 measurements; `photo_search` rows for the 9 live approved photos (with `place`;
+(viewers get a hidden tile and cannot read its derivatives); 3 measurements; `photo_search` rows for the 10 live approved items (with `place`; the clip's text ends "Video clip, 4 seconds.";
 `embedding`, `embed_model`, `doc_version`, `content_hash` and `embedded_at` NULL, also reset on every
 re-seed, so the worker's `search.reconcile` rebuilds and embeds them); one audit row. Maya lives in
 mom's family (`babies_set_family`: a new `families` row on the first run, kept on re-runs; mom and
@@ -1385,6 +1510,11 @@ PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role authenticated; se
 PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from shared_photos; select count(*) from photos; select count(*) from photo_exif; rollback;"
 # viewer media: 3 photos with readable derivatives, 0 rows for the unreleased bath photo
 PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(distinct photo_id) from photo_derivatives; select count(*) from photo_derivatives where photo_id = '00000000-0000-4000-8000-000000000304'; rollback;"
+# step 12: viewer reads media_kind/duration_ms (4 rows, the clip is not shared so 0 web keys); video_codec is not granted: permission denied
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(media_kind) from photos; select count(*) from photo_derivatives where kind = 'web'; select count(video_codec) from photos; rollback;"
+# step 12: a non-member sees no video and a 0 video pool; the shape trigger refuses a video with rendition_status none
+PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role authenticated; select set_config('request.jwt.claims','{\"sub\":\"00000000-0000-4000-8000-0000000000ff\",\"role\":\"authenticated\"}',true); select count(*) from photos where media_kind = 'video'; select free_tier_pool_videos('00000000-0000-4000-8000-000000000100'); rollback;"
+psql -h localhost -p 55432 -U postgres -d tinyglow -c "begin; insert into photos (baby_id, storage_key_original, media_kind) values ('00000000-0000-4000-8000-000000000100', 'x', 'video'); rollback;"   # media columns inconsistent with media_kind
 # viewer gets nothing on upload tables: permission denied for table upload_sessions
 PGPASSWORD=dev $PSQL -U tinyglow_api -c "begin; set local role viewer; select set_config('request.jwt.claims','{\"role\":\"viewer\",\"share_link_id\":\"00000000-0000-4000-8000-000000000200\"}',true); select count(*) from upload_sessions; rollback;"
 # FR-1.5: mom cannot demote or delete dad (UPDATE 0, DELETE 0); co-member profiles only via member_profiles (0, then 3)
@@ -1418,3 +1548,4 @@ PGPASSWORD=dev $PSQL -U tinyglow_worker -c "begin; set local role pipeline; sele
 | `1792300000200_data-exports.sql` | guard (`auth.users`); `data_exports` (ENABLE+FORCE RLS, generated `storage_key` not granted to `authenticated`, 5 indexes incl. `data_exports_one_active_per_baby`); `data_exports_baby_live`, `data_exports_rate_limit`, `data_exports_user_update_guard` triggers; `export_requester_is_admin`, `export_requester_email` (pipeline only); pipeline read grants on `babies` profile columns and `baby_members (baby_id, user_id, role, joined_at)` + `baby_members_pipeline_select` | drop the policy and revoke the two grants; drop functions, table, trigger functions |
 | `1792300000300_photo-import.sql` | guard (`auth.users`); `encrypt_secret` / `decrypt_secret` (service_role only); `import_sources` (+ `import_sources_shape`, `import_sources_insert_guard`, composite FK to `baby_members`), `baby_members_drop_apple_sync` trigger; `google_accounts` (+ `google_accounts_shape`); `import_batches` (+ `import_batches_one_active`, `import_batches_user_transitions`, `import_batches_one_active_per_baby`); `import_items` (+ `import_items_batch_guard`), `import_batch_visible`; `import_batch_requester_state`, `import_google_refresh_token`, `import_mark_reconnect`, `import_book_photo` (pipeline only); all four tables ENABLE+FORCE RLS | drop the four functions, the `baby_members` trigger + function, the four tables and their trigger functions, `import_batch_visible`, `decrypt_secret`, `encrypt_secret` |
 | `1792400000100_free-tier-abuse.sql` | guard (`auth.users`, `auth.sessions`); `profiles.suspended_at/suspended_reason`; `email_canonical(text)`, `profiles.email_canonical` (+ backfill, plain `profiles_email_canonical_idx`, `profiles_set_email_canonical`), `invites_email_canonical_live_idx`, canonical branch in `invite_allows_join` / `baby_members_consume_invite`; `families` (ENABLE+FORCE RLS, authenticated/service_role SELECT, `is_family_member`), `babies.family_id` NOT NULL (+ connected-components backfill, `babies_family_idx`, `babies_family_free_live_idx`, authenticated SELECT), `parent_family_of`, `my_family_id`, triggers `babies_set_family`, `baby_members_one_family`, `babies_family_guard`, `babies_release_family`; `free_tier_pool_used`, `free_tier_pool_albums`; `photos_free_tier_cap` = per-family approved pool (lock 1011) on INSERT OR UPDATE OF `approval`, `deleted_at`; `pending_photo_limit`, `my_pending_photo_count`, `photos_pending_cap` (lock 1014); `pending_limit` in the `upload_files` / `import_sources` / `import_items` error CHECKs; `account_state_for_email`, `family_holder_email_for_canonical` (service_role); `family_starts` (ENABLE+FORCE RLS, service_role S/I/D only) + `family_starts_prune()` (service_role, pipeline); `auth_session_info` gains `suspended`; `import_book_photo` gains `'pending_limit'` | restore `auth_session_info` (two columns), the step-2 invite functions, the step-4 cap body/trigger, the three error CHECKs and the step-10 `import_book_photo` verbatim; drop everything else (and any first-draft objects) |
+| `1792500000100_video.sql` | `photos.media_kind/duration_ms/video_codec/has_audio/rendition_status` (+ `photos_media_shape` trigger, video mimes in `photos_mime_check`, `photos_baby_video_idx`; grants: authenticated INSERT `media_kind, rendition_status`, pipeline UPDATE the five, viewer SELECT `media_kind, duration_ms`); `free_tier_video_limit()` (GUC `app.free_tier_video_limit`), `free_tier_pool_videos(uuid)`, `photos_free_tier_video_cap` (lock 1016, Q3; `UPDATE OF approval, deleted_at, media_kind, status`); `photos_free_tier_cap` and `photos_pending_cap` triggers re-created with `UPDATE OF approval, deleted_at, status` (functions unchanged); `ai_eligible_photos` requires `rendition_status = 'ready'` for videos; `photo_derivatives.kind` += `web`, `keyframe1..3`, `viewer_web_photo_ids()` + derivatives viewer policy admitting `web` for video rows only; `upload_files.media_kind/declared_duration_ms`, 2 GiB `declared_bytes`, video `client_mime`, `error` += `video_too_long`, `transcode_failed`; `import_items.media_kind/duration_ms_hint`, video `mime_hint`, 2 GiB `bytes`, `error` += `video_too_long`; `import_book_photo` books videos (free 60 s / 250 MB pre-checks, `video_too_long` / `file_too_large`); `jsonb_has_gps_keys` += `location`, `iso6709` | restore the step-2 `jsonb_has_gps_keys`, migration-21 `import_book_photo`, step-6 `ai_eligible_photos` (bodies + comments verbatim) and the sharing-v1 derivatives policy; **delete video rows** (photos + cascades, upload_files, import_items, `web`/`keyframe*` derivatives; NOTICE with the count); restore every CHECK; drop the functions, triggers, index and columns |

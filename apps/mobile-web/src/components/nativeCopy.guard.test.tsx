@@ -70,6 +70,8 @@ describe("native copy has no purchase wording", () => {
           babyId: "b",
           name: "a.jpg",
           size: 1,
+          kind: "photo",
+          wifiOnly: false,
           state: "failed",
           progress: 0,
           error,

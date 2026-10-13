@@ -68,6 +68,7 @@ export {
 } from "./fake/temporal";
 export {
   createFakeVisionDescriber,
+  FAKE_TOKENS_PER_EXTRA_IMAGE,
   FAKE_USAGE,
   type FakeOutcome,
   type FakeRecordedRequest,

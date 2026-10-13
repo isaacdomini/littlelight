@@ -57,7 +57,15 @@ export interface RequestOptions<T> {
 }
 
 // Endpoints whose 401/4xx are ordinary form errors, not a lost session.
-const NO_SESSION_EFFECT = ["/auth/otp", "/auth/verify", "/auth/pkce", "/auth/id-token"];
+// `/auth/passkey` (prefix: options + verify, step 13): a 401 `passkey_failed` is a form error,
+// never a lost session (the fresh-sign-in gate must not sign the user out on a bad passkey).
+const NO_SESSION_EFFECT = [
+  "/auth/otp",
+  "/auth/verify",
+  "/auth/pkce",
+  "/auth/id-token",
+  "/auth/passkey",
+];
 
 export async function headers(hasBody: boolean): Promise<Headers> {
   const h = new Headers({ Accept: "application/json", "X-Tinyglow-Client": clientKind() });

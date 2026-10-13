@@ -82,6 +82,14 @@ export const JOBS = {
    * and applies item retention (docs/plans/step-10.md 2.7).
    */
   importSweep: "import.sweep",
+  /**
+   * Per video (`videoTranscodeJobSchema`, singleton key `photoId`): builds the `web` rendition
+   * and the AI keyframes after `photo.ingest` wrote the poster (docs/plans/step-12.md 2.3, 2.6).
+   * Sent by the worker's video ingest and re-sent by `ingest.reconcile` for `rendition_status =
+   * 'pending'` rows older than 15 min; `exclusive`, `retryLimit 2`, `retryDelay 120`,
+   * `expireInSeconds 7200`. No model call.
+   */
+  videoTranscode: "video.transcode",
 } as const;
 
 export type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -335,3 +343,30 @@ export function importGoogleSingletonKey(job: ImportGoogleJob): string {
 /** `import.sweep` payload: none (cron ticks send no data; handlers parse `job.data ?? {}`). */
 export const importSweepJobSchema = z.strictObject({});
 export type ImportSweepJob = z.infer<typeof importSweepJobSchema>;
+
+// Video (docs/plans/step-12.md 2.3, 2.6): `JOBS.videoTranscode`; the constant below is an alias
+// kept for the producers (video ingest, `ingest.reconcile`, `run-job`).
+
+/**
+ * Queue name of the video transcode (`videoTranscodeJobSchema`). Queue policy `exclusive`,
+ * `singletonKey = photoId` (`videoTranscodeSingletonKey`), `retryLimit 2`, `retryDelay 120`,
+ * `expireInSeconds 7200` (ffmpeg on a 5-minute 4K clip can take a while on a small box). The
+ * handler runs at `VIDEO_CONCURRENCY` and defers when scratch space is low.
+ */
+export const VIDEO_TRANSCODE_JOB = JOBS.videoTranscode;
+
+/**
+ * `video.transcode` payload: ids only (strict: never a storage key, a scratch path, a URL or a
+ * tag). The worker re-reads the row (`media_kind`, `rendition_status`, `sha256`, plan) as
+ * `pipeline` at run time and skips anything that is not a live, un-quarantined video.
+ */
+export const videoTranscodeJobSchema = z.strictObject({
+  photoId: z.uuid(),
+  babyId: z.uuid(),
+});
+export type VideoTranscodeJob = z.infer<typeof videoTranscodeJobSchema>;
+
+/** pg-boss `singletonKey` of a `video.transcode` job: the photo id (one queued/active job per video). */
+export function videoTranscodeSingletonKey(job: VideoTranscodeJob): string {
+  return job.photoId;
+}

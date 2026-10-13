@@ -1,15 +1,19 @@
 import {
+  type MediaKind,
+  type Plan,
   SYNC_LANE_CONCURRENCY,
   UPLOAD_CONCURRENCY,
+  UPLOAD_MAX_FILE_BYTES,
   UPLOAD_MAX_FILES_PER_REQUEST,
   UPLOAD_MAX_FILES_PER_SESSION,
   type UploadDetails,
   type UploadFile,
-  type UploadFileRegister,
+  type UploadFileRegisterInput,
   uploadFileSchema,
   uploadFilesRegisterResponseSchema,
   uploadPartsResponseSchema,
   uploadSessionSchema,
+  VIDEO_LARGE_FILE_BYTES,
 } from "@tinyglow/shared";
 import {
   getUploader,
@@ -22,13 +26,23 @@ import { ApiError, apiFetch, isApiError } from "../api";
 import { pendingLimitMessage } from "../familyErrors";
 import { readCaptureHint } from "./exif";
 import { sha256Hex } from "./hash";
-import { acceptedMime, validateFile } from "./validate";
+import { cellularForLargeVideos } from "./prefs";
+import {
+  acceptedMime,
+  mediaKindOf,
+  readVideoDuration,
+  validateDuration,
+  validateFile,
+} from "./validate";
 
-// Upload orchestration (docs/plans/step-4.md 2.12). Plain class + useSyncExternalStore.
-// Pipeline: prep (SHA-256 + EXIF hint, one file at a time) -> register (batched, <=100) ->
-// upload (UPLOAD_CONCURRENCY files in flight, parts of one file sequential) -> complete (the API
-// lists the parts and completes; the client never needs ETags) -> poll until the worker ingests.
-// Files that fail the client-side type/size gate are shown as failed and never sent to the API.
+// Upload orchestration (docs/plans/step-4.md 2.12; videos: docs/plans/step-12.md 2.8). Plain
+// class + useSyncExternalStore.
+// Pipeline: prep (SHA-256 + EXIF hint for photos, duration read for videos; one file at a time)
+// -> register (batched, <=100; sends `kind` and `durationMs`) -> upload (UPLOAD_CONCURRENCY
+// files in flight, parts of one file sequential; part URLs re-fetched when older than 50 min)
+// -> complete (the API lists the parts and completes; the client never needs ETags) -> poll
+// until the worker ingests. Files that fail the client-side type/size/duration gate are shown
+// as failed and never sent to the API.
 
 export type ItemState =
   | "queued"
@@ -42,7 +56,10 @@ export type ItemState =
   | "failed"
   | "aborted";
 
-/** `unsupported` / `too_large` are client-side; the rest mirror `uploadFileError` + transport. */
+/**
+ * `unsupported` / `too_large` are client-side (`video_too_long` is both: the client's duration
+ * read or the server's); the rest mirror `uploadFileError` + transport.
+ */
 export type ItemErrorCode =
   | "unsupported"
   | "too_large"
@@ -55,6 +72,11 @@ export type ItemErrorCode =
   | "expired"
   | "storage_error"
   | "upload_incomplete"
+  | "video_too_long"
+  | "transcode_failed"
+  /** Native uploader refusals (step 12 follow-up): no free disk / byte range outside the file. */
+  | "no_space"
+  | "bad_range"
   | "network"
   | "unknown";
 
@@ -72,6 +94,14 @@ export interface UploadItem {
   babyId: string;
   name: string;
   size: number;
+  /** `photo` or `video` (from the mime/extension; the worker's sniff is the truth). */
+  kind: MediaKind;
+  /** A video's duration once read from its metadata (ms); undefined for photos / unreadable. */
+  durationMs?: number;
+  /** The album's plan when the caller knew it: drives the client-side video limits and copy. */
+  plan?: Plan;
+  /** Native: keep this transfer off cellular (large videos default to true, Q6). */
+  wifiOnly: boolean;
   state: ItemState;
   /** 0..1 while uploading. */
   progress: number;
@@ -95,6 +125,8 @@ const TERMINAL: ReadonlySet<ItemState> = new Set(["ingested", "duplicate", "fail
 const POLL_MS = 1500;
 const PART_ATTEMPTS = 3;
 const REGISTER_DEBOUNCE_MS = 100;
+/** Presigned part URLs live 1 h; a long video upload asks for fresh ones after this long. */
+const PART_URLS_MAX_AGE_MS = 50 * 60_000;
 
 interface Runtime {
   /** The bytes. Native items hold none (null) except while hashing or a foreground multi-part PUT. */
@@ -105,17 +137,22 @@ interface Runtime {
   nativeRef: NativeFileRef | undefined;
   detailsKey: string;
   details: UploadDetails | undefined;
+  kind: MediaKind;
+  plan: Plan | undefined;
+  durationMs: number | undefined;
   sha256: string | null;
   hint: { takenAt?: string; tzOffsetMinutes?: number };
   prepared: boolean;
   lane: UploadLane;
-  /** Sync lane: send over Wi-Fi only (native background session). */
+  /** Send over Wi-Fi only (native background session): sync lane, or a large video (Q6). */
   wifiOnly: boolean;
   sessionId: string | null;
   fileId: string | null;
   partSize: number;
   /** Fresh part URLs from the register response; undefined means "ask GET .../parts". */
   parts: { partNumber: number; url: string }[] | undefined;
+  /** When `parts` were signed (register time), for the 50-minute refresh. */
+  partsAt: number;
   abort: AbortController | null;
   cancelled: boolean;
 }
@@ -172,17 +209,38 @@ async function readNativeFile(ref: NativeFileRef): Promise<File> {
   return fileFromRef(ref);
 }
 
+/** Duration hint for a native video; `undefined` on any failure (the worker's ffprobe is the truth). */
+async function nativeVideoDuration(ref: NativeFileRef): Promise<number | undefined> {
+  try {
+    const m = await import("../../platform/native/files");
+    return await m.nativeVideoDuration(ref);
+  } catch {
+    return undefined;
+  }
+}
+
 function releaseNativeCopy(ref: NativeFileRef): void {
   void import("../../platform/native/files").then((m) => m.deleteNativeCopy(ref)).catch(() => {});
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * The duplicate pre-check hint. `sha256Hex` reads the whole file into memory, so files above the
+ * photo cap (large videos) skip it: the worker hashes while staging and dedupes there.
+ */
+function hashFor(file: Blob): Promise<string | null> {
+  return file.size > UPLOAD_MAX_FILE_BYTES ? Promise.resolve(null) : sha256Hex(file);
+}
+
 function isAbort(e: unknown): boolean {
   return e instanceof DOMException && e.name === "AbortError";
 }
 
 function errorCodeFor(e: unknown): { code: ItemErrorCode; retryable: boolean } {
+  if (e instanceof PartUploadError && e.reason) {
+    return { code: e.reason === "no-space" ? "no_space" : "bad_range", retryable: false };
+  }
   if (e instanceof ApiError) {
     if (e.code === "free_tier_limit") return { code: "free_tier_limit", retryable: false };
     if (e.code === "pending_limit") return { code: "pending_limit", retryable: false };
@@ -208,6 +266,20 @@ function opaqueId(n: number): string {
 
 export interface UploadManagerOptions {
   uploader?: () => Uploader;
+}
+
+export interface AddOptions {
+  /** The album's plan: per-clip video limits are applied client-side when known. */
+  plan?: Plan;
+}
+
+/**
+ * Q6: native items above `VIDEO_LARGE_FILE_BYTES` default to Wi-Fi only unless told otherwise, or
+ * unless the persisted "Use cellular for large videos" preference is on (Settings -> Uploads).
+ */
+function defaultWifiOnly(size: number, explicit: boolean | undefined, native: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  return native && size > VIDEO_LARGE_FILE_BYTES && !cellularForLargeVideos();
 }
 
 export class UploadManager {
@@ -309,7 +381,7 @@ export class UploadManager {
     babyId: string,
     refs: NativeFileRef[],
     details?: UploadDetails,
-    opts: { lane?: UploadLane; wifiOnly?: boolean } = {},
+    opts: AddOptions & { lane?: UploadLane; wifiOnly?: boolean } = {},
   ): string[] {
     const lane = opts.lane ?? "user";
     const detailsKey = JSON.stringify(details ?? {});
@@ -319,15 +391,25 @@ export class UploadManager {
     for (const ref of refs) {
       const clientId = opaqueId(++this.counter);
       ids.push(clientId);
-      const reason = validateFile({ name: ref.name, size: ref.size, type: ref.mime });
-      // The platform already hashed it (album sync): skip our own SHA-256 + EXIF read.
+      const kind = mediaKindOf({ name: ref.name, type: ref.mime });
+      const durationMs = ref.durationMs;
+      const reason =
+        validateFile({ name: ref.name, size: ref.size, type: ref.mime }, opts.plan) ??
+        (kind === "video" ? validateDuration(durationMs, opts.plan) : null);
+      // The platform already hashed it (album sync): skip our own SHA-256 + EXIF read. A video
+      // with a platform duration also skips the metadata read.
       const known = !reason && ref.sha256 ? ref.sha256 : null;
+      const wifiOnly = defaultWifiOnly(ref.size, opts.wifiOnly, true);
       added.push({
         clientId,
         lane,
         babyId,
         name: ref.name,
         size: ref.size,
+        kind,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(opts.plan ? { plan: opts.plan } : {}),
+        wifiOnly,
         state: reason ? "failed" : known ? "registering" : "queued",
         progress: 0,
         error: reason,
@@ -336,12 +418,13 @@ export class UploadManager {
       if (reason) {
         if (lane !== "sync") releaseNativeCopy(ref);
       } else {
-        const r = this.newRuntime(null, detailsKey, details);
+        const r = this.newRuntime(null, detailsKey, details, kind, opts.plan);
         r.nativeRef = ref;
         r.size = ref.size;
         r.mime = ref.mime;
         r.lane = lane;
-        r.wifiOnly = opts.wifiOnly === true;
+        r.wifiOnly = wifiOnly;
+        r.durationMs = durationMs;
         if (known) {
           r.sha256 = known;
           r.hint = ref.takenAt ? { takenAt: ref.takenAt } : {};
@@ -359,18 +442,22 @@ export class UploadManager {
   }
 
   /** Queue files for a baby. Rejected files appear as failed and are never sent to the API. */
-  add(babyId: string, files: File[], details?: UploadDetails): void {
+  add(babyId: string, files: File[], details?: UploadDetails, opts: AddOptions = {}): void {
     const detailsKey = JSON.stringify(details ?? {});
     const added: UploadItem[] = [];
     for (const file of files) {
       const clientId = opaqueId(++this.counter);
-      const reason = validateFile(file);
+      const kind = mediaKindOf(file);
+      const reason = validateFile(file, opts.plan);
       const item: UploadItem = {
         clientId,
         lane: "user",
         babyId,
         name: file.name,
         size: file.size,
+        kind,
+        ...(opts.plan ? { plan: opts.plan } : {}),
+        wifiOnly: false,
         state: reason ? "failed" : "queued",
         progress: 0,
         error: reason,
@@ -378,7 +465,7 @@ export class UploadManager {
       };
       added.push(item);
       if (!reason) {
-        this.rt.set(clientId, this.newRuntime(file, detailsKey, details));
+        this.rt.set(clientId, this.newRuntime(file, detailsKey, details, kind, opts.plan));
       }
     }
     this.snapshot = [...this.snapshot, ...added];
@@ -390,6 +477,8 @@ export class UploadManager {
     file: File | null,
     detailsKey: string,
     details: UploadDetails | undefined,
+    kind: MediaKind,
+    plan: Plan | undefined,
   ): Runtime {
     return {
       file,
@@ -398,6 +487,9 @@ export class UploadManager {
       nativeRef: undefined,
       detailsKey,
       details,
+      kind,
+      plan,
+      durationMs: undefined,
       sha256: null,
       hint: {},
       prepared: false,
@@ -407,6 +499,7 @@ export class UploadManager {
       fileId: null,
       partSize: 0,
       parts: undefined,
+      partsAt: 0,
       abort: null,
       cancelled: false,
     };
@@ -417,10 +510,15 @@ export class UploadManager {
    * ones the server already has, resume the registered ones through `GET .../parts`, and upload
    * the rest normally.
    */
-  async resume(babyId: string, files: File[], details?: UploadDetails): Promise<void> {
+  async resume(
+    babyId: string,
+    files: File[],
+    details?: UploadDetails,
+    opts: AddOptions = {},
+  ): Promise<void> {
     const stored = readResume(babyId);
     if (!stored) {
-      this.add(babyId, files, details);
+      this.add(babyId, files, details, opts);
       return;
     }
     let session: ReturnType<typeof uploadSessionSchema.parse> | null = null;
@@ -431,7 +529,7 @@ export class UploadManager {
     }
     if (!session || session.finishedAt !== null || Date.parse(session.expiresAt) < Date.now()) {
       writeResume(babyId, null);
-      this.add(babyId, files, details);
+      this.add(babyId, files, details, opts);
       return;
     }
     const detailsKey = JSON.stringify(session.details ?? {});
@@ -449,12 +547,12 @@ export class UploadManager {
     const added: UploadItem[] = [];
     const claimed = new Set<string>();
     for (const file of files) {
-      const reason = validateFile(file);
+      const reason = validateFile(file, opts.plan);
       if (reason) {
         rest.push(file);
         continue;
       }
-      const sha = await sha256Hex(file);
+      const sha = await hashFor(file);
       const match = sha
         ? stored.files.find(
             (f) => f.sha256 === sha && f.size === file.size && !claimed.has(f.fileId),
@@ -471,7 +569,8 @@ export class UploadManager {
       }
       claimed.add(match.fileId);
       const clientId = opaqueId(++this.counter);
-      const r = this.newRuntime(file, detailsKey, session.details);
+      const kind = mediaKindOf(file);
+      const r = this.newRuntime(file, detailsKey, session.details, kind, opts.plan);
       r.sha256 = sha;
       r.prepared = true;
       r.sessionId = session.id;
@@ -485,6 +584,9 @@ export class UploadManager {
         babyId,
         name: file.name,
         size: file.size,
+        kind: sf.kind,
+        ...(opts.plan ? { plan: opts.plan } : {}),
+        wifiOnly: false,
         state,
         progress: 0,
         error: null,
@@ -496,7 +598,7 @@ export class UploadManager {
     for (const l of this.listeners) l();
     this.pumpUploads();
     this.schedulePoll();
-    if (rest.length > 0) this.add(babyId, rest, details);
+    if (rest.length > 0) this.add(babyId, rest, details, opts);
     else this.maybeFinish(session.id);
   }
 
@@ -516,6 +618,27 @@ export class UploadManager {
           const r = this.rt.get(next.clientId);
           if (!r) break;
           this.patch(next.clientId, { state: "hashing" });
+          if (r.kind === "video" && r.nativeRef) {
+            // Native videos are never read into the WebView (a full-file fetch of a mov/mp4 fails
+            // on iOS and would hold a 2 GB clip in memory on Android): no client hash (the worker
+            // hashes while staging and dedupes there); the duration comes from the picker, or
+            // from a metadata-only <video> on the file URL; the ranged `putFile` streams the bytes.
+            const durationMs =
+              r.durationMs !== undefined ? r.durationMs : await nativeVideoDuration(r.nativeRef);
+            r.sha256 = null;
+            r.durationMs = durationMs;
+            if (durationMs !== undefined) this.patch(next.clientId, { durationMs });
+            const tooLong = validateDuration(durationMs, r.plan);
+            r.prepared = true;
+            if (tooLong) {
+              this.fail(next.clientId, tooLong, false);
+              continue;
+            }
+            if (r.cancelled) continue;
+            this.patch(next.clientId, { state: "registering" });
+            this.scheduleRegister();
+            continue;
+          }
           let file = r.file;
           if (!file && r.nativeRef) {
             try {
@@ -526,9 +649,27 @@ export class UploadManager {
             }
           }
           if (!file) break;
-          const [sha, hint] = await Promise.all([sha256Hex(file), readCaptureHint(file)]);
-          r.sha256 = sha;
-          r.hint = hint;
+          if (r.kind === "video") {
+            // No EXIF in a video container; the duration hint comes from the browser's demuxer.
+            const [sha, durationMs] = await Promise.all([
+              hashFor(file),
+              r.durationMs === undefined ? readVideoDuration(file) : Promise.resolve(r.durationMs),
+            ]);
+            r.sha256 = sha;
+            r.durationMs = durationMs;
+            if (durationMs !== undefined) this.patch(next.clientId, { durationMs });
+            const tooLong = validateDuration(durationMs, r.plan);
+            if (tooLong) {
+              r.prepared = true;
+              if (r.nativeRef) r.file = null;
+              this.fail(next.clientId, tooLong, false);
+              continue;
+            }
+          } else {
+            const [sha, hint] = await Promise.all([hashFor(file), readCaptureHint(file)]);
+            r.sha256 = sha;
+            r.hint = hint;
+          }
           r.prepared = true;
           if (r.nativeRef) r.file = null; // release the bytes; the PUT streams from disk
           if (r.cancelled) continue;
@@ -636,12 +777,14 @@ export class UploadManager {
     }
     const room = UPLOAD_MAX_FILES_PER_SESSION - info.count;
     const batch = group.slice(0, Math.max(1, room));
-    const files: UploadFileRegister[] = batch.map((g) => {
+    const files: UploadFileRegisterInput[] = batch.map((g) => {
       const r = this.rt.get(g.clientId) as Runtime;
       const mime = acceptedMime(r.mime);
       return {
         clientId: g.clientId,
+        kind: r.kind,
         bytes: r.size,
+        ...(r.kind === "video" && r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
         ...(r.sha256 ? { clientSha256: r.sha256 } : {}),
         ...(mime ? { mime } : {}),
         ...(r.hint.takenAt ? { takenAt: r.hint.takenAt } : {}),
@@ -687,6 +830,7 @@ export class UploadManager {
     switch (f.state) {
       case "registered":
         r.parts = f.parts;
+        r.partsAt = Date.now();
         this.uploadQueue.push(clientId);
         break;
       case "duplicate":
@@ -749,14 +893,17 @@ export class UploadManager {
     try {
       const urls = new Map<number, string>();
       const done = new Set<number>();
+      let urlsAt = 0;
       const loadParts = async () => {
         const res = await apiFetch(`${base}/parts`, { schema: uploadPartsResponseSchema });
         urls.clear();
         for (const p of res.parts) urls.set(p.partNumber, p.url);
         for (const n of res.uploadedPartNumbers) done.add(n);
+        urlsAt = Date.now();
       };
       if (r.parts) {
         for (const p of r.parts) urls.set(p.partNumber, p.url);
+        urlsAt = r.partsAt;
         r.parts = undefined;
       } else {
         await loadParts();
@@ -767,15 +914,22 @@ export class UploadManager {
       for (let attempt = 0; ; attempt++) {
         for (const [partNumber] of [...urls].sort((a, b) => a[0] - b[0])) {
           if (done.has(partNumber)) continue;
+          // A multi-GB video on a slow uplink outlives the 1 h signature: refresh proactively.
+          if (Date.now() - urlsAt > PART_URLS_MAX_AGE_MS) await loadParts();
+          if (done.has(partNumber)) continue;
           const start = (partNumber - 1) * r.partSize;
           const end = partNumber * r.partSize;
           const ref = r.nativeRef;
           const up = this.uploader();
+          const single = urls.size === 1 && size <= r.partSize;
+          // Native: every part is one ranged background PUT straight from disk (NATIVE.md
+          // "Uploads"); a single-part file omits the range. Web: a Blob slice per part.
           const put =
-            ref && up.putFile && urls.size === 1 && size <= r.partSize
+            ref && up.putFile
               ? (url: string, o: PutPartOptions) =>
                   (up.putFile as NonNullable<Uploader["putFile"]>)(url, ref, {
                     ...o,
+                    ...(single ? {} : { offset: start, length: partBytes(partNumber) }),
                     ...(r.wifiOnly ? { wifiOnly: true } : {}),
                   })
               : async (url: string, o: PutPartOptions) => {
@@ -842,6 +996,8 @@ export class UploadManager {
         return;
       } catch (e) {
         if (isAbort(e)) throw e;
+        // A local refusal (no disk, range outside the file) never improves with a retry.
+        if (e instanceof PartUploadError && e.reason) throw e;
         lastError = e;
         if (e instanceof PartUploadError && e.status === 403) {
           // Presigned URL expired (after an hour): fetch fresh ones and continue.
@@ -986,6 +1142,15 @@ export class UploadManager {
     } else {
       this.kickPrep();
     }
+  }
+
+  /** Q6: the per-item "Use cellular" switch (native); only before the transfer has started. */
+  setWifiOnly(clientId: string, wifiOnly: boolean): void {
+    const it = this.item(clientId);
+    const r = this.rt.get(clientId);
+    if (!it || !r || TERMINAL.has(it.state) || it.state === "completed") return;
+    r.wifiOnly = wifiOnly;
+    this.patch(clientId, { wifiOnly });
   }
 
   retryFailed(babyId: string): void {

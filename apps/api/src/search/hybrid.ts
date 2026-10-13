@@ -1,5 +1,9 @@
 import type { ChatModel, Embedder } from "@tinyglow/ai";
-import { SEARCH_CANDIDATES, SEARCH_RERANK_CANDIDATES } from "@tinyglow/shared";
+import {
+  SEARCH_CANDIDATES,
+  SEARCH_RERANK_CANDIDATES,
+  type SearchMediaFilter,
+} from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { rerankWithChat } from "./rerank";
 import { reciprocalRankFusion } from "./rrf";
@@ -23,6 +27,16 @@ import { reciprocalRankFusion } from "./rrf";
 // Tag/people leg (`photo_search_term_candidates`): query words and adjacent word pairs against
 // `tags` (GIN) and lower(`people`), so
 // "Grandma" or "bath" still finds photos when vectors are missing (degraded mode).
+//
+// Media filter (step 12, docs/plans/step-12.md 2.7): `media: "photo" | "video"` adds
+// `p.media_kind = …` to the SQL filters of the count, filter-only and vector legs. The two
+// SECURITY DEFINER candidate functions have no media argument (migration 22 left them alone), so
+// their results are narrowed afterwards under RLS (`MEDIA_NARROW_SQL`); to keep recall, they are
+// asked for `MEDIA_OVERFETCH ×` candidates when a media filter is on, then cut back to
+// `SEARCH_CANDIDATES`. `any` (the default) changes nothing.
+
+/** Lexical-leg over-fetch factor when a media filter is on (the functions cannot filter it). */
+export const MEDIA_OVERFETCH = 4;
 
 export interface HybridInput {
   babyId: string;
@@ -40,9 +54,16 @@ export interface HybridInput {
   tags: readonly string[];
   /** Lower-cased coarse place label. */
   place: string | null;
+  /** Step 12: only photos or only videos; omitted / `any` = both. */
+  media?: SearchMediaFilter;
   limit: number;
   /** IANA zone the dates are local to (the caller's profile). */
   timezone: string;
+}
+
+/** The effective media filter (`any` and undefined are no filter). */
+export function mediaFilter(input: Pick<HybridInput, "media">): "photo" | "video" | null {
+  return input.media === "photo" || input.media === "video" ? input.media : null;
 }
 
 export interface HybridOptions {
@@ -157,10 +178,36 @@ export function filterSql(input: HybridInput): { where: string; values: unknown[
     parts.push(`s.tags && ${add(input.tags.map((t) => t.toLowerCase()))}::text[]`);
   }
   if (input.place !== null) parts.push(`s.place = lower(${add(input.place)})`);
+  const media = mediaFilter(input);
+  if (media !== null) parts.push(`p.media_kind = ${add(media)}::text`);
   return { where: parts.join(" AND "), values };
 }
 
 const FROM = "public.photo_search s JOIN public.photos p ON p.id = s.photo_id";
+
+/**
+ * Narrows candidate ids from the SECURITY DEFINER legs to one media kind, under the caller's
+ * claims (`photos` RLS). Exported for tests.
+ */
+export const MEDIA_NARROW_SQL =
+  "SELECT p.id AS photo_id FROM public.photos p WHERE p.id = ANY($1::uuid[]) AND p.media_kind = $2::text";
+
+/**
+ * Keeps only the candidate ids of `media` kind, in their original order and cut to `limit`.
+ * No-op (no query) without a media filter.
+ */
+export async function narrowToMedia(
+  client: Tx,
+  ids: readonly string[],
+  media: "photo" | "video" | null,
+  limit: number,
+): Promise<string[]> {
+  if (media === null) return ids.slice(0, limit);
+  if (ids.length === 0) return [];
+  const { rows } = await client.query<{ photo_id: string }>(MEDIA_NARROW_SQL, [ids, media]);
+  const keep = new Set(rows.map((r) => r.photo_id));
+  return ids.filter((id) => keep.has(id)).slice(0, limit);
+}
 
 /** Query embeddings per embedder instance, by text (LRU; no user or baby in the key). */
 const QUERY_VECTOR_CACHE_MAX = 500;
@@ -352,18 +399,33 @@ export async function hybridSearch(
 
   // 5. Full-text and tag/people legs: SECURITY DEFINER candidate functions (authorised by
   // `search_baby_ids()`), because under RLS Postgres never uses the non-leakproof `tsv @@ q` /
-  // `tags && x` operators as index conditions.
-  const textCall = candidateCall("text", { ...input, query }, SEARCH_CANDIDATES);
+  // `tags && x` operators as index conditions. With a media filter they over-fetch and are
+  // narrowed to the media kind afterwards (the functions take no media argument).
+  const media = mediaFilter(input);
+  const legLimit = media === null ? SEARCH_CANDIDATES : SEARCH_CANDIDATES * MEDIA_OVERFETCH;
+  const textCall = candidateCall("text", { ...input, query }, legLimit);
   const text = await client.query<{ photo_id: string }>(textCall.text, textCall.values);
   const tokens = queryTokens(query);
-  const termCall = candidateCall("term", { ...input, query }, SEARCH_CANDIDATES);
+  const termCall = candidateCall("term", { ...input, query }, legLimit);
   const tag =
     tokens.length > 0
       ? await client.query<{ photo_id: string }>(termCall.text, termCall.values)
       : { rows: [] };
+  const textIds = await narrowToMedia(
+    client,
+    text.rows.map((r) => r.photo_id),
+    media,
+    SEARCH_CANDIDATES,
+  );
+  const tagIds = await narrowToMedia(
+    client,
+    tag.rows.map((r) => r.photo_id),
+    media,
+    SEARCH_CANDIDATES,
+  );
 
   // Relevance floor: vector-only candidates below the minimum similarity are dropped.
-  const lexical = new Set([...text.rows, ...tag.rows].map((r) => r.photo_id));
+  const lexical = new Set([...textIds, ...tagIds]);
   const minSimilarity = opts.minSimilarity ?? defaultMinSimilarity(opts.embedder?.model);
   const vectorIds = vectorRows
     .filter((r) => lexical.has(r.photo_id) || 1 - Number(r.d) >= minSimilarity)
@@ -371,7 +433,7 @@ export async function hybridSearch(
   const belowFloor = vectorRows.length - vectorIds.length;
 
   // 6. RRF (ties by capture time).
-  const legIds = [vectorIds, text.rows.map((r) => r.photo_id), tag.rows.map((r) => r.photo_id)];
+  const legIds = [vectorIds, textIds, tagIds];
   const all = [...new Set(legIds.flat())];
   const takenAt = new Map<string, number>();
   if (all.length > 0) {
@@ -396,8 +458,9 @@ export async function hybridSearch(
       candidates,
       vector: vectorIds.length,
       belowFloor,
-      text: text.rows.length,
-      tag: tag.rows.length,
+      text: textIds.length,
+      tag: tagIds.length,
+      media,
       fused: fused.length,
     },
     "hybrid search",

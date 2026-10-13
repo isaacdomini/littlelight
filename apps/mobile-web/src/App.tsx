@@ -26,6 +26,7 @@ import { Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import { FreshSignInProvider } from "./auth/FreshSignInGate";
 import { RedirectIfSignedIn, RequireAuth, RequireOnboarded, RootRedirect } from "./auth/guards";
+import { PasskeyPrompt } from "./components/PasskeyPrompt";
 import { SuspendedGate } from "./components/SuspendedGate";
 import { ShareExpired } from "./components/share/ShareExpired";
 import { t } from "./i18n";
@@ -52,7 +53,9 @@ import { DevicesPage } from "./pages/settings/DevicesPage";
 import { ExportPage } from "./pages/settings/ExportPage";
 import { ImportPage } from "./pages/settings/ImportPage";
 import { NotificationsPage } from "./pages/settings/NotificationsPage";
+import { PasskeysPage } from "./pages/settings/PasskeysPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
+import { UploadsPage } from "./pages/settings/UploadsPage";
 import { SharedAlbumPage } from "./pages/share/SharedAlbumPage";
 import { TimelinePage } from "./pages/TimelinePage";
 import { UploadPage } from "./pages/UploadPage";
@@ -189,10 +192,19 @@ function ParentApp() {
                       path="/settings/account"
                       element={app("/settings/account", <AccountPage />, true)}
                     />
+                    <Route
+                      path="/settings/passkeys"
+                      element={app("/settings/passkeys", <PasskeysPage />, true)}
+                    />
+                    <Route
+                      path="/settings/uploads"
+                      element={app("/settings/uploads", <UploadsPage />, true)}
+                    />
                     <Route path="/" element={<RootRedirect />} />
                   </IonRouterOutlet>
                   <TabBar />
                 </IonTabs>
+                <PasskeyPrompt />
               </SuspendedGate>
             </FreshSignInProvider>
           </IonReactRouter>

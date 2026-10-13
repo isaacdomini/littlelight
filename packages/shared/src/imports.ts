@@ -1,4 +1,9 @@
-import { UPLOAD_MAX_FILE_BYTES, UPLOAD_MAX_FILES_PER_SESSION } from "./upload";
+import type { MediaKind } from "./db-enums";
+import {
+  UPLOAD_MAX_FILE_BYTES,
+  UPLOAD_MAX_FILES_PER_SESSION,
+  UPLOAD_MAX_VIDEO_BYTES,
+} from "./upload";
 
 // Photo import constants (docs/plans/step-10.md 2.3; PRD FR-2.1, FR-2.6 "Optional auto-backup ...
 // on Wi-Fi (user opt-in)", FR-2.7). Browser-safe: no Node imports. Two flows share them:
@@ -25,8 +30,19 @@ export const IMPORT_CONNECTS_PER_USER_PER_HOUR = 10;
 export const IMPORT_PICKER_POLL_MIN_SEC = 3;
 /** A batch still `picking` this long after creation expires (`picker_expires_at` cap, `import.sweep`). */
 export const IMPORT_PICKING_TTL_MIN = 30;
-/** Largest original the worker downloads (= `UPLOAD_MAX_FILE_BYTES`, the `import_items.bytes` CHECK). */
+/** Largest **photo** original the worker downloads (= `UPLOAD_MAX_FILE_BYTES`, 100 MiB). */
 export const IMPORT_MAX_FILE_BYTES: number = UPLOAD_MAX_FILE_BYTES;
+/**
+ * Largest **video** original the worker downloads (= `UPLOAD_MAX_VIDEO_BYTES`, the
+ * `import_items.bytes` CHECK since migration 22); the per-plan cap (`videoLimitsFor(plan).maxBytes`)
+ * is applied on top by the worker and by `import_book_photo()` (step 12, D of 2.2).
+ */
+export const IMPORT_MAX_VIDEO_BYTES: number = UPLOAD_MAX_VIDEO_BYTES;
+
+/** The download cap for one import item by media kind. */
+export function importMaxBytesFor(kind: MediaKind): number {
+  return kind === "video" ? IMPORT_MAX_VIDEO_BYTES : IMPORT_MAX_FILE_BYTES;
+}
 /** Default and most batches of `GET /babies/:id/imports?limit=` (`importBatchesListResponseSchema`). */
 export const IMPORT_BATCHES_LIST_DEFAULT = 10;
 export const IMPORT_BATCHES_LIST_MAX = 20;
@@ -79,3 +95,18 @@ export const GOOGLE_ENDPOINTS = {
 
 /** Default of `GOOGLE_IMPORT_MEDIA_HOSTS`: host suffix of every Picker `baseUrl` (`lh3.googleusercontent.com`, …). */
 export const GOOGLE_MEDIA_HOST_SUFFIX_DEFAULT = "googleusercontent.com";
+
+/**
+ * Picker `baseUrl` suffix that downloads the original bytes: `=d` for a photo, `=dv` for a video
+ * (Google strips location from both, D20). `mediaDownloadUrl` in google-photos.ts is the photo
+ * form; `googleMediaDownloadUrl` chooses by kind.
+ */
+export const GOOGLE_MEDIA_DOWNLOAD_SUFFIX = { photo: "=d", video: "=dv" } as const satisfies Record<
+  MediaKind,
+  string
+>;
+
+/** Download URL of a picked item's original bytes: `baseUrl + "=d"` (photo) or `baseUrl + "=dv"` (video). */
+export function googleMediaDownloadUrl(baseUrl: string, kind: MediaKind): string {
+  return `${baseUrl}${GOOGLE_MEDIA_DOWNLOAD_SUFFIX[kind]}`;
+}

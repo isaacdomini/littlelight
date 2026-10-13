@@ -872,3 +872,105 @@ Add a new entry per step, in order. Do not rewrite or delete earlier entries.
   (iOS light/dark/tinted, Android adaptive + themed + notification) and splash via
   `scripts/native-assets.ts`; Play icon and feature graphic (`scripts/store-feature.ts`). Only the
   Android themed icon and notification icon are single-colour (platform requirement).
+
+## Step 12: Video uploads
+
+- **User decisions (2026-10-11):** videos for every tier. Free: ≤ 60 s and ≤ 250 MB per clip,
+  1 video = 1 of the family's 1,000 items, and at most 100 videos per free family. Plus: ≤ 5 min
+  and ≤ 2 GB per clip, 4K originals kept, 200 GB per family as a soft fair-use figure shown only
+  in the operator report. Live Photos stay stills. Uploads above 50 MB wait for Wi-Fi on the phones
+  by default, with a per-upload switch and a persisted Settings preference. Planned on Fable at the
+  user's request; built on Fable too.
+- **Built:**
+  - Migration 22 (`1792500000100_video.sql`): videos are `photos` rows with `media_kind`,
+    `duration_ms`, `video_codec`, `has_audio`, `rendition_status`; `photos_media_shape` trigger;
+    the free video cap (`free_tier_video_limit()`, GUC `app.free_tier_video_limit`, lock class 1016,
+    `free_tier_pool_videos()`); derivative kinds `web` and `keyframe1..3`; viewer policy admits `web`
+    only for video rows; `import_book_photo` refuses free videos by size/duration; the GPS tripwire
+    also rejects `location`/`iso6709`; demo clip (photo 13). Down deletes video rows.
+  - Shared contracts: `video.ts` limits/rendition/keyframe helpers, `media` filters, upload
+    register `kind`/`durationMs`, 2 GiB cap, `video.transcode` job, `videoEnvSchema`,
+    `freeTier.videos/videoLimit`, Google Picker `videoMetadata` (no duration — refused by size first).
+  - API: register/complete per plan limits and the Q3 cap, `videoUrl` only when ready,
+    `?media=` filters, 409 `free_tier_limit` with `details.kind`; sharing signs 30-min `web` URLs
+    for video rows only, downloads hand the MP4 rendition, sensitive videos never rule-shared.
+  - Worker: `video/**` — ffprobe/ffmpeg runners that refuse URLs and pipes, poster + derivatives,
+    QuickTime location → `encrypt_coord` and stripped everywhere, remux fast path, libx264 ≤ 1080p
+    transcode with HDR tone-map (fallback logged), keyframes, scratch disk with a free-space guard,
+    TTL sweep and heartbeat alert, reconcile for stuck renditions, export (original + CSV columns),
+    Google import of videos, generated demo clip.
+  - AI (paid only): poster + 3 keyframes in one request (≈ $0.00023 per video), video context in
+    the prompt, search `media` filter, chat cites "a 42-second video"; `CHAT_PROMPT_SHA` re-pinned.
+  - App: picker, duration read client-side, per-plan errors, duration badges, filter chips,
+    `<video>` viewer with pending/failed states, share viewer playback + download, usage lines.
+  - Native: ranged background parts (iOS temp part files, Android streamed ranges), HEVC originals
+    from the picker, album sync exports videos and skips over-limit ones, store/privacy copy.
+  - Devops: worker image with ffmpeg 8.1 (libx264 + libzimg, +109 MB), `/scratch`
+    (`WORKER_SCRATCH_PATH`, required bind in prod), `mem_limit 3g`, `VIDEO_*` env, guide Part K.
+  - CI: video hygiene, ffmpeg on the runner, video gate with log scans, new suites required.
+- **Decisions:** lock class 1016 (1015 was taken by the family-start guard); share URL requests keep `kind` singular; a pending video answers 404 on download;
+  `VIDEO_SCRATCH_MIN_FREE_BYTES` is a constant (6 GiB).
+- **Fixed during tests:** exactly 2 GiB registered as 500 (int4 cast on `declared_bytes`).
+- **Verified (2026-10-13):** lint clean; typecheck clean (6 packages + e2e); unit 4,206; integration
+  1,706 (throwaway Postgres + MinIO, GoTrue migrations); video gate 54/54; e2e video + passkeys 6/6;
+  smoke passed; earlier full pass: e2e 47, abuse 46, import 43, export 44, share 50, upload, push 23.
+  Live checks: an HEVC MOV with a QuickTime location tag on Plus and free families (location
+  encrypted and absent elsewhere, H.264 faststart rendition without tags, 206 range playback, AI
+  sent 4 frames per video, free family 0 model calls); iOS simulator uploaded a 55 MiB clip in 4
+  background parts after Home was pressed, rendition ready in ~10 s; in-app playback verified on
+  iOS and in Chrome.
+- **Fixed after review (three passes):** deferrable vs final transcode errors (only "worker couldn't
+  run" conditions defer; ffmpeg/ffprobe failures on a clip are final); self-healing scratch (TTL +
+  low-space sweep, transcode frees its own files, mtime bumped at start); duration on rounded whole
+  seconds everywhere; staged original reused only at the right size; `stderrTail` non-enumerable;
+  `status` added to all three cap triggers; cap refusals at ingest finish map to the right error;
+  heartbeat `videosPendingStuck`; iOS native video pick (no longer read into the WebView) and the
+  viewer reloading on every re-signed URL.
+- **Open:** keyframe timeout after the rendition is published marks the clip failed; viewer restarts
+  from 0 if the signed URL expires mid-play; the free 60 s limit is duplicated in SQL; a VideoSlide
+  latch test and the reconcile counter bound test are missing; GoTrue ignores
+  `GOTRUE_RATE_LIMIT_PASSKEY=1000` in dev (~30/5 min).
+- **Known gaps:** text search with the video filter over-fetches 4× and narrows (a `p_media` arg on
+  the candidate functions would remove it); `bytes` is not in the photo detail DTO; the bake-off
+  script is photo-only.
+- **Commit**: step 12: video uploads
+
+## Step 13: Passkey sign-in
+
+- **User decisions (2026-10-11):** passkeys are an addition; email OTP stays primary and is the
+  recovery path. Enrol prompt once after the first OTP sign-in (30-day snooze), 5 per account,
+  removal needs a fresh sign-in, passkey sign-in counts as fresh, review account excluded, email on
+  add/remove. Web first; native verification waits for the Apple Team ID and Android signing
+  fingerprints (part B).
+- **Design:** GoTrue-native (`supabase/auth:v2.197.0` ships first-factor passkeys in beta); every
+  fact the plan relied on was verified against the tag and the running container before building
+  (plan 0.1). The API fronts GoTrue like it fronts OTP and never stores or verifies credentials.
+  No app migration: `auth.webauthn_*` tables cascade on user delete (hand-checked).
+- **Built:** `/auth/passkey/options|verify`, `/me/passkeys` list/add/rename/remove; the API
+  enforces the user-verification flag itself before any GoTrue call (GoTrue only "prefers" it);
+  throttles 60 options/h, 60 verify attempts/h, 10 failures/15 min, Turnstile after 3 failures;
+  one generic `passkey_failed`; audit + emails without links; log redaction; feature flag
+  `AUTH_PASSKEYS_ENABLED` (prod default off, dev on); GoTrue env in both compose files with a dev
+  healthcheck that catches the silent RP misconfiguration; web sign-in button + conditional UI,
+  enrol sheet, Settings → Passkeys, fresh-sign-in gate offers a passkey; `TinyglowPasskeys` native
+  plugin (iOS ASAuthorization, Android Credential Manager), entitlements and association-file keys
+  with placeholders; devices list shows the sign-in method (every sign-in now records `method` +
+  `session_id`); CI passkey hygiene, gate and GoTrue migrations on the integration DB.
+- **Fixed during tests:** a failed passkey inside the fresh-sign-in gate signed the user out;
+  `signInMethod` was never set.
+- **Part B (user):** Apple Team ID (AASA `webcredentials`, Xcode), Android cert SHA-256s
+  (assetlinks + `android:apk-key-hash` origins), deploy `.well-known`, enable the flag once the
+  domain is final (changing the RP id invalidates every passkey), device run, then the listing line.
+- **Verified (2026-10-13):** passkey gate 20/20; e2e passkeys 4/4; feature-off check (all 7 routes
+  404, config false) and restore; API logs over a full run hold no credential fields; native
+  plugins build on iOS and Android with codec harnesses (38 + 8 checks).
+- **Fixed after review:** GoTrue 429 maps to 429 with `Retry-After`; only genuine refusals count
+  toward the per-IP failure throttle and Turnstile; the conditional (autofill) request stays silent.
+- **Commit**: step 13: passkey sign-in
+
+## Store screenshots refreshed (2026-10-11)
+
+- All three sets retaken with the new logo: Play 7 (+ captioned), App Store 6.9" 8 (+ captioned),
+  6.3" 8 (`store/screenshots-ios-6.3-iphone17/`, upload by hand if asked). Real AI description and
+  chat answer; the demo video tile is visible. Real-model cost for the recapture ≈ $0.05 (over the
+  stated budget because of retries; the chat wait now keys on the reply bubble).

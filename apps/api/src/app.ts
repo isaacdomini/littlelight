@@ -141,6 +141,20 @@ export function loggerOptions(config: Pick<ApiConfig, "LOG_LEVEL" | "NODE_ENV">)
         "*.accessToken",
         "*.pickerUri",
         "*.baseUrl",
+        // Step 13 (docs/plans/step-13.md 2.4): WebAuthn ceremonies. The credential JSON and the
+        // single-use challenge id are secrets for the duration of the ceremony; the inner fields
+        // are listed too in case a handler ever logs a credential object on its own.
+        "req.body.credential",
+        "req.body.challengeId",
+        "*.credential",
+        "*.challengeId",
+        "*.challenge_id",
+        "*.clientDataJSON",
+        "*.attestationObject",
+        "*.authenticatorData",
+        "*.signature",
+        "*.rawId",
+        "*.userHandle",
       ],
       censor: "[redacted]",
     },

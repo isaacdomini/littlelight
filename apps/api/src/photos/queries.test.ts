@@ -114,6 +114,10 @@ describe("signDerivative", () => {
 const row = (over: Partial<PhotoSummaryRow> = {}): PhotoSummaryRow => ({
   id: PHOTO,
   baby_id: BABY,
+  // step 12: every summary row names its media kind (photos: no duration, no rendition)
+  media_kind: "photo",
+  duration_ms: null,
+  rendition_status: "none",
   status: "ready",
   approval: "approved",
   taken_at: new Date("2026-06-14T10:00:00Z"),

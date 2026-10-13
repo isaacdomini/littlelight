@@ -25,6 +25,15 @@ const BATCH = "11111111-1111-4111-8111-111111111111";
 const BABY = "22222222-2222-4222-8222-222222222222";
 const ids = { batchId: BATCH, babyId: BABY };
 
+const VIDEO = {
+  ffmpegPath: "ffmpeg",
+  ffprobePath: "ffprobe",
+  scratchPath: "/tmp/ll-scratch-test",
+  threads: 1,
+  timeoutSec: 60,
+  concurrency: 1,
+};
+
 describe("import queue definitions", () => {
   it("import.google: exclusive, 2 retries 60 s apart, 2 hours to run", () => {
     expect(QUEUES[JOBS.importGoogle]).toEqual({
@@ -50,8 +59,8 @@ describe("import queue definitions", () => {
     expect(IMPORT_SWEEP_SEND_OPTIONS).toEqual({ retryLimit: 0, expireInSeconds: 3000 });
   });
 
-  it("there are 16 queues, 4 fixed schedules and 8 with the config-driven ones", () => {
-    expect(Object.keys(QUEUES)).toHaveLength(16);
+  it("there are 17 queues, 4 fixed schedules and 8 with the config-driven ones", () => {
+    expect(Object.keys(QUEUES)).toHaveLength(17);
     expect(SCHEDULES).toHaveLength(4);
     const all = schedules({
       AI_FLUSH_INTERVAL_CRON: "*/5 * * * *",
@@ -119,6 +128,7 @@ describe("startWorkers: import handlers", () => {
             } as never,
           }
         : {}),
+      video: VIDEO,
       log,
       ingestConcurrency: 1,
     }).then(() => ({ registered, boss, log, pool }));
@@ -126,7 +136,7 @@ describe("startWorkers: import handlers", () => {
 
   it("registers import.google (one batch at a time, with metadata) when its deps are given, and import.sweep always", async () => {
     const { registered } = await boot(true);
-    expect(registered.size).toBe(16);
+    expect(registered.size).toBe(17);
     expect(registered.get(JOBS.importGoogle)?.options).toMatchObject({
       batchSize: 1,
       localConcurrency: 1,
@@ -137,7 +147,7 @@ describe("startWorkers: import handlers", () => {
 
   it("without import deps, import.google gets no handler (jobs wait) but the sweep still runs", async () => {
     const { registered } = await boot(false);
-    expect(registered.size).toBe(15);
+    expect(registered.size).toBe(16);
     expect(registered.has(JOBS.importGoogle)).toBe(false);
     expect(registered.has(JOBS.importSweep)).toBe(true);
   });

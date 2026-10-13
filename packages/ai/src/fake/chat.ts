@@ -12,11 +12,14 @@
  *      and family words: Grandma, Grandpa, Mom, Dad, Nanny, Aunt <Name>…), milestones from the 11
  *      preset names (singular/plural tolerant) and "first <word>" phrases, temporal phrases
  *      (`resolveTemporal`, relative to the prompt's `Today:` and `Birth date:` lines), `#tag`
- *      tokens as tags, and the remaining content words as `query` (null when none). A
- *      comparison ("at 1, 6 and 12 months") makes one `search_photos` call per age (parallel).
+ *      tokens as tags, "video(s)" / "clip(s)" words as `media: "video"` (step 12; omitted
+ *      otherwise, which validates as "any"), and the remaining content words as `query` (null
+ *      when none). A comparison ("at 1, 6 and 12 months") makes one `search_photos` call per age
+ *      (parallel).
  * 2. After the tool results, it composes the answer deterministically, citing only ids that a
  *    tool returned (with `formatCitation`): search ⇒ "Here are N photos that match." + every
- *    returned photo id in rank order; measurements ⇒ one sentence per row with its measurement
+ *    returned photo id in rank order (a video result is cited as "A 42-second video" with its
+ *    id, chat prompt rule 9); measurements ⇒ one sentence per row with its measurement
  *    id (and its linked photo id, if any); milestones ⇒ one line each with its first photo id; get_photo ⇒ the caption + id; no
  *    data ⇒ `CHAT_MESSAGES.nothingFound`. The text streams in three deltas (`delayMs` apart).
  * With `jsonSchema` (re-rank), it answers `{"<first array property>": [every uuid in the last
@@ -35,6 +38,7 @@ import { randomUUID } from "node:crypto";
 import {
   CHAT_MESSAGES,
   type ChatToolName,
+  describeDuration,
   formatCitation,
   type MeasurementKind,
   MILESTONE_PRESETS,
@@ -287,6 +291,13 @@ export function planFakeToolCalls(
     tags.push(t.toLowerCase());
     return " ";
   });
+  // Step 12: "videos of …", "that clip" ⇒ media "video" (the word leaves the query). Photos are
+  // the default and "photo(s)" is a filler word, so `media` is sent only when it narrows.
+  let media: "video" | null = null;
+  rest = rest.replace(VIDEO_WORDS_RE, () => {
+    media = "video";
+    return " ";
+  });
   const words = rest
     .replace(/[^\p{L}\p{N}'\s-]/gu, " ")
     .split(/\s+/)
@@ -312,9 +323,12 @@ export function planFakeToolCalls(
       people: common.people,
       tags: common.tags,
       limit: script === "bad_args" && i === 0 ? 999 : null,
+      ...(media ? { media } : {}),
     },
   }));
 }
+
+const VIDEO_WORDS_RE = /\b(?:videos?|clips?|movies?|footage|recordings?)\b/gi;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -348,14 +362,28 @@ export function composeFakeAnswer(
     if (!isObj(data) || "error" in data) continue;
     if (r.name === "search_photos") {
       const rows = Array.isArray(data.results) ? data.results.filter(isObj) : [];
-      const photoIds = rows
-        .map((x) => x.photo_id)
-        .filter((x): x is string => typeof x === "string");
-      if (photoIds.length === 0) continue;
-      const n = photoIds.length;
-      parts.push(
-        `Here ${n === 1 ? "is 1 photo that matches" : `are ${n} photos that match`}.${photoIds.map((id) => c("photo", id)).join("")}`,
-      );
+      const items = rows
+        .filter((x): x is Obj & { photo_id: string } => typeof x.photo_id === "string")
+        .map((x) => ({ id: x.photo_id, video: videoLabel(x) }));
+      if (items.length === 0) continue;
+      const n = items.length;
+      const videos = items.filter((x) => x.video !== null);
+      if (videos.length === 0) {
+        parts.push(
+          `Here ${n === 1 ? "is 1 photo that matches" : `are ${n} photos that match`}.${items.map((x) => c("photo", x.id)).join("")}`,
+        );
+      } else {
+        // Step 12: a video is cited as a video with its length (chat prompt rule 9).
+        const photos = n - videos.length;
+        const summary =
+          photos === 0
+            ? `Here ${n === 1 ? "is 1 video that matches" : `are ${n} videos that match`}`
+            : `Here are ${n} items that match: ${photos} ${photos === 1 ? "photo" : "photos"} and ${videos.length} ${videos.length === 1 ? "video" : "videos"}`;
+        const lines = items.map((x) =>
+          x.video === null ? c("photo", x.id) : ` ${x.video}${c("photo", x.id)}`,
+        );
+        parts.push(`${summary}.${lines.join("")}`);
+      }
     } else if (r.name === "get_measurements") {
       const rows = Array.isArray(data.measurements) ? data.measurements.filter(isObj) : [];
       for (const m of rows) {
@@ -381,16 +409,31 @@ export function composeFakeAnswer(
       if (lines.length) parts.push(lines.join("\n"));
     } else if (r.name === "get_photo") {
       if (typeof data.photo_id !== "string") continue;
+      const video = videoLabel(data);
       const caption =
         typeof data.caption === "string"
           ? data.caption
           : typeof data.description === "string"
             ? data.description
-            : "Here is that photo.";
-      parts.push(`${caption}${c("photo", data.photo_id)}`);
+            : video
+              ? "Here is that video."
+              : "Here is that photo.";
+      const aside = video ? ` (${video.charAt(0).toLowerCase()}${video.slice(1)})` : "";
+      parts.push(`${caption}${aside}${c("photo", data.photo_id)}`);
     }
   }
   return parts.length ? parts.join("\n") : CHAT_MESSAGES.nothingFound;
+}
+
+/**
+ * "A 42-second video" / "A 1 minute 5 seconds video" for a tool result item with
+ * `media_kind: "video"` (step 12); null for a photo or an item without the field.
+ */
+function videoLabel(item: Obj): string | null {
+  if (item.media_kind !== "video") return null;
+  const s = item.duration_seconds;
+  if (typeof s !== "number" || !Number.isFinite(s) || s <= 0) return "A video";
+  return s < 60 ? `A ${Math.round(s)}-second video` : `A ${describeDuration(s * 1000)} video`;
 }
 
 const sleep = (ms: number) =>

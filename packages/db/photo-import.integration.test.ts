@@ -1141,7 +1141,7 @@ describe.skipIf(!databaseUrl)("photo import (migration 20)", () => {
       });
     });
 
-    it("constraints: size cap 100 MiB, 32-byte hash, photo_id must equal id, unique per batch", async () => {
+    it("constraints: size cap 2 GiB (migration 22; the 100 MiB photo cap is api/worker-side), 32-byte hash, photo_id must equal id, unique per batch", async () => {
       await sandbox(async () => {
         const b = await addBatch({ status: "running" });
         await pipeline();
@@ -1150,7 +1150,8 @@ describe.skipIf(!databaseUrl)("photo import (migration 20)", () => {
             `INSERT INTO import_items (batch_id, baby_id, provider_item_id, ${cols}) VALUES ($1, $2, $3, ${vals})`,
             [b, BABY.A, randomUUID()],
           );
-        expect((await ins("bytes", "104857601"))?.code).toBe("23514");
+        expect(await ins("bytes", "104857601")).toBeNull();
+        expect((await ins("bytes", "2147483649"))?.code).toBe("23514");
         expect((await ins("bytes", "0"))?.code).toBe("23514");
         expect((await ins("sha256", "'\\x00'::bytea"))?.code).toBe("23514");
         expect((await ins("photo_id", `'${P.approved1}'`))?.code).toBeDefined();

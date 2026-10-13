@@ -15,6 +15,7 @@ import {
   searchEnvSchema,
   sentryEnvSchema,
   shareEnvSchema,
+  videoEnvSchema,
 } from "@tinyglow/shared";
 import { z } from "zod";
 
@@ -45,7 +46,10 @@ import { z } from "zod";
 // (`GOOGLE_IMPORT_MEDIA_HOSTS`) and `IMPORT_CONCURRENCY` (downloads in flight per batch). The
 // client secret is a secret: never logged. The brand pass adds an optional `PUBLIC_URL` (the
 // browser origin, same rules as the api's) for the logo in the export notices
-// (`${PUBLIC_URL}/email/logo.png`); unset ⇒ the notices go out without the logo.
+// (`${PUBLIC_URL}/email/logo.png`); unset ⇒ the notices go out without the logo. Step 12
+// (docs/plans/step-12.md 2.3, 2.6) adds `videoEnvSchema` as-is: `VIDEO_CONCURRENCY`,
+// `WORKER_SCRATCH_PATH` (the disk-backed staging folder, Q8), `FFMPEG_PATH` / `FFPROBE_PATH`,
+// `VIDEO_FFMPEG_THREADS` and `VIDEO_TRANSCODE_TIMEOUT_SEC`. Nothing in it is a secret.
 
 export const heartbeatEnvSchema = z.object({
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -73,6 +77,7 @@ export type WorkerConfig = z.output<typeof heartbeatEnvSchema> &
   z.output<typeof pushEnvSchema> &
   z.output<typeof exportEnvSchema> &
   z.output<typeof googleImportEnvSchema> &
+  z.output<typeof videoEnvSchema> &
   z.output<typeof sentryEnvSchema> &
   z.output<typeof workerPublicUrlEnvSchema> &
   Partial<MailEnv> &
@@ -169,6 +174,7 @@ export function loadConfig(env: RawEnv = process.env): WorkerConfig {
     pushEnvSchema,
     exportEnvSchema,
     googleImportEnvSchema,
+    videoEnvSchema,
     sentryEnvSchema,
     workerPublicUrlEnvSchema,
     ...(mailRequired(env) ? [mailEnvSchema] : []),

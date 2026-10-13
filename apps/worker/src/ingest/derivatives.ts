@@ -2,6 +2,7 @@ import {
   DERIVATIVE_JPEG_QUALITY,
   DERIVATIVE_LONG_EDGE,
   type DerivativeKind,
+  type ImageDerivativeKind,
 } from "@tinyglow/shared";
 import { type DecodedSource, DecodeError } from "./decode";
 
@@ -9,7 +10,9 @@ import { type DecodedSource, DecodeError } from "./decode";
 // for the model"). Every output is a progressive mozjpeg JPEG, q75, sRGB, with NO metadata of any
 // kind: sharp drops EXIF/XMP/IPTC/ICC unless a metadata-keeping call is chained, and none ever is
 // in this worker (a unit test and a CI grep enforce that). Transparent inputs are flattened onto
-// white (JPEG has no alpha).
+// white (JPEG has no alpha). Step 12: a video's poster frame goes through the same three sizes,
+// and its keyframes are rendered at the `analysis` size and relabelled `keyframe1..3`
+// (`VIDEO_KEYFRAME_LONG_EDGE` = `DERIVATIVE_LONG_EDGE.analysis`); the `web` rendition is ffmpeg's.
 
 export interface RenderedDerivative {
   kind: DerivativeKind;
@@ -19,10 +22,10 @@ export interface RenderedDerivative {
   bytes: number;
 }
 
-/** Render one derivative: long edge `DERIVATIVE_LONG_EDGE[kind]`, never enlarged. */
+/** Render one image derivative: long edge `DERIVATIVE_LONG_EDGE[kind]`, never enlarged. */
 export async function renderDerivative(
   source: DecodedSource,
-  kind: DerivativeKind,
+  kind: ImageDerivativeKind,
 ): Promise<RenderedDerivative> {
   const edge = DERIVATIVE_LONG_EDGE[kind];
   try {

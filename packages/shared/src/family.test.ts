@@ -190,16 +190,37 @@ describe("error codes", () => {
 });
 
 describe("DTOs", () => {
-  it("freeTierSchema: familyAlbums >= 1, limit literal 1000, used may exceed it", () => {
-    expect(freeTierSchema.safeParse({ used: 1012, limit: 1000, familyAlbums: 2 }).success).toBe(
-      true,
-    );
-    expect(freeTierSchema.safeParse({ used: 0, limit: 1000, familyAlbums: 0 }).success).toBe(false);
-    expect(freeTierSchema.safeParse({ used: 0, limit: 500, familyAlbums: 1 }).success).toBe(false);
-    expect(freeTierSchema.safeParse({ used: 0, limit: 1000, albums: 1 }).success).toBe(false);
-    expect(freeTierSchema.safeParse({ used: -1, limit: 1000, familyAlbums: 1 }).success).toBe(
+  it("freeTierSchema: familyAlbums >= 1, limit literal 1000, used may exceed it; videos/videoLimit (step 12)", () => {
+    // step 12 (Q3): `videos` (inside `used`) and the effective `videoLimit` are required.
+    const v = { videos: 3, videoLimit: 100 };
+    expect(
+      freeTierSchema.safeParse({ used: 1012, limit: 1000, familyAlbums: 2, ...v }).success,
+    ).toBe(true);
+    expect(freeTierSchema.safeParse({ used: 0, limit: 1000, familyAlbums: 0, ...v }).success).toBe(
       false,
     );
+    expect(freeTierSchema.safeParse({ used: 0, limit: 500, familyAlbums: 1, ...v }).success).toBe(
+      false,
+    );
+    expect(freeTierSchema.safeParse({ used: 0, limit: 1000, albums: 1, ...v }).success).toBe(false);
+    expect(freeTierSchema.safeParse({ used: -1, limit: 1000, familyAlbums: 1, ...v }).success).toBe(
+      false,
+    );
+    // the video pair is required and bounded
+    expect(freeTierSchema.safeParse({ used: 0, limit: 1000, familyAlbums: 1 }).success).toBe(false);
+    expect(
+      freeTierSchema.safeParse({
+        used: 0,
+        limit: 1000,
+        familyAlbums: 1,
+        videos: -1,
+        videoLimit: 100,
+      }).success,
+    ).toBe(false);
+    expect(
+      freeTierSchema.safeParse({ used: 0, limit: 1000, familyAlbums: 1, videos: 0, videoLimit: 0 })
+        .success,
+    ).toBe(false);
   });
 
   it("pendingLimitDetailsSchema", () => {

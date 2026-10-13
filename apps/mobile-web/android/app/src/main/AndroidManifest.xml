@@ -73,13 +73,14 @@
         </provider>
     </application>
 
-    <!-- Permissions: the minimum the app needs. Photos come from the system Photo Picker, which
-         needs no media permission. -->
+    <!-- Permissions: the minimum the app needs. Photos and videos come from the system Photo Picker,
+         which needs no media permission (READ_MEDIA_VIDEO stays removed below). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Background photo uploads run as expedited WorkManager work promoted to a dataSync foreground
-         service (visible "Uploading N photos" notification) so they finish after the app is
-         backgrounded. Nothing else uses a foreground service. -->
+    <!-- Background photo and video uploads (one WorkManager request per 16 MiB part, streamed from the
+         file: no copies) run as expedited work promoted to a dataSync foreground service (visible
+         "Uploading photos and videos" notification) so they finish after the app is backgrounded.
+         Nothing else uses a foreground service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 

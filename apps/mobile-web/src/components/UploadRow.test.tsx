@@ -17,6 +17,8 @@ const failed = (error: UploadItem["error"], retryable = false): UploadItem => ({
   babyId: "11111111-1111-4111-8111-111111111111",
   name: "IMG_1.jpg",
   size: 2048,
+  kind: "photo",
+  wifiOnly: false,
   state: "failed",
   progress: 0,
   error,

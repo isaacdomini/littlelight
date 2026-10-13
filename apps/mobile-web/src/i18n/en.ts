@@ -51,6 +51,18 @@ export const en = {
   "freeTier.usage.one": "Your family's free photos: {used} of {limit} ({n} album)",
   "freeTier.usage.other": "Your family's free photos: {used} of {limit} (across {n} albums)",
   "freeTier.usageGuest": "This family's free photos: {used} of {limit}",
+  "freeTier.usageVideos.one":
+    "Your family's free photos and videos: {used} of {limit} ({videos} of {videoLimit} videos, {n} album)",
+  "freeTier.usageVideos.other":
+    "Your family's free photos and videos: {used} of {limit} ({videos} of {videoLimit} videos, across {n} albums)",
+  "freeTier.usageGuestVideos":
+    "This family's free photos and videos: {used} of {limit} ({videos} of {videoLimit} videos)",
+  "freeTier.videosFull":
+    "Your family's free albums already hold {videoLimit} videos. Upgrade to Plus or delete videos to add more.",
+  "freeTier.videosFull.native":
+    "This family's free albums already hold {videoLimit} videos. Delete videos to add more.",
+  "freeTier.videosFullMember":
+    "This family's free albums already hold {videoLimit} videos. Ask a parent to make room.",
   "freeTier.near": "Almost full: {left} free photos left.",
   "freeTier.nearHint": "Delete photos you don't need to make room.",
   "freeTier.nearUpgrade": " Upgrade to Plus for more room.",
@@ -206,6 +218,17 @@ export const en = {
   "devices.signOut": "Sign out",
   "devices.signOutAll": "Sign out everywhere",
   "devices.lastActive": "Last active {date}",
+  "devices.method.otp": "Email code",
+  "devices.method.apple": "Apple",
+  "devices.method.google": "Google",
+  "devices.method.passkey": "Passkey",
+  "devices.method.review": "Review account",
+  "settings.uploads": "Uploads",
+  "uploads.settings.title": "Uploads",
+  "uploads.settings.intro": "How videos over 50 MB leave your phone.",
+  "uploads.settings.cellular": "Use cellular for large videos",
+  "uploads.settings.cellularHint":
+    "Off: large videos wait for Wi-Fi unless you switch one on by hand. On: every new large video may use cellular data.",
   "account.title": "Account",
   "account.delete": "Delete account",
   "account.deleteIntro": "Deleting your account is permanent.",
@@ -231,12 +254,60 @@ export const en = {
   "gate.title": "Confirm it's you",
   "gate.body": "This action needs a recent sign-in. We'll email a code to {email}.",
   "gate.cancel": "Cancel",
+  "gate.passkey": "Use a passkey instead",
+
+  // Passkeys (docs/plans/step-13.md 2.5). The email code stays primary and is always offered.
+  "passkey.signIn": "Sign in with a passkey",
+  "passkey.signingIn": "Waiting for your passkey",
+  "passkey.cancelled": "Passkey sign-in was cancelled. You can try again or use your email code.",
+  "passkey.unavailable": "Passkeys aren't available on this device. Use your email code instead.",
+  "passkey.prompt.title": "Sign in faster next time",
+  "passkey.prompt.body":
+    "Add a passkey to sign in with your face, fingerprint or device PIN instead of waiting for an email code. Your email code keeps working too.",
+  "passkey.prompt.add": "Add passkey",
+  "passkey.prompt.later": "Not now",
+  "passkey.prompt.added": "Passkey added. Manage it under Settings → Passkeys.",
+  "passkey.settings.row": "Passkeys",
+  "passkey.settings.title": "Passkeys",
+  "passkey.settings.intro":
+    "A passkey signs you in with your face, fingerprint or device PIN. Your email code always works as well.",
+  "passkey.settings.empty": "You haven't added a passkey yet.",
+  "passkey.settings.add": "Add a passkey",
+  "passkey.settings.nameLabel": "Name",
+  "passkey.settings.nameHint":
+    'Something that reminds you which device this is, like "Sam\'s iPhone".',
+  "passkey.settings.nameDefault": "Passkey",
+  "passkey.settings.create": "Continue",
+  "passkey.settings.created": "Created {date}",
+  "passkey.settings.lastUsed": "Last used {date}",
+  "passkey.settings.neverUsed": "Not used yet",
+  "passkey.settings.rename": "Rename",
+  "passkey.settings.renameTitle": "Rename passkey",
+  "passkey.settings.remove": "Remove",
+  "passkey.settings.removeTitle": "Remove this passkey?",
+  "passkey.settings.removeBody":
+    "You won't be able to sign in with it any more. Your email code keeps working.",
+  "passkey.settings.removeConfirm": "Remove passkey",
+  "passkey.settings.limit":
+    "You have the most passkeys allowed ({max}). Remove one before adding another.",
+  "passkey.settings.limitReached": "{count} of {max} passkeys",
+  "passkey.settings.exists": "This device already has a passkey for your account.",
+  "passkey.settings.unavailableForAccount": "Passkeys can't be added to this account.",
+  "passkey.settings.failed": "That didn't work. Please try again.",
+  "passkey.settings.cancelled": "Cancelled. Nothing was changed.",
+  "passkey.settings.notConfigured": "Passkeys aren't set up for this app yet.",
 
   "upload.title": "Upload",
-  "upload.choose": "Choose photos",
-  "upload.dropHint": "Drag photos here, or choose them from your device.",
-  "upload.dropActive": "Drop photos to upload",
+  "upload.choose": "Choose photos or videos",
+  "upload.dropHint": "Drag photos or videos here, or choose them from your device.",
+  "upload.dropActive": "Drop photos or videos to upload",
   "upload.limitHint": "Up to 500 photos at a time. JPEG, PNG, HEIC and WebP, up to 100 MB each.",
+  "upload.videoHint.free": "Videos (MP4 or MOV) up to 1 minute and 250 MB each.",
+  "upload.videoHint.plus": "Videos (MP4 or MOV) up to 5 minutes and 2 GB each.",
+  "upload.kind.video": "Video",
+  "upload.kind.videoDuration": "Video · {duration}",
+  "upload.wifiOnly": "Videos over 50 MB upload on Wi-Fi.",
+  "upload.useCellular": "Use cellular for this one",
   "upload.reviewNote": "Photos you add are reviewed by an admin before they appear in the album.",
   "upload.guestNote":
     "Photos you add wait for a parent's approval and count toward the family's free photos once approved.",
@@ -285,6 +356,23 @@ export const en = {
   "upload.err.unsupported_media_type": "Unsupported file type",
   "upload.err.file_too_large": "Too large (100 MB max)",
   "upload.err.decode_failed": "This photo couldn't be read",
+  "upload.err.video.file_too_large.free":
+    "This video is {size}; free albums take videos up to 250 MB. Upgrade to Plus for videos up to 2 GB.",
+  "upload.err.video.file_too_large.free.native":
+    "This video is {size}; free albums take videos up to 250 MB.",
+  "upload.err.video.file_too_large.plus": "Videos can be up to 5 minutes and 2 GB.",
+  "upload.err.video.too_long.free":
+    "Free albums hold clips up to 1 minute long. Trim the video, or upgrade to Plus for clips up to 5 minutes.",
+  "upload.err.video.too_long.free.native":
+    "Free albums hold clips up to 1 minute long. Trim the video to add it.",
+  "upload.err.video.too_long.plus": "Videos can be up to 5 minutes and 2 GB.",
+  "upload.err.video.free_tier_limit":
+    "Your family's free albums already hold 100 videos. Upgrade to Plus or delete videos to add more.",
+  "upload.err.video.free_tier_limit.native":
+    "This family's free albums already hold 100 videos. Delete videos or ask a parent to make room.",
+  "upload.err.transcode_failed":
+    "This video couldn't be prepared for playback. Parents can still download the original.",
+  "upload.err.video.decode_failed": "This video couldn't be read",
   "upload.err.free_tier_limit":
     "Your family's free albums are full: free albums hold 1,000 photos per family. Upgrade to Plus or delete photos to add more.",
   "upload.err.free_tier_limit.native":
@@ -295,9 +383,19 @@ export const en = {
   "upload.err.upload_incomplete": "Upload was interrupted. Try again.",
   "upload.err.network": "Connection problem. Try again.",
   "upload.err.unknown": "Something went wrong. Try again.",
+  "upload.err.no_space":
+    "Not enough free space on this phone to upload this file. Free up some space, then add it again.",
+  "upload.err.bad_range":
+    "This file changed or was removed before it finished uploading. Add it again.",
   "upload.noBaby": "Create a baby to upload photos.",
 
   "timeline.title": "Timeline",
+  "timeline.mediaFilter": "Show",
+  "timeline.media.all": "All",
+  "timeline.media.photo": "Photos",
+  "timeline.media.video": "Videos",
+  "timeline.videoBadge": "Video, {duration}",
+  "timeline.videoBadgeNoDuration": "Video",
   "timeline.empty": "No photos yet. Add some from the Upload tab.",
   "timeline.loadMore": "Load more",
   "timeline.segmentAll": "All photos",
@@ -319,6 +417,8 @@ export const en = {
 
   "timeline.photoCount.one": "{n} photo",
   "timeline.photoCount.other": "{n} photos",
+  "timeline.videoCount.one": "{n} video",
+  "timeline.videoCount.other": "{n} videos",
   "timeline.groupCount.one": "{n} photo",
   "timeline.groupCount.other": "{n} photos",
   "timeline.scrubber": "Jump to age",
@@ -403,6 +503,9 @@ export const en = {
   "search.chip.person": "Person",
   "search.chip.place": "Place",
   "search.chip.tag": "Tag",
+  "search.chip.media": "Type",
+  "search.media.photo": "Photos",
+  "search.media.video": "Videos",
   "search.chip.value": "{kind}: {value}",
   "search.chip.remove": "Remove {kind} filter",
   "search.from": "From",
@@ -439,6 +542,18 @@ export const en = {
   "viewer.share": "Add to shared album",
   "viewer.loadError": "Couldn't load this photo.",
   "viewer.zoomHint": "Double-tap to zoom",
+  "viewer.video.pending": "Preparing video…",
+  "viewer.video.failed": "This video couldn't be prepared for playback.",
+  "viewer.video.failedAdmin":
+    "This video couldn't be prepared for playback. You can still download the original.",
+  "viewer.video.label": "Video of {name}",
+  "viewer.video.unsupported": "This browser can't play this video.",
+  "details.duration": "Length",
+  "details.original": "Original",
+  "details.originalVideo": "{dims}, {codec}",
+  "details.codec.h264": "H.264",
+  "details.codec.hevc": "HEVC",
+  "details.noAudio": "no sound",
 
   "ai.sectionTitle": "AI description",
   "ai.pending": "Queued for analysis",
@@ -768,6 +883,9 @@ export const en = {
   "shareViewer.position": "Photo {n} of {total}",
   "shareViewer.download": "Download",
   "shareViewer.downloadError": "Couldn't download this photo.",
+  "shareViewer.videoAlt": "Video of {name} at {age}",
+  "shareViewer.videoAltNoAge": "Video of {name}",
+  "shareViewer.videoLoadError": "Couldn't load this video.",
   "shareViewer.install": "Add this album to your home screen",
   "shareViewer.installAction": "Add",
   "shareViewer.installHow": "How",

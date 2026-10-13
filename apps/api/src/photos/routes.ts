@@ -33,8 +33,10 @@ import {
   batchDetailsSql,
   countPending,
   countPoolPhotos,
+  countPoolVideos,
   decodeCursor,
   detailsUpsertSql,
+  freeTierVideoLimit,
   groupCounts,
   listPhotoRows,
   PHOTO_SUMMARY_EXTRA_COLUMNS,
@@ -47,6 +49,7 @@ import {
   photoWithRole,
   signDerivative,
   signPhotoUrls,
+  signVideoRendition,
   toPhotoGroups,
   toPhotoSummary,
   visibleToCaller,
@@ -61,6 +64,10 @@ import {
 // API adds on top of RLS: non-admins never see trashed photos (D12) and restore is admin-only.
 // Signed URLs are thumb/display only (`signDerivative`), TTL <= 1 h; originals only through
 // `GET /photos/:id/original` for admins. Nothing here logs URLs, notes or EXIF values.
+// Step 12 (docs/plans/step-12.md 2.4): a video row's thumb/display are its poster; `videoUrl`
+// signs the `web` rendition (`signVideoRendition`) only once `rendition_status = 'ready'`; the
+// `media` filter narrows the list and the summary; the Q3 video cap maps to 409 `free_tier_limit`
+// with `details.kind = 'video'`.
 //
 // Step 5 (docs/plans/step-5.md 2.4, 2.4a, 2.5; PRD FR-3, FR-8): bidirectional keyset paging and
 // the milestone filter, the age-group summary with jump cursors, batch URL refresh, and
@@ -88,15 +95,22 @@ async function explainNoRow(
   throw new ApiError(409, "conflict", conflictMessage);
 }
 
-/** `photos_free_tier_cap` refused the write (the family's free pool is full). */
-function isFreeTierCap(err: unknown): boolean {
-  return isPgError(err) && err.code === "23514" && err.message.startsWith("free tier photo limit");
+/**
+ * `photos_free_tier_cap` (the family's free pool is full) or, step 12 Q3,
+ * `photos_free_tier_video_cap` (its videos are at the cap) refused the write: the matching 409,
+ * else null.
+ */
+function freeTierCapError(err: unknown): ApiError | null {
+  if (!isPgError(err) || err.code !== "23514") return null;
+  if (err.message.startsWith("free tier photo limit")) return freeTierLimit();
+  if (err.message.startsWith("free tier video limit")) return freeTierLimit("video");
+  return null;
 }
 
 const RETURNING_SUMMARY = `
   RETURNING p.id, p.baby_id, p.status, p.approval, p.taken_at, p.taken_at_estimated, p.age_days,
             p.width, p.height, p.mime, p.is_sensitive, p.duplicate_of_photo_id, p.uploaded_by,
-            p.created_at, p.deleted_at,
+            p.created_at, p.deleted_at, p.media_kind, p.duration_ms, p.rendition_status,
             EXISTS (SELECT 1 FROM public.photo_derivatives t
                      WHERE t.photo_id = p.id AND t.kind = 'thumb') AS has_thumb,
             ${PHOTO_SUMMARY_EXTRA_COLUMNS}`;
@@ -131,15 +145,24 @@ export async function loadPhoto(client: Tx, uid: string, id: string): Promise<Lo
 /** `photoSchema` body: sign thumb + display after the transaction. */
 export async function toPhotoResponse(signer: UrlSigner, loaded: LoadedPhoto): Promise<Photo> {
   const { photo } = loaded;
-  const [summary, display] = await Promise.all([
+  const [summary, display, video] = await Promise.all([
     toPhotoSummary(signer, photo),
     photo.has_display ? signDerivative(signer, photo.baby_id, photo.id, "display") : null,
+    // Step 12: the `web` rendition only once `rendition_status = 'ready'` (`has_web`).
+    photo.has_web ? signVideoRendition(signer, photo.baby_id, photo.id) : null,
   ]);
   return {
     ...summary,
-    // Both URLs were signed just now with the same TTL; report the earlier expiry.
-    urlExpiresAt: summary.urlExpiresAt ?? display?.expiresAt.toISOString() ?? null,
+    // All URLs were signed just now with the same TTL; report the earliest expiry.
+    urlExpiresAt:
+      summary.urlExpiresAt ??
+      display?.expiresAt.toISOString() ??
+      video?.expiresAt.toISOString() ??
+      null,
     displayUrl: display?.url ?? null,
+    videoUrl: video?.url ?? null,
+    videoCodec: photo.media_kind === "video" ? photo.video_codec : null,
+    hasAudio: photo.media_kind === "video" ? photo.has_audio : null,
     exif: loaded.exif,
     details: loaded.details,
     measurements: loaded.measurements,
@@ -179,7 +202,7 @@ export function photosRoutes(app: FastifyInstance): void {
     preHandler: requireAuth,
     handler: async (request) => {
       const { id: babyId } = request.params;
-      const { view, limit, dir, milestoneId } = request.query;
+      const { view, limit, dir, milestoneId, media } = request.query;
       const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null;
       const page = await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
@@ -193,6 +216,7 @@ export function photosRoutes(app: FastifyInstance): void {
           limit,
           dir,
           milestoneId: milestoneId ?? null,
+          media: media ?? null,
         });
         const pendingCount = await countPending(client, babyId);
         return { ...list, pendingCount };
@@ -216,13 +240,13 @@ export function photosRoutes(app: FastifyInstance): void {
     preHandler: requireAuth,
     handler: async (request) => {
       const { id: babyId } = request.params;
-      const { view } = request.query;
+      const { view, media } = request.query;
       const rows = await withClaims(request, async (client, ctx) => {
         await requireConsent(client, ctx);
         const access = await babyAccess(client, ctx.uid, babyId);
         if (!access) throw babyNotFound();
         if (view === "trash" && access.role !== "admin") throw adminOnly();
-        return groupCounts(client, babyId, view);
+        return groupCounts(client, babyId, view, media ?? null);
       });
       return toPhotoGroups(rows);
     },
@@ -418,7 +442,8 @@ export function photosRoutes(app: FastifyInstance): void {
             [id, ctx.uid],
           ));
         } catch (err) {
-          if (isFreeTierCap(err)) throw freeTierLimit();
+          const cap = freeTierCapError(err);
+          if (cap) throw cap;
           throw err;
         }
         const updated = rows[0];
@@ -535,6 +560,15 @@ export function photosRoutes(app: FastifyInstance): void {
         ) {
           throw freeTierLimit();
         }
+        // Step 12 (Q3): a restored video also returns to the family's video count.
+        if (
+          access?.plan === "free" &&
+          photo.approval === "approved" &&
+          photo.media_kind === "video" &&
+          (await countPoolVideos(client, photo.baby_id)) >= (await freeTierVideoLimit(client))
+        ) {
+          throw freeTierLimit("video");
+        }
         let restored: PhotoSummaryRow | undefined;
         try {
           // A rejected upload comes back to the approval queue rather than into the album.
@@ -552,7 +586,8 @@ export function photosRoutes(app: FastifyInstance): void {
           if (isPgError(err) && err.code === "23505") {
             throw new ApiError(409, "conflict", "The same photo is already in the album");
           }
-          if (isFreeTierCap(err)) throw freeTierLimit();
+          const cap = freeTierCapError(err);
+          if (cap) throw cap;
           // A rejected photo returns to the queue, but its uploader's pending queue in this
           // family is full (`photos_pending_cap`). The admin is not the uploader, so the
           // generic "you have …" wording would be wrong here.

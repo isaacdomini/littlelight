@@ -5,7 +5,9 @@ interfaces exported here and never import a provider SDK directly (PRD "Build ha
 Code" -> "Conventions"). This keeps the vision, chat and embedding models a config choice, not a
 code change.
 
-Status: **step 7.** Vision adapters are real: OpenAI Batch API (`gpt-6-luna`, primary),
+Status: **step 12** (videos: a video item sends poster + keyframes as up to four images of one
+request; the chat prompt v1 gained rule 9 and was re-pinned; `search_photos` takes `media`).
+Steps 6–7: vision adapters are real: OpenAI Batch API (`gpt-6-luna`, primary),
 Anthropic Message Batches (`claude-haiku-5-5`, fallback) and a deterministic `fake` provider,
 plus the pinned price table, prompt v1 and output validation (step 6). Step 7 adds the OpenAI
 chat adapter (Responses API, streamed function calling), the deterministic fake chat model, the
@@ -24,10 +26,10 @@ adapter (docs/plans/step-7.md D10): `VISION_PROVIDER=anthropic` makes `createCha
 | `createOpenAiChatModel`, `createFakeChatModel`, `planFakeToolCalls`, `composeFakeAnswer`, `resolveTemporal`, `ResponsesStreamParser`, `sseFrames`, `openAiChatBody` | Direct construction and parsing (tests, golden set) |
 | `CHAT_SYSTEM_PROMPT_V1(ctx)`, `CHAT_SYSTEM_RULES_V1`, `CHAT_PROMPT_V1_SHA256`, `readChatPromptDates` | Chat prompt v1 (`src/prompts/chat-v1.ts`); static rules first (cached prefix), per-turn context last; the sha is pinned by a test |
 | `createOpenAiVisionDescriber`, `createAnthropicVisionDescriber`, `createFakeVisionDescriber`, `createOpenAiEmbedder`, `createFakeEmbedder` | Direct construction (tests, bake-off) |
-| `assembleVisionRequest`, `checkVisionRequest`, `checkVisionBatch`, `sanitizeVisionContext`, `openAiResponsesBody`, `anthropicMessageParams`, `estimateVisionRequestBytes` | Request assembly and runtime guards (`src/request.ts`) |
+| `assembleVisionRequest`, `checkVisionRequest`, `checkVisionBatch`, `sanitizeVisionContext`, `visionImages`, `openAiResponsesBody`, `anthropicMessageParams`, `estimateVisionRequestBytes` | Request assembly and runtime guards (`src/request.ts`). Step 12: a video item is `image` (poster) + `frames` (keyframes, ≤ 3) + `context.media`; every frame is checked like the analysis copy |
 | `validateDescription(raw)`, `mergeOverrides(desc, overrides)` | Output validation against `aiDescriptionV1Schema` (issues are paths + codes, never values) |
 | `PRICES`, `PRICE_TABLE_VERSION`, `costUsd(model, tier, usage)`, `assertPriced` | Pinned price table (`src/pricing.ts`) |
-| `DESCRIBE_SYSTEM_PROMPT_V1`, `DESCRIBE_PROMPT_V1_SHA256`, `buildUserText(context)` | Prompt v1 (`src/prompts/describe-v1.ts`); the sha is pinned by a test |
+| `DESCRIBE_SYSTEM_PROMPT_V1`, `DESCRIBE_PROMPT_V1_SHA256`, `buildUserText(context)`, `videoFramesSentence(media)` | Prompt v1 (`src/prompts/describe-v1.ts`); the sha is pinned by a test. A video's per-item text opens with "These N frames are sampled from one D-second video clip; describe the clip." (the cached system prompt is unchanged) |
 | `isTerminalBatchState`, `sumUsage`, `readImageInfo`, `assertAnalysisImage`, `fakeDescription` | Helpers |
 | `aiEnvSchema`, `parseAiEnv`, `isAiConfigured`, `getAiStatus` | Env (`src/env.ts`); status strings name env vars only |
 | `AiNotConfiguredError`, `AiNotImplementedError`, `AiConfigError`, `AiRequestError`, `AiProviderError` | Errors: field names, codes and HTTP statuses only, never bodies |
@@ -47,7 +49,7 @@ for both providers) and `src/bakeoff/run.ts`.
 | `ANTHROPIC_API_KEY` | unset | Required only when `VISION_PROVIDER=anthropic` (and for the bake-off) |
 | `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` | real APIs | Mock servers only; whatever is set here receives photos |
 | `AI_MAX_OUTPUT_TOKENS`, `AI_IMAGE_DETAIL`, `AI_BATCH_MAX_BYTES` | 1200, `auto`, 150 MB | From `aiPipelineEnvSchema` (`@tinyglow/shared`) |
-| `FAKE_VISION_DIR` | unset | Fake only: `<batchId>.jsonl` (request lines minus image bytes and text: ids, plan, image size, context field lengths) and `<batchId>.state.json` (ids, poll count) so a batch survives across processes |
+| `FAKE_VISION_DIR` | unset | Fake only: `<batchId>.jsonl` (request lines minus image bytes and text: ids, plan, `image_count` + `images[]` sizes (1 for a photo, up to 4 for a video), `media` {kind, duration_seconds, frame_count}, context field lengths) and `<batchId>.state.json` (ids, image counts, poll count) so a batch survives across processes |
 | `FAKE_VISION_POLLS` | `1` | Fake only: polls answered `in_progress` before `completed` |
 
 Empty strings count as unset. Reasoning efforts are `none | low | medium | high`; on Anthropic
@@ -71,6 +73,14 @@ Empty strings count as unset. Reasoning efforts are `none | low | medium | high`
 - **Retries**: GET/DELETE and real-time calls retry network errors, 408/409/429/5xx (≤ 3, jittered
   backoff, `retry-after` honoured). File upload and batch create retry 429 only, so a retry can
   never leave a duplicate copy of photos at the provider.
+- **Videos (step 12, docs/plans/step-12.md 2.7)**: one item per video; its request carries the
+  poster (`analysis`) and the `keyframe1..3` derivatives as up to four `input_image` / `image`
+  parts before the text, each held to the 768 px / 400 KB analysis rule (one oversized frame
+  refuses the whole item: `image_too_many_bytes` / `image_too_large`; more than
+  `AI_VIDEO_MAX_FRAMES` images: `too_many_images`; frames without `context.media`, or a
+  `frameCount` that disagrees with the images attached: `invalid_context [media]`). The
+  description schema and prompt v1 are unchanged; `estimateVisionRequestBytes` counts every
+  frame. Never the original clip, never the `web` rendition.
 
 ## Chat (docs/plans/step-7.md 2.2, 2.5)
 
@@ -108,8 +118,11 @@ Empty strings count as unset. Reasoning efforts are `none | low | medium | high`
 
 `PRICE_TABLE_VERSION = "2026-10-08"`. Batch tier for `gpt-6-luna`: $0.05 in / $0.005 cached /
 $0.0625 cache write / $0.25 out per 1M tokens; 1,400 in (700 cached) / 400 out = $0.0001385 per
-photo. `claude-haiku-5-5` batch cached-read and cache-write prices are assumptions (plan R6).
-Unknown models are a config error, never $0.
+photo. A video (4 frames, ~600 image tokens each): ~2,500 uncached in + 700 cached + 400 out =
+$0.0002285, ≈ **$0.00023 per video** (≈ 2.3× a photo; the fake reports exactly this, and the
+worker budget reserves `AI_VIDEO_COST_FACTOR = 2.3` photos per video). `claude-haiku-5-5` batch
+cached-read and cache-write prices are assumptions (plan R6). Unknown models are a config error,
+never $0.
 
 ## Bake-off
 
@@ -145,7 +158,9 @@ safety") and `CLAUDE.md`. Reviewers should reject any adapter that breaks one.
 
 1. **Analysis copy only.** The only image sent to a model is the 768 px long-edge analysis
    derivative (EXIF stripped, JPEG q75 or WebP q70, ~60-120 KB). Never the original, never the
-   display or thumbnail derivative. Adapters reject any image with a long edge over 768 px.
+   display or thumbnail derivative. Adapters reject any image with a long edge over 768 px. A
+   video's frames (poster + `keyframe1..3`, metadata-free 768 px JPEGs) are each held to the same
+   rule; never the original clip, never the `web` rendition.
 2. **Never GPS.** Requests carry no coordinates. Place context is a coarse human-readable label.
 3. **Batch API for describe.** `describeBatch` / `pollBatch` are the default path (about 50%
    cheaper). `describeOne` (real-time) is only for the FR-5.5 priority path. Chat is the only other

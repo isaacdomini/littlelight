@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   aiBackfillJobSchema,
   aiFlushJobSchema,
@@ -16,6 +17,7 @@ import {
   searchReconcileJobSchema,
   shareApplyJobSchema,
   shareReconcileJobSchema,
+  videoTranscodeJobSchema,
 } from "@tinyglow/shared";
 import { PgBoss } from "pg-boss";
 import { createAiPipeline, createSearchIndexer } from "./ai";
@@ -25,7 +27,7 @@ import { ConfigError, loadConfig, mailConfigOf } from "./config";
 import { createExportMailer, type ExportMailer } from "./email/mailer";
 import { runDataExport } from "./export";
 import { createWorkerGoogleClient, runImportGoogle, sweepImports } from "./import";
-import { ingestPhoto } from "./ingest";
+import { type IngestDeps, ingestPhoto } from "./ingest";
 import { createCsamMatcher } from "./ingest/safety";
 import { createLogger } from "./logger";
 import { purgeTrash } from "./purge";
@@ -44,12 +46,14 @@ import {
   sendReindex,
   sendSearchBackfill,
   sendShareApply,
+  sendVideoTranscode,
 } from "./queues";
 import { reconcileIngest } from "./reconcile";
 import { handleReindexJobs } from "./reindex";
 import { createAutoSharer } from "./sharing/autoshare";
 import { createStorage } from "./storage";
 import { sweepUploads } from "./uploads-sweep";
+import { type TranscodeDeps, transcodeVideo } from "./video/transcode";
 
 // Run one job handler in-process, now (docs/plans/step-4.md 2.13 gate: "triggers purge.trash").
 //
@@ -70,7 +74,9 @@ import { sweepUploads } from "./uploads-sweep";
 //   pnpm --filter @tinyglow/worker run-job data.export '{"exportId":"…","babyId":"…"}'
 //   pnpm --filter @tinyglow/worker run-job import.google '{"batchId":"…","babyId":"…"}'
 //   pnpm --filter @tinyglow/worker run-job import.sweep
+//   pnpm --filter @tinyglow/worker run-job video.transcode '{"photoId":"…","babyId":"…"}'
 //   pnpm --filter @tinyglow/worker run-job --enqueue purge.trash      # via the queue instead
+//   pnpm --filter @tinyglow/worker run-job --enqueue video.transcode '{"photoId":"…","babyId":"…"}'
 //   pnpm --filter @tinyglow/worker run-job --enqueue ai.backfill '{"reason":"manual"}'
 //   pnpm --filter @tinyglow/worker run-job --enqueue search.backfill '{"babyId":"…","reason":"manual"}'
 //   pnpm --filter @tinyglow/worker run-job --enqueue share.apply '{"shareLinkId":"…","reason":"manual"}'
@@ -101,6 +107,10 @@ import { sweepUploads } from "./uploads-sweep";
 // `ai.backfill` with `reason: "upgrade"` enqueues the `search.backfill` follow-up like the worker. Run them inside the worker container
 // (`docker compose exec -T worker pnpm --silent --filter @tinyglow/worker run-job ai.poll`) to
 // share its env, e.g. the fake provider's `FAKE_VISION_DIR` state across processes.
+//
+// `video.transcode` (step 12) runs in-process with this process's ffmpeg/ffprobe and scratch
+// folder as a last attempt (a failure marks `rendition_status = 'failed'`); `photo.ingest` of a
+// video also uses them and sends the follow-up `video.transcode` through the queue.
 //
 // In the production image: `node apps/worker/dist/run-job.js <job> [json]`. Uses the worker's
 // own env (same roles and keys as the running worker). Prints the handler's result (counts and
@@ -228,6 +238,9 @@ async function main(argv: string[]): Promise<number> {
             }),
           };
           break;
+        case JOBS.videoTranscode:
+          result = { jobId: await sendVideoTranscode(b, videoTranscodeJobSchema.parse(payload)) };
+          break;
         default:
           result = { jobId: await b.send(name, {}) };
       }
@@ -237,20 +250,57 @@ async function main(argv: string[]): Promise<number> {
           result = await purgeTrash({ pool, storage, log });
           break;
         case JOBS.uploadsSweep:
-          result = await sweepUploads({ pool, storage, log });
+          result = await sweepUploads({
+            pool,
+            storage,
+            log,
+            scratchPath: config.WORKER_SCRATCH_PATH,
+            scratchActiveSec: config.VIDEO_TRANSCODE_TIMEOUT_SEC,
+          });
           break;
         case JOBS.ingestReconcile: {
           const b = await getBoss();
-          result = await reconcileIngest({ pool, log, send: (job) => sendIngest(b, job) });
+          result = await reconcileIngest({
+            pool,
+            log,
+            send: (job) => sendIngest(b, job),
+            sendTranscode: (job) => sendVideoTranscode(b, job),
+          });
           break;
         }
         case JOBS.ingest: {
           const job = ingestJobSchema.parse(payload);
           const matcher = createCsamMatcher(config, log);
-          result = await ingestPhoto(
-            { pool, storage, matcher, dataKey: config.DATA_ENCRYPTION_KEY, log },
-            job,
-          );
+          const deps: IngestDeps = {
+            pool,
+            storage,
+            matcher,
+            dataKey: config.DATA_ENCRYPTION_KEY,
+            log,
+            video: {
+              ffmpegPath: config.FFMPEG_PATH,
+              ffprobePath: config.FFPROBE_PATH,
+              scratchPath: config.WORKER_SCRATCH_PATH,
+              threads: config.VIDEO_FFMPEG_THREADS,
+              sendVideoTranscode: async (j) => sendVideoTranscode(await getBoss(), j),
+            },
+          };
+          result = await ingestPhoto(deps, job);
+          break;
+        }
+        case JOBS.videoTranscode: {
+          const job = videoTranscodeJobSchema.parse(payload);
+          const deps: TranscodeDeps = {
+            pool,
+            storage,
+            log,
+            ffmpegPath: config.FFMPEG_PATH,
+            ffprobePath: config.FFPROBE_PATH,
+            scratchPath: config.WORKER_SCRATCH_PATH,
+            threads: config.VIDEO_FFMPEG_THREADS,
+            timeoutSec: config.VIDEO_TRANSCODE_TIMEOUT_SEC,
+          };
+          result = await transcodeVideo(deps, job);
           break;
         }
         case JOBS.reindex:
@@ -343,6 +393,7 @@ async function main(argv: string[]): Promise<number> {
               download: {
                 allowList: googleImportMediaAllowList(config),
                 maxBytes: IMPORT_MAX_FILE_BYTES,
+                videoTmpDir: path.join(config.WORKER_SCRATCH_PATH, "import"),
               },
               concurrency: config.IMPORT_CONCURRENCY,
               sendIngest: async (j) => sendIngest(await getBoss(), j),

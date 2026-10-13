@@ -39,15 +39,17 @@ SELECT cancel_requested_at IS NOT NULL AS cancel, status FROM import_batches WHE
  * rows (and outcomes) of its earlier attempt.
  */
 export const INSERT_ITEMS_SQL = `
-INSERT INTO import_items (batch_id, baby_id, provider_item_id, mime_hint, width, height, taken_at_hint, status, error)
-SELECT $1, $2, t.pid, t.mime, t.w, t.h, t.ts, t.status, t.err
-FROM unnest($3::text[], $4::text[], $5::int[], $6::int[], $7::timestamptz[], $8::text[], $9::text[])
-  AS t(pid, mime, w, h, ts, status, err)
+INSERT INTO import_items (batch_id, baby_id, provider_item_id, mime_hint, width, height, taken_at_hint, status, error,
+                          media_kind, duration_ms_hint)
+SELECT $1, $2, t.pid, t.mime, t.w, t.h, t.ts, t.status, t.err, t.kind, t.dur
+FROM unnest($3::text[], $4::text[], $5::int[], $6::int[], $7::timestamptz[], $8::text[], $9::text[],
+            $10::text[], $11::int[])
+  AS t(pid, mime, w, h, ts, status, err, kind, dur)
 ON CONFLICT (batch_id, provider_item_id) DO NOTHING`;
 
 /** Every item of the batch (`provider_item_id` stays in memory only). */
 export const LIST_ITEMS_SQL = `
-SELECT id, provider_item_id, status, storage_key FROM import_items WHERE batch_id = $1`;
+SELECT id, provider_item_id, status, storage_key, media_kind FROM import_items WHERE batch_id = $1`;
 
 export const SET_TOTAL_SQL = `UPDATE import_batches SET items_total = $2 WHERE id = $1`;
 
@@ -74,12 +76,18 @@ RETURNING b.items_imported, b.items_duplicate, b.items_failed, b.items_skipped`;
 export const DUPLICATE_PRECHECK_SQL = `
 SELECT 1 FROM photos WHERE baby_id = $1 AND sha256 = $2 AND deleted_at IS NULL LIMIT 1`;
 
-/** Bytes, hash and sniffed mime, before the PUT (the sweep cleans `downloaded` orphans). */
+/**
+ * Bytes, hash, sniffed mime and kind (the sniff is the truth, step 12), before the PUT (the sweep
+ * cleans `downloaded` orphans).
+ */
 export const MARK_DOWNLOADED_SQL = `
-UPDATE import_items SET status = 'downloaded', bytes = $2, sha256 = $3, mime_hint = $4, error = NULL
+UPDATE import_items SET status = 'downloaded', bytes = $2, sha256 = $3, mime_hint = $4, media_kind = $5, error = NULL
 WHERE id = $1 AND status IN ('pending', 'downloaded')`;
 
-/** `booked | duplicate | free_tier_limit | pending_limit | not_member | baby_trashed` (D10; step 11). */
+/**
+ * `booked | duplicate | free_tier_limit | pending_limit | not_member | baby_trashed` (D10; step 11)
+ * `| video_too_long | file_too_large` (step 12: a free album's per-clip limits).
+ */
 export const BOOK_PHOTO_SQL = `SELECT public.import_book_photo($1::uuid) AS outcome`;
 
 /** Terminal outcome of one open item. */

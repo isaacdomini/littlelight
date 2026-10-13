@@ -240,6 +240,35 @@ jobs:
       - name: Abuse hygiene (family_starts privacy, disposable list, no PII in guard logs, report)
         run: bash .github/scripts/abuse-hygiene.sh
 
+      # docs/plans/step-13.md 2.7 / 4 (task 13.8), static (.github/scripts/passkey-hygiene.mjs):
+      # (a) apps/api/src/auth/passkeys.ts and webauthn.ts log only { outcome | status | code |
+      # error_code | context | err: safeErrorLog(…) } plus fixed messages, no console.*; (b) no
+      # logger call in apps/api/src names a WebAuthn credential field (clientDataJSON,
+      # attestationObject, authenticatorData, signature, rawId, userHandle), a challenge /
+      # challengeId, a credential or the request body / headers; (c) app.ts redacts
+      # req.body.credential, req.body.challengeId and the wildcard paths of every credential
+      # field and the challenge id; (d) AUTH_PASSKEYS_ENABLED defaults false in docker-compose.yml
+      # and true in docker-compose.dev.yml, feeding GoTrue and the api alike; (e) the nginx
+      # allow-list still forwards only GET /auth/health|authorize|callback and POST /auth/callback
+      # (every /auth/passkeys/* path is 404 for browsers). No Docker, no install needed; every
+      # path it reads must exist, so a rename fails the step. Same script runs locally.
+      - name: Passkey hygiene (outcome-only logs, redact list, flag defaults, nginx allow-list)
+        run: bash .github/scripts/passkey-hygiene.sh
+
+      # docs/plans/step-12.md 2.10 "video-hygiene" (task 12.11), static
+      # (.github/scripts/video-hygiene.mjs): (a) no "http" in apps/worker/src/video (non-test
+      # files); (b) ffmpeg.ts is the only spawn site under video/ and demo/, exports
+      # assertLocalArgs and calls it before spawn() in runProcess(), everything else uses
+      # runProcess(); (c) no logger call in apps/worker/src/video carries a path, scratch,
+      # stderr, tag, coordinate / location, URL, make/model or text value (ids, outcomes, counts,
+      # durations, booleans only; err is errorCategory(…)); (d) migration 22's jsonb_has_gps_keys
+      # matches location / ISO6709; (e) docker-compose.yml worker has mem_limit 3g and the
+      # required WORKER_SCRATCH_PATH bind at /scratch with create_host_path: false; (f)
+      # .env.example sets WORKER_SCRATCH_PATH. No Docker, no install needed; every path it reads
+      # must exist, so a rename fails the step. Same script runs locally.
+      - name: Video hygiene (no URLs to ffmpeg, outcome-only logs, GPS tripwire, scratch mount)
+        run: bash .github/scripts/video-hygiene.sh
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -260,6 +289,26 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
+
+      # Step 12 (docs/plans/step-12.md 2.10, task 12.11): apps/worker/src/video/video.integration.test.ts
+      # runs the worker's real ingest + transcode against this machine's ffmpeg/ffprobe and
+      # SKIPS without them (and its HEVC cases without libx265, its HDR colour assertions without
+      # libzimg), which check-integration-report.mjs would then fail as "no test executed". Ubuntu
+      # 24.04's ffmpeg package is built with libx264, libx265 and libzimg; the flags are asserted
+      # so a runner-image change cannot turn the suite into a silent skip. The worker image itself
+      # (Alpine ffmpeg 8.1, libx264 + libzimg) is what the dev-stack job runs the video gate on.
+      - name: Install ffmpeg on the runner (libx264 + libx265 + libzimg, worker video suite)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+          conf="$(ffmpeg -hide_banner -buildconf)"
+          for flag in --enable-libx264 --enable-libx265 --enable-libzimg; do
+            grep -qF -- "$flag" <<<"$conf" || { echo "::error::runner ffmpeg lacks $flag"; exit 1; }
+          done
+          echo "ffmpeg has libx264, libx265 and libzimg"
 
       # Standalone MinIO for the worker-integration project (docs/plans/step-4.md 2.11). Not a
       # service container: those cannot set a command, and MinIO needs `server /data`. Same
@@ -283,6 +332,43 @@ jobs:
           docker logs ci-minio
           echo "::error::MinIO did not become live on http://localhost:9000"
           exit 1
+
+      # Step 13 (docs/plans/step-13.md 2.2, 2.8; task 13.8): packages/db/webauthn.integration.test.ts
+      # and apps/api/src/auth/passkeys.integration.test.ts assert GoTrue's own tables
+      # (auth.webauthn_credentials / auth.webauthn_challenges: cascade from auth.users, no app-role
+      # grant) and the real auth.sessions.created_at. Give the integration database GoTrue's real
+      # schema first, in the order Compose uses (db-init -> `auth migrate` -> app migrations): the
+      # bootstrap creates the roles and the auth schema, GoTrue's own migrations create its
+      # tables, and the test harness (packages/db/test/harness.ts) then applies the app
+      # migrations itself. Its auth-schema stub (packages/db/src/test-support.ts) and the
+      # webauthn stub (packages/db/test/webauthn.ts) are no-ops once the real tables exist, so
+      # the suites run against the real schema here and against the stubs on a bare database.
+      # Same bootstrap values and image pin as "Generated DB types are current" below.
+      - name: GoTrue schema on the integration database (db:bootstrap + auth migrate)
+        env:
+          DB_SERVICE: ${{ job.services.db.id }}
+          DATABASE_URL: postgres://postgres:dev@localhost:5432/tinyglow
+          AUTH_DB_PASSWORD: dev
+          API_DB_PASSWORD: dev
+          WORKER_DB_PASSWORD: dev
+          # Same pin as both Compose files.
+          GOTRUE_IMAGE: supabase/auth:v2.197.0
+        run: |
+          set -euo pipefail
+          pnpm db:bootstrap
+          docker run --rm --network host \
+            -e GOTRUE_DB_DRIVER=postgres \
+            -e GOTRUE_DB_DATABASE_URL="postgres://supabase_auth_admin:${AUTH_DB_PASSWORD}@localhost:5432/tinyglow" \
+            -e GOTRUE_JWT_SECRET=dev-only-jwt-secret-at-least-32-characters \
+            -e GOTRUE_SITE_URL=http://localhost:8080 \
+            -e API_EXTERNAL_URL=http://localhost:8080/auth \
+            "$GOTRUE_IMAGE" auth migrate
+          # GoTrue's passkey tables must exist before the suites run (a silent no-op migrate
+          # would leave the stubs standing in for the real schema).
+          docker exec "$DB_SERVICE" psql -U postgres -d tinyglow -tAc \
+            "select count(*) from pg_tables where schemaname = 'auth' and tablename in ('webauthn_credentials', 'webauthn_challenges')" \
+            | grep -qx 2 || { echo "::error::auth.webauthn_credentials / auth.webauthn_challenges not created by auth migrate"; exit 1; }
+          echo "GoTrue schema present on the integration database"
 
       # db-integration + api-integration + worker-integration (vitest.config.ts). Every
       # integration suite is `describe.skipIf(...)` on DATABASE_URL (worker: and S3_ENDPOINT), and
@@ -359,8 +445,10 @@ jobs:
           # Project dirs, plus the step-6 AI, step-7 search/chat, step-8 sharing, step-9
           # push / review-account / demo-media, the review-fix (migrations 18-19, data
           # export api + worker), the step-10 photo-import (migration 20, import api, Google
-          # import worker) and the step-11 free-tier abuse (migration 21 families / pool / ledger,
-          # family start, family photo pool) suites by name so a rename cannot drop them silently.
+          # import worker), the step-11 free-tier abuse (migration 21 families / pool / ledger,
+          # family start, family photo pool), the step-13 passkey (GoTrue webauthn tables,
+          # passkey api) and the step-12 video (migration 22, video upload api, worker ingest +
+          # transcode with the runner's ffmpeg) suites by name so a rename cannot drop them silently.
           node .github/scripts/check-integration-report.mjs "$REPORT" \
             packages/db apps/api apps/worker \
             packages/db/ai-pipeline.integration.test.ts \
@@ -390,7 +478,12 @@ jobs:
             apps/worker/src/import/google/import.integration.test.ts \
             packages/db/free-tier-abuse.integration.test.ts \
             apps/api/src/routes/family-start.integration.test.ts \
-            apps/api/src/photos/family-pool.integration.test.ts
+            apps/api/src/photos/family-pool.integration.test.ts \
+            packages/db/webauthn.integration.test.ts \
+            apps/api/src/auth/passkeys.integration.test.ts \
+            packages/db/video.integration.test.ts \
+            apps/api/src/uploads/video.integration.test.ts \
+            apps/worker/src/video/video.integration.test.ts
 
       - name: MinIO logs
         if: failure()
@@ -435,7 +528,8 @@ jobs:
           # placeholders and throwaway directories (config -q only interpolates, it starts nothing).
           cp .env.example .env
           DB_DATA_PATH="$RUNNER_TEMP/postgres" STORAGE_PATH="$RUNNER_TEMP/storage" \
-            BACKUP_PATH="$RUNNER_TEMP/backups" docker compose -f docker-compose.yml config -q
+            BACKUP_PATH="$RUNNER_TEMP/backups" WORKER_SCRATCH_PATH="$RUNNER_TEMP/scratch" \
+            docker compose -f docker-compose.yml config -q
           rm -f .env
           # Server layout (deploy/README.md): servers/tinyglow/{docker-compose.yml,.env,app/}
           # started from the outer folder via `include`. Paths must resolve against app/ and the
@@ -472,7 +566,8 @@ jobs:
             while IFS= read -r kv; do export "${kv?}"; done \
               < <(node .github/scripts/check-compose-keys.mjs --print-env)
             DB_DATA_PATH="$RUNNER_TEMP/postgres" STORAGE_PATH="$RUNNER_TEMP/storage" \
-              BACKUP_PATH="$RUNNER_TEMP/backups" docker compose -f docker-compose.yml config --format json \
+              BACKUP_PATH="$RUNNER_TEMP/backups" WORKER_SCRATCH_PATH="$RUNNER_TEMP/scratch" \
+              docker compose -f docker-compose.yml config --format json \
               | node .github/scripts/check-compose-keys.mjs prod
           )
 
@@ -671,8 +766,13 @@ jobs:
 
       # Includes the step-11 e2e/family/guards.spec.ts (+twin and disposable addresses sign in,
       # creating an album is refused inline, the disposable account joins as a guest) at the
-      # dev default FAMILIES_PER_IP_PER_DAY=1000.
-      - name: e2e (Playwright, PRD step-3..8 + step-11 specs)
+      # dev default FAMILIES_PER_IP_PER_DAY=1000, and the step-13 e2e/auth/passkeys.spec.ts
+      # (enrol after an OTP sign-in, sign out, sign in with the passkey, rename, remove) through
+      # Chromium's CDP virtual authenticator (docs/plans/step-13.md 2.8): no real credential, no
+      # platform authenticator, and passkeys are on by default in the dev stack. Also the step-12
+      # e2e/video/upload.spec.ts (a synthetic clip from e2e/fixtures/video through the web upload,
+      # poster tile with duration badge, playback via the MP4 rendition; docs/plans/step-12.md 2.8).
+      - name: e2e (Playwright, PRD step-3..8 + step-11 + step-12 + step-13 specs)
         env:
           # e2e/playwright.config.ts: retries 1 and HTML report on CI.
           CI: "1"
@@ -1102,6 +1202,229 @@ jobs:
           --require 'email_not_allowed'
           --require 'inbox_has_family'
           "$RUNNER_TEMP/abuse-logs"
+
+      # ---- Step 13: passkey gate (docs/plans/step-13.md 2.7, 2.8, 4; task 13.8) ---------------
+      # Fresh api + worker containers, as before the abuse gate: the tap below then holds only
+      # what this gate makes them print, and the api's in-memory passkey throttles (60 options
+      # per IP per hour, 10 failed verifies per 15 min) start empty for the gate's own throttle
+      # checks. The CI project .env (VISION_PROVIDER=fake) still applies; AUTH_PASSKEYS_ENABLED
+      # is not set, so api (AUTH_PASSKEYS_ENABLED) and auth (GOTRUE_PASSKEY_ENABLED) run the dev
+      # default (true) from docker-compose.dev.yml x-dev-shared.
+      - name: Recreate api + worker before the passkey gate
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.dev.yml up -d --no-deps --force-recreate \
+            --wait --wait-timeout 180 api worker
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://localhost:${WEB_PORT:-8080}/api/healthz" && exit 0
+            sleep 2
+          done
+          echo "::error::api not reachable through the web proxy after the recreate"
+          exit 1
+
+      # The gate recreates api once (AUTH_PASSKEYS_ENABLED=false, then back to the dev default),
+      # so the tap follows every api/worker/auth container while it runs (raw logs in
+      # $RUNNER_TEMP, scanned below, never uploaded). auth is tapped too: GoTrue is the service
+      # that actually receives the ceremonies.
+      - name: Start api/worker/auth log tap (passkey gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/passkey-logs" api worker auth
+
+      # docs/plans/step-13.md 0.1 (decision e) / 4: a wrong RP id or origin is not a start-up
+      # error. GoTrue logs one warning, reports healthy and answers 500 "Failed to initialize
+      # WebAuthn" at request time; 404 passkey_disabled means the flag is off. So the options
+      # endpoint is called from inside the compose network (the api container, GoTrue's only
+      # client) and must answer 200 with exactly { challenge_id, options, expires_at } and a
+      # numeric expires_at (Unix seconds). Only the status, the key names and the type are
+      # printed, never the challenge. The dev auth healthcheck already probes the same endpoint
+      # (docker-compose.dev.yml); this makes the gate's precondition explicit in the job log.
+      - name: GoTrue passkey options answer in-network (RP id/origins configured)
+        run: |
+          set -euo pipefail
+          out="$(docker compose -f docker-compose.dev.yml exec -T api node -e \
+            "fetch('http://auth:9999/passkeys/authentication/options',{method:'POST'}).then(async r=>{const j=await r.json();console.log(JSON.stringify({status:r.status,keys:Object.keys(j).sort(),expires_at:typeof j.expires_at}))})" \
+            | tail -n 1)"
+          echo "$out"
+          [ "$out" = '{"status":200,"keys":["challenge_id","expires_at","options"],"expires_at":"number"}' ] \
+            || { echo "::error::GoTrue passkey options did not answer 200 + challenge_id (500 = RP id/origins misconfigured, 404 = passkeys off)"; exit 1; }
+
+      # Step-13 passkey gate (docs/plans/step-13.md 2.8, 4; e2e/auth/passkey-gate.ts), keyless, no
+      # account created: GoTrue's passkey routes are 404 through the web proxy; the in-network
+      # options shape; /api/auth/config.passkeys and /api/auth/passkey/options
+      # { challengeId, expiresAt (ISO), options }; user verification enforced by the api (an
+      # assertion without the UV flag -> 401 passkey_failed and no GoTrue verify call); the api's
+      # own throttles (61st options from one IP -> 429 + Retry-After, 11th failed verify in
+      # 15 min -> 429; another IP unaffected); feature off (api recreated with
+      # AUTH_PASSKEYS_ENABLED=false -> every passkey route 404 passkey_disabled, config.passkeys
+      # false) and restored afterwards; its own api + auth log probe (no clientDataJSON /
+      # attestationObject / challenge_id / Bearer). Prints PASS/FAIL per check and `PASS n/n`,
+      # exits 1 on any miss.
+      - name: Passkey gate (step-13 passkey sign-in)
+        id: passkey-gate
+        timeout-minutes: 15
+        env:
+          PASSKEY_GATE_LOG: ${{ runner.temp }}/passkey-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$PASSKEY_GATE_LOG")"
+          rc=0
+          pnpm e2e:passkey-gate 2>&1 | tee "$PASSKEY_GATE_LOG" || rc=$?
+          {
+            echo '### Passkey gate (step 13)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$PASSKEY_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |^(PASS|FAIL) [0-9]+/[0-9]+$' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      # The restored api must run the dev default again whatever the gate did: a leftover
+      # AUTH_PASSKEYS_ENABLED=false would 404 every passkey route for anything that runs later.
+      - name: api restored to AUTH_PASSKEYS_ENABLED=true after the passkey gate
+        if: ${{ !cancelled() && steps.passkey-gate.outcome != 'skipped' }}
+        run: |
+          set -euo pipefail
+          v="$(docker compose -f docker-compose.dev.yml exec -T api printenv AUTH_PASSKEYS_ENABLED | tr -d '[:space:]')"
+          [ "$v" = "true" ] || { echo "::error::api AUTH_PASSKEYS_ENABLED=$v after the passkey gate (expected true)"; exit 1; }
+          echo "api AUTH_PASSKEYS_ENABLED=true"
+
+      - name: Stop api/worker/auth log tap (passkey gate)
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/passkey-logs"
+
+      # docs/plans/step-13.md 4 "log tap: no credential material" (task 13.8): nothing api or
+      # worker printed during the passkey gate (every container, incl. the AUTH_PASSKEYS_ENABLED=
+      # false one) holds a WebAuthn field value (clientDataJSON, attestationObject,
+      # authenticatorData, signature, rawId, userHandle, challenge / challengeId / challenge_id,
+      # credential: the scanner's webauthn-field pattern), a bearer value, JWT or presign part,
+      # nor (`--pii`) an email address or a client IPv4 address (the gate's cf-connecting-ip
+      # 198.51.100.x headers must stay redacted). Prints file:line + pattern name only. The
+      # `--require`s make it non-vacuous: the api logged the gate's passkey requests and the
+      # feature-off refusals.
+      - name: No credential material, emails, IPs, bearer values or JWTs in api/worker logs (passkey gate)
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs --pii
+          --require 'passkey'
+          --require 'passkey_disabled'
+          "$RUNNER_TEMP"/passkey-logs/api-*.log "$RUNNER_TEMP"/passkey-logs/worker-*.log
+
+      # GoTrue's own request log is scanned for the same credential fields, JWTs and bearer
+      # values, without `--pii`: GoTrue prints the TCP peer (remote_addr, a compose-network
+      # address of the api container) on every request line, which is not a client IP. The
+      # `--require` proves the ceremonies reached GoTrue while the tap was on.
+      - name: No credential material, bearer values or JWTs in auth (GoTrue) logs (passkey gate)
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs
+          --require 'passkeys/authentication/options'
+          "$RUNNER_TEMP"/passkey-logs/auth-*.log
+
+      # ---- Step 12: video gate (docs/plans/step-12.md 2.10, 4.4; task 12.11) ------------------
+      # Fresh api + worker containers so the tap below holds only this gate's output (the passkey
+      # gate recreated api with the flag off and restored it). The CI project .env
+      # (VISION_PROVIDER=fake) still applies; nothing video-related is overridden, so the worker
+      # runs the dev defaults (VIDEO_CONCURRENCY=1, VIDEO_FFMPEG_THREADS=2, /scratch on the
+      # dev-scratch volume).
+      - name: Recreate api + worker before the video gate
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.dev.yml up -d --no-deps --force-recreate \
+            --wait --wait-timeout 180 api worker
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://localhost:${WEB_PORT:-8080}/api/healthz" && exit 0
+            sleep 2
+          done
+          echo "::error::api not reachable through the web proxy after the recreate"
+          exit 1
+
+      # docs/plans/step-12.md 2.10 / task 12.3: the worker image carries ffmpeg + ffprobe built
+      # with libx264 (the rendition encoder) and libzimg (the HDR tone-map chain; without it the
+      # worker falls back to plain colour conversion), and /scratch (the dev-scratch named volume,
+      # WORKER_SCRATCH_PATH) is writable by the worker process. Prints the version line and the
+      # two flags only.
+      - name: Worker has ffmpeg (libx264, libzimg) and a writable /scratch
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.dev.yml exec -T worker sh -c '
+            set -e
+            ffmpeg -version | head -n 1
+            ffprobe -version | head -n 1
+            flags="$(ffmpeg -version | tr " " "\n" | grep -E "^--enable-(libx264|libzimg)$" | sort | tr "\n" " ")"
+            echo "flags: $flags"
+            [ "$flags" = "--enable-libx264 --enable-libzimg " ] || { echo "::error::ffmpeg lacks libx264 and/or libzimg"; exit 1; }
+            [ "$WORKER_SCRATCH_PATH" = "/scratch" ] || { echo "::error::WORKER_SCRATCH_PATH=$WORKER_SCRATCH_PATH (expected /scratch)"; exit 1; }
+            touch /scratch/.ci-write-test && rm -f /scratch/.ci-write-test && echo "/scratch writable"
+          '
+
+      # The gate recreates nothing, but the tap keeps the same shape as the other gates (every
+      # api/worker container while it runs; raw logs in $RUNNER_TEMP, scanned below, never
+      # uploaded).
+      - name: Start api/worker log tap (video gate)
+        run: bash .github/scripts/log-tap.sh start "$RUNNER_TEMP/video-logs" api worker
+
+      # Step-12 video gate (docs/plans/step-12.md 4.4 items 1-9, e2e/video/gate.ts), keyless, fake
+      # AI: uploads the synthetic fixtures (e2e/fixtures/video) through the api + presigned MinIO
+      # multipart for a free family, a guest and a Plus family; per-clip limits (free 60 s /
+      # 250 MB -> video_too_long / file_too_large; Plus 5 min / 2 GB), the 100-video free cap and
+      # the 1,000-item pool; worker results (poster/thumb/display/analysis, duration badge
+      # metadata, H.264 MP4 rendition with faststart and no location/creation tags, keyframes,
+      # HDR tone-map, rotation, dedupe); range requests on the rendition; sharing (viewer gets the
+      # rendition only), export, purge; `exiftool` in Docker on the served derivatives
+      # (GATE_SKIP_EXIFTOOL=1 skips it); its own api/worker log probe. Prints PASS/FAIL per check
+      # and `PASS n/n`, exits 1 on any miss. Cleanup trashes the gate's albums.
+      - name: Video gate (step-12 video uploads, fake provider)
+        id: video-gate
+        timeout-minutes: 20
+        env:
+          VIDEO_GATE_LOG: ${{ runner.temp }}/video-gate/gate.log
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$VIDEO_GATE_LOG")"
+          rc=0
+          pnpm e2e:video-gate 2>&1 | tee "$VIDEO_GATE_LOG" || rc=$?
+          {
+            echo '### Video gate (step 12)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' "$VIDEO_GATE_LOG" \
+              | grep -E '^(PASS|FAIL)  |^(PASS|FAIL) [0-9]+/[0-9]+$' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$rc"
+
+      - name: Stop api/worker log tap (video gate)
+        if: always()
+        run: bash .github/scripts/log-tap.sh stop "$RUNNER_TEMP/video-logs"
+
+      # docs/plans/step-12.md 2.10 "video-hygiene" / 4.4 step 9: nothing api or worker printed
+      # during the video gate holds a scratch path (`/scratch/…`), the QuickTime location tag
+      # name (com.apple.quicktime.location…, ISO6709; the fixtures' hevc-5s.mov carries one with
+      # synthetic coordinates), a coordinate pair or lat/lng value, a presigned-URL part
+      # (X-Amz-Signature / X-Amz-Credential), a bearer value or JWT, nor (`--pii`) an email
+      # address or a client IPv4 address. Prints file:line + pattern name only. The `--require`s
+      # make it non-vacuous: the worker finished at least one rendition ("video transcoded",
+      # apps/worker/src/video/transcode.ts) and one video ingest while the tap was on.
+      - name: No scratch paths, location tags, coordinates, presign parts, emails or IPs in api/worker logs (video gate)
+        run: >-
+          node .github/scripts/scan-logs-for-secrets.mjs --pii
+          --require 'video transcoded'
+          --require 'ingest: '
+          "$RUNNER_TEMP/video-logs"
+
+      - name: Upload video gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: video-gate
+          path: ${{ runner.temp }}/video-gate
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload passkey gate output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: passkey-gate
+          path: ${{ runner.temp }}/passkey-gate
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload abuse gate output
         if: failure()

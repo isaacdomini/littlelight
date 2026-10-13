@@ -17,11 +17,20 @@ Also set the same email/code in `metadata/review_information/demo_user.txt` and
 Facts the notes rely on (re-check before submitting):
 
 - Review account has AI features enabled so Search and Chat can be demonstrated; it holds 24 illustrated
-  photos from `demo:media --review-baby` (no real children).
+  photos from `demo:media --review-baby` (no real children) and, from step 12, one short demo clip
+  (an animated illustration, no real child, no speech) so the reviewer can see a video tile, the
+  player and the duration badge. **Re-check before submitting that the seed actually adds the clip**
+  (`demo:media` is backend-owned; if it does not, drop the clip sentence from the notes).
 - Native builds hide purchase prompts, so the notes say there is no purchase in the app.
 - Sign in with Apple / Google are not in this build (email code only). If a later build adds Google
   sign-in on iOS, Sign in with Apple must ship with it (App Store guideline 4.8).
 - Account deletion is in Settings and works for the review account.
+- Passkeys (step 13): "Sign in with a passkey" is shown on the sign-in screen and "Add a passkey" in
+  Settings > Account. The **review account cannot register a passkey** (Q6; the API answers
+  `passkey_unavailable_for_account`), so the reviewer signs in with the static code only. The notes
+  say so. Until Part B (Team ID, signing certificates, production association files) the native
+  ceremonies report "not available in this build"; keep the passkey line out of the listing until the
+  device verification in `NATIVE.md` passes (P5).
 - Album sync asks for full Photos access (guideline 5.1.1: access must match the feature). The prompt
   appears only after a parent taps Upload tab > "Album sync" > "Set up" (controls also in Settings > "Photo import"); the notes explain why full access is needed and that one
   album is read. The review account is a parent, so the reviewer can reach it.

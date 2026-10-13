@@ -7,6 +7,7 @@
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:tinyglow.app</string>
+		<string>webcredentials:tinyglow.app</string>
 	</array>
 </dict>
 </plist>

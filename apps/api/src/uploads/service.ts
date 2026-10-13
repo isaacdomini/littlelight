@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   FREE_TIER_PHOTO_LIMIT,
   ingestJobSchema,
+  type MediaKind,
   originalKey,
   type PhotoSummary,
   partCount,
@@ -17,6 +18,7 @@ import {
   type UploadSession,
   type UploadSessionCreate,
   type UploadSummary,
+  videoLimitsFor,
 } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { audit, requireConsent, type Tx, type TxContext, withClaims } from "../auth";
@@ -33,6 +35,8 @@ import {
   babyAccess,
   countMyPending,
   countPoolPhotos,
+  countPoolVideos,
+  freeTierVideoLimit,
   type PhotoSummaryRow,
   pendingPhotoLimit,
   photoRowsByIds,
@@ -53,6 +57,12 @@ import { isInvalidParts, isNoSuchUpload, MultipartStorage } from "../storage/mul
 // client's `clientSha256`, `mime`, `takenAt` are hints only: the worker sniffs, re-hashes and
 // reads EXIF. Nothing here logs hashes, keys, URLs, notes or request bodies; S3/pg failures are
 // logged as categories only.
+//
+// Step 12 (docs/plans/step-12.md 2.4): videos use the same session and parts. At register the
+// album plan's per-clip limits (`videoLimitsFor`: bytes ⇒ `file_too_large`, the client's
+// `durationMs` hint ⇒ `video_too_long`) and the free family's video count (Q3 ⇒
+// `free_tier_limit`) decide the outcome; `media_kind` / `declared_duration_ms` are stored, and
+// complete inserts the photo row as `media_kind = 'video', rendition_status = 'pending'`.
 
 type Req = Pick<FastifyRequest, "auth" | "server" | "log">;
 
@@ -91,6 +101,10 @@ interface FileRow {
   client_id: string | null;
   state: UploadFileState;
   error: UploadFileError | null;
+  /**
+   * `declared_bytes` is a bigint (up to 2 GiB = 2147483648 for a video, one past int4's range),
+   * read as `float8` so node-postgres hands back an exact JS number, never an int8 string.
+   */
   declared_bytes: number;
   part_size: number;
   duplicate_of_photo_id: string | null;
@@ -100,12 +114,16 @@ interface FileRow {
   client_sha256: string | null;
   client_mime: string | null;
   taken_at_hint: Date | null;
+  /** Step 12: the registered kind (the worker's sniff is the truth). */
+  media_kind: MediaKind;
+  /** Step 12: the client's duration hint for a video (early `video_too_long` only). */
+  declared_duration_ms: number | null;
 }
 
 const FILE_COLUMNS = `f.id, f.session_id, f.baby_id, f.client_id, f.state, f.error,
-  f.declared_bytes::int AS declared_bytes, f.part_size, f.duplicate_of_photo_id, f.photo_id,
+  f.declared_bytes::float8 AS declared_bytes, f.part_size, f.duplicate_of_photo_id, f.photo_id,
   f.storage_key, f.multipart_upload_id, encode(f.client_sha256, 'hex') AS client_sha256,
-  f.client_mime, f.taken_at_hint`;
+  f.client_mime, f.taken_at_hint, f.media_kind, f.declared_duration_ms`;
 
 async function loadSession(client: Tx, sessionId: string): Promise<SessionRow | null> {
   const { rows } = await client.query<SessionRow>(
@@ -188,6 +206,7 @@ function toUploadFile(f: FileRow, photo: PhotoSummary | null, parts?: UploadPart
   return {
     id: f.id,
     clientId: f.client_id,
+    kind: f.media_kind,
     state: f.state,
     error: f.error,
     bytes: f.declared_bytes,
@@ -451,6 +470,22 @@ export async function registerFiles(
     const registered = existing.filter((f) => f.state === "registered").length;
     let headroom = room.left - registered;
 
+    // Step 12 (docs/plans/step-12.md 2.4): per-clip limits of the album's plan, and the Q3 video
+    // count for a free admin (approved videos across the family; a guest's pending videos never
+    // count, exactly like the pool). Friendly pre-checks; `photos_free_tier_video_cap` and the
+    // worker's ffprobe re-check are the hard stops.
+    const videoLimits = videoLimitsFor(access.plan);
+    const wantsVideo = inputs.some((f) => f.kind === "video");
+    let videoHeadroom = Number.POSITIVE_INFINITY;
+    if (wantsVideo && access.role === "admin" && access.plan === "free") {
+      const videosUsed = await countPoolVideos(client, session.baby_id);
+      const videoLimit = await freeTierVideoLimit(client);
+      const registeredVideos = existing.filter(
+        (f) => f.state === "registered" && f.media_kind === "video",
+      ).length;
+      videoHeadroom = videoLimit - videosUsed - registeredVideos;
+    }
+
     const seen = new Set(
       existing.flatMap((f) =>
         f.client_sha256 && ["registered", "completed", "ingested"].includes(f.state)
@@ -465,6 +500,7 @@ export async function registerFiles(
           f.state === "registered" &&
           f.client_id === input.clientId &&
           f.declared_bytes === input.bytes &&
+          f.media_kind === input.kind &&
           f.multipart_upload_id !== null &&
           (f.client_sha256 === null ||
             input.clientSha256 === undefined ||
@@ -477,8 +513,21 @@ export async function registerFiles(
         if (of) return { kind: "duplicate", of };
         if (seen.has(sha)) return { kind: "duplicate", of: null };
       }
+      if (input.kind === "video") {
+        if (input.bytes > videoLimits.maxBytes) return { kind: "failed", error: "file_too_large" };
+        // Rounded whole seconds (a "1:00" phone clip is 60.x s): the worker's ffprobe check and
+        // `import_book_photo` apply the same rule.
+        if (
+          input.durationMs !== undefined &&
+          Math.round(input.durationMs / 1000) > videoLimits.maxSeconds
+        ) {
+          return { kind: "failed", error: "video_too_long" };
+        }
+        if (videoHeadroom <= 0) return { kind: "failed", error: "free_tier_limit" };
+      }
       if (headroom <= 0) return { kind: "failed", error: room.error };
       headroom--;
+      if (input.kind === "video") videoHeadroom--;
       if (sha) seen.add(sha);
       return { kind: "new" };
     });
@@ -530,14 +579,15 @@ export async function registerFiles(
         `INSERT INTO public.upload_files AS f
            (id, session_id, baby_id, client_id, declared_bytes, client_sha256, client_mime,
             taken_at_hint, tz_offset_hint_minutes, storage_key, multipart_upload_id, part_size,
-            state, error, duplicate_of_photo_id)
+            state, error, duplicate_of_photo_id, media_kind, declared_duration_ms)
          SELECT u.id, $1, $2, u.client_id, u.bytes, decode(u.sha, 'hex'), u.mime, u.taken_at,
-                u.tz, u.storage_key, u.upload_id, $3, u.state, u.error, u.dup
+                u.tz, u.storage_key, u.upload_id, $3, u.state, u.error, u.dup, u.media_kind,
+                u.duration_ms
            FROM unnest($4::uuid[], $5::text[], $6::bigint[], $7::text[], $8::text[],
                        $9::timestamptz[], $10::smallint[], $11::text[], $12::text[], $13::text[],
-                       $14::text[], $15::uuid[])
+                       $14::text[], $15::uuid[], $16::text[], $17::int[])
                 AS u(id, client_id, bytes, sha, mime, taken_at, tz, storage_key, upload_id, state,
-                     error, dup)
+                     error, dup, media_kind, duration_ms)
          RETURNING ${FILE_COLUMNS}`,
         [
           sessionId,
@@ -555,6 +605,8 @@ export async function registerFiles(
           created.map((r) => r.state),
           created.map((r) => r.error),
           created.map((r) => r.duplicateOf),
+          created.map((r) => r.input.kind),
+          created.map((r) => (r.input.kind === "video" ? (r.input.durationMs ?? null) : null)),
         ],
       );
       return out;
@@ -786,6 +838,11 @@ export async function completeFile(
       await markFile(request, file, "failed", "free_tier_limit");
       throw freeTierLimit();
     }
+    // Step 12 (Q3): `photos_free_tier_video_cap` — the family's free albums hold the most videos.
+    if (isPgError(err) && err.code === "23514" && err.message.startsWith("free tier video limit")) {
+      await markFile(request, file, "failed", "free_tier_limit");
+      throw freeTierLimit("video");
+    }
     if (isPgError(err) && err.code === "23514" && err.message.startsWith("pending photo limit")) {
       await markFile(request, file, "failed", "pending_limit");
       throw await pendingLimitWithCounts(request, file.baby_id);
@@ -825,12 +882,24 @@ async function bookPhoto(
   // RLS (photos_authenticated_insert) only lets a contributor insert `pending`; an admin's own
   // uploads are approved. `mime` stays NULL until the worker sniffs the bytes.
   const approval = access.role === "admin" ? "approved" : "pending";
+  // Step 12: the registered kind; a video row must start `rendition_status = 'pending'`
+  // (`photos_media_shape`). The worker's sniff may still flip the kind.
   await client.query(
     `INSERT INTO public.photos
        (id, baby_id, uploaded_by, storage_key_original, mime, bytes, approval, taken_at,
-        taken_at_estimated)
-     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, true)`,
-    [f.id, f.baby_id, ctx.uid, f.storage_key, f.declared_bytes, approval, f.taken_at_hint],
+        taken_at_estimated, media_kind, rendition_status)
+     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, true, $8,
+             CASE WHEN $8::text = 'video' THEN 'pending' ELSE 'none' END)`,
+    [
+      f.id,
+      f.baby_id,
+      ctx.uid,
+      f.storage_key,
+      f.declared_bytes,
+      approval,
+      f.taken_at_hint,
+      f.media_kind,
+    ],
   );
   const session = await loadSession(client, sessionId);
   if (session && hasDetails(session)) {

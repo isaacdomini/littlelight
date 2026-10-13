@@ -19,6 +19,14 @@ export function FreeTierNotice({ baby }: { baby: Pick<BabySummary, "id" | "plan"
   const { used, limit, familyAlbums } = data;
   const nums = { used: formatCount(used), limit: formatCount(limit) };
   const canUpsell = !isNative() && baby.role === "admin";
+  // Step 12 (Q3): the usage line carries the family's video count when the API sends it.
+  const videos = typeof data.videos === "number" ? data.videos : undefined;
+  const videoLimit = typeof data.videoLimit === "number" ? data.videoLimit : undefined;
+  const videoNums =
+    videos !== undefined && videoLimit !== undefined
+      ? { ...nums, videos: formatCount(videos), videoLimit: formatCount(videoLimit) }
+      : null;
+  const videosFull = videoNums !== null && (videos as number) >= (videoLimit as number);
 
   let tone: "ok" | "near" | "over" = "ok";
   if (used >= limit) tone = "over";
@@ -31,6 +39,11 @@ export function FreeTierNotice({ baby }: { baby: Pick<BabySummary, "id" | "plan"
       : canUpsell
         ? t("freeTier.over", nums)
         : t("freeTier.overMember", nums);
+  } else if (videoNums) {
+    body =
+      baby.role === "admin"
+        ? tn("freeTier.usageVideos", familyAlbums, videoNums)
+        : t("freeTier.usageGuestVideos", videoNums);
   } else {
     body =
       baby.role === "admin"
@@ -42,7 +55,8 @@ export function FreeTierNotice({ baby }: { baby: Pick<BabySummary, "id" | "plan"
     <div
       data-testid="free-tier-notice"
       data-tone={tone}
-      className={`ll-callout flex flex-col gap-1 ${tone === "ok" ? "" : "!border-[var(--warning)]"}`}
+      data-videos={videos}
+      className={`ll-callout flex flex-col gap-1 ${tone === "ok" && !videosFull ? "" : "!border-[var(--warning)]"}`}
     >
       <p
         role={tone === "ok" ? undefined : "status"}
@@ -50,6 +64,18 @@ export function FreeTierNotice({ baby }: { baby: Pick<BabySummary, "id" | "plan"
       >
         {body}
       </p>
+      {videosFull && tone !== "over" && videoNums ? (
+        <p role="status" className="font-semibold" data-testid="free-tier-videos-full">
+          {t(
+            isNative()
+              ? "freeTier.videosFull.native"
+              : canUpsell
+                ? "freeTier.videosFull"
+                : "freeTier.videosFullMember",
+            videoNums,
+          )}
+        </p>
+      ) : null}
       {tone === "near" ? (
         <p className="text-muted" data-testid="free-tier-near">
           {t("freeTier.near", { left: formatCount(limit - used) })} {t("freeTier.nearHint")}

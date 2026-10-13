@@ -15,8 +15,17 @@ const PHOTO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BABY = "11111111-1111-4111-8111-111111111111";
 const job = { photoId: PHOTO, babyId: BABY, reason: "milestone" as const };
 
-describe("reindex queue (step 5) in the sixteen-queue set", () => {
-  it("QUEUES has exactly the sixteen jobs, all exclusive except push.notify (short)", () => {
+const VIDEO = {
+  ffmpegPath: "ffmpeg",
+  ffprobePath: "ffprobe",
+  scratchPath: "/tmp/ll-scratch-test",
+  threads: 1,
+  timeoutSec: 60,
+  concurrency: 1,
+};
+
+describe("reindex queue (step 5) in the seventeen-queue set", () => {
+  it("QUEUES has exactly the seventeen jobs, all exclusive except push.notify (short)", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(
       [
         "photo.ingest",
@@ -35,6 +44,7 @@ describe("reindex queue (step 5) in the sixteen-queue set", () => {
         "data.export",
         "import.google",
         "import.sweep",
+        "video.transcode",
       ].sort(),
     );
     for (const [name, q] of Object.entries(QUEUES))
@@ -79,7 +89,7 @@ describe("reindex queue (step 5) in the sixteen-queue set", () => {
     );
   });
 
-  it("startWorkers registers fifteen handlers (import.google needs its deps); reindex runs batches of 25 through one indexer call", async () => {
+  it("startWorkers registers sixteen handlers (import.google needs its deps; video.transcode needs the video deps); reindex runs batches of 25 through one indexer call", async () => {
     const registered: Array<{
       name: string;
       options: Record<string, unknown>;
@@ -108,6 +118,7 @@ describe("reindex queue (step 5) in the sixteen-queue set", () => {
       dataExport: {} as never,
       ai: { flush: vi.fn(), poll: vi.fn(), backfill: vi.fn() } as never,
       indexer: { reindex } as never,
+      video: VIDEO,
       autoSharer: {
         evaluatePhotos: vi.fn(async () => ({})),
         applyLink: vi.fn(),

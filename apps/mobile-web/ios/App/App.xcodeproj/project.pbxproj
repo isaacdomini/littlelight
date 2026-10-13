@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		A1B2C3D400000000000000B1 /* TinyglowUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000B2 /* TinyglowUploader.swift */; };
 		A1B2C3D400000000000000D1 /* TinyglowPhotoSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000D2 /* TinyglowPhotoSync.swift */; };
+		A1B2C3D400000000000000E1 /* LLPartFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000E2 /* LLPartFile.swift */; };
+		A1B2C3D400000000000000F1 /* TinyglowPasskeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000F2 /* TinyglowPasskeys.swift */; };
+		A1B2C3D400000000000000F3 /* LLPasskeyCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000000000000F4 /* LLPasskeyCodec.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
@@ -24,6 +27,10 @@
 /* Begin PBXFileReference section */
 		A1B2C3D400000000000000B2 /* TinyglowUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinyglowUploader.swift; sourceTree = "<group>"; };
 		A1B2C3D400000000000000D2 /* TinyglowPhotoSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinyglowPhotoSync.swift; sourceTree = "<group>"; };
+		A1B2C3D400000000000000E2 /* LLPartFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLPartFile.swift; sourceTree = "<group>"; };
+		A1B2C3D400000000000000F2 /* TinyglowPasskeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinyglowPasskeys.swift; sourceTree = "<group>"; };
+		A1B2C3D400000000000000F4 /* LLPasskeyCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLPasskeyCodec.swift; sourceTree = "<group>"; };
+		A1B2C3D400000000000000A4 /* App-Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "App-Debug.entitlements"; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -77,6 +84,9 @@
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				A1B2C3D400000000000000B2 /* TinyglowUploader.swift */,
 				A1B2C3D400000000000000D2 /* TinyglowPhotoSync.swift */,
+				A1B2C3D400000000000000E2 /* LLPartFile.swift */,
+				A1B2C3D400000000000000F2 /* TinyglowPasskeys.swift */,
+				A1B2C3D400000000000000F4 /* LLPasskeyCodec.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -86,6 +96,7 @@
 				A1B2C3D400000000000000C2 /* Info-Debug.plist */,
 				A1B2C3D400000000000000A2 /* PrivacyInfo.xcprivacy */,
 				A1B2C3D400000000000000A3 /* App.entitlements */,
+				A1B2C3D400000000000000A4 /* App-Debug.entitlements */,
 				2FAD9762203C412B000D30F8 /* config.xml */,
 				50B271D01FEDC1A000F3C39B /* public */,
 			);
@@ -178,6 +189,9 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A1B2C3D400000000000000B1 /* TinyglowUploader.swift in Sources */,
 				A1B2C3D400000000000000D1 /* TinyglowPhotoSync.swift in Sources */,
+				A1B2C3D400000000000000E1 /* LLPartFile.swift in Sources */,
+				A1B2C3D400000000000000F1 /* TinyglowPasskeys.swift in Sources */,
+				A1B2C3D400000000000000F3 /* LLPasskeyCodec.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -317,7 +331,7 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "App/App-Debug.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;

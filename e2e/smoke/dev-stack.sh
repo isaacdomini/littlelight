@@ -93,9 +93,9 @@ for path in otp verify token logout signup user admin/users; do
   [ "$code" = "404" ] || fail "POST $BASE/auth/$path answered $code, expected 404 (GoTrue must not be browser-reachable)"
 done
 
-step "3a. database: all 21 migrations applied"
+step "3a. database: all 22 migrations applied"
 MIGS="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c "select count(*) from public.pgmigrations")"
-[ "$MIGS" = "21" ] || fail "expected 21 applied migrations, found $MIGS"
+[ "$MIGS" = "22" ] || fail "expected 22 applied migrations, found $MIGS"
 
 # Step 5: the perf baby is optional (dev-only `pnpm perf:seed`); when it is there it must be intact.
 PERF_PHOTOS="$("${DC[@]}" exec -T db psql -U postgres -d tinyglow -At -c "select count(*) from public.photos where baby_id='00000000-0000-4000-8000-000000000900'")"
@@ -206,9 +206,9 @@ echo "api/worker use their own MinIO service accounts; worker queues ready; logs
 
 
 step "5e. step 6: AI wiring (queues line, provider line), seeded bath description, paid-tier gate, no keys in clients"
-# step 6 added 2 queues (10), step 7/8 more (12), step 9 push.notify (13), review fixes data.export (14):
-# the boot line carries the total
-grep -Eq 'queues: 16' <<<"$WLOG" || fail "worker log does not show 16 queues"
+# step 6 added 2 queues (10), step 7/8 more (12), step 9 push.notify (13), review fixes data.export (14),
+# step 10/11 imports and abuse (16), step 12 video.transcode (17): the boot line carries the total
+grep -Eq 'queues: 17' <<<"$WLOG" || fail "worker log does not show 17 queues"
 W_KEY="$("${DC[@]}" exec -T worker printenv OPENAI_API_KEY | tr -d '\r' || true)"
 W_PROVIDER="$("${DC[@]}" exec -T worker printenv VISION_PROVIDER | tr -d '\r' || true)"
 if [ -z "$W_KEY" ] && [ "$W_PROVIDER" != "fake" ]; then
@@ -427,16 +427,21 @@ PLOG="$("${DC[@]}" logs --no-color --since 10m api worker 2>&1 || true)"
 grep -qF "$PUSH_TOKEN" <<<"$PLOG" && fail "the device token appears in api/worker logs"
 grep -qF "$N_TOK" <<<"$PLOG" && fail "the native bearer token appears in api/worker logs"
 
-# demo family media: every demo photo has real thumbnails (200 image/jpeg), not placeholders
-DEMO_IDS='["00000000-0000-4000-8000-000000000301","00000000-0000-4000-8000-000000000302","00000000-0000-4000-8000-000000000303","00000000-0000-4000-8000-000000000304","00000000-0000-4000-8000-000000000305","00000000-0000-4000-8000-000000000306","00000000-0000-4000-8000-000000000307","00000000-0000-4000-8000-000000000308","00000000-0000-4000-8000-000000000309","00000000-0000-4000-8000-000000000310","00000000-0000-4000-8000-000000000311","00000000-0000-4000-8000-000000000312"]'
+# demo family media: every demo item (12 photos + the step-12 demo clip) has real thumbnails (200 image/jpeg), not placeholders
+DEMO_IDS='["00000000-0000-4000-8000-000000000301","00000000-0000-4000-8000-000000000302","00000000-0000-4000-8000-000000000303","00000000-0000-4000-8000-000000000304","00000000-0000-4000-8000-000000000305","00000000-0000-4000-8000-000000000306","00000000-0000-4000-8000-000000000307","00000000-0000-4000-8000-000000000308","00000000-0000-4000-8000-000000000309","00000000-0000-4000-8000-000000000310","00000000-0000-4000-8000-000000000311","00000000-0000-4000-8000-000000000312","00000000-0000-4000-8000-000000000313"]'
 DEMO_URLS="$(curl -fsS -b "$MOM_JAR" -X POST "$BASE/api/babies/$MAYA_ID/photos/urls" -H 'content-type: application/json' -H 'X-Tinyglow-Client: web' -d "{\"photoIds\":$DEMO_IDS}")" \
   || fail "POST photos/urls for the demo photos failed"
 for u in $(printf '%s' "$DEMO_URLS" | json 'Object.values(j.urls).map(x=>x.thumbUrl).join(" ")'); do
   THUMB="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$u")"
   [ "$THUMB" = "200 image/jpeg" ] || fail "a demo thumbnail answered '$THUMB', expected '200 image/jpeg'"
 done
-[ "$(printf '%s' "$DEMO_URLS" | json 'Object.keys(j.urls).length')" = "12" ] || fail "expected thumbnail URLs for 12 demo photos"
-echo "association files, CORS, native sign-in, push device route and 12 demo thumbnails ok"
+[ "$(printf '%s' "$DEMO_URLS" | json 'Object.keys(j.urls).length')" = "13" ] || fail "expected thumbnail URLs for 13 demo items (12 photos + 1 clip)"
+# the demo clip (step 12) carries a playable web rendition: video/mp4, served with byte ranges (206)
+DEMO_VIDEO_URL="$(printf '%s' "$DEMO_URLS" | json 'j.urls["00000000-0000-4000-8000-000000000313"]?.videoUrl ?? ""')"
+[ -n "$DEMO_VIDEO_URL" ] || fail "the demo clip has no videoUrl in photos/urls"
+VID="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' -H 'Range: bytes=0-1023' "$DEMO_VIDEO_URL")"
+[ "$VID" = "206 video/mp4" ] || fail "the demo clip's web rendition answered '$VID' for a 1 KiB range, expected '206 video/mp4'"
+echo "association files, CORS, native sign-in, push device route, 13 demo thumbnails and the demo clip rendition ok"
 
 step "5h2. step 10: photo import: google-fake healthy, provider fake, tables locked down, connection endpoint"
 GPORT="${GOOGLE_FAKE_PORT:-18099}"

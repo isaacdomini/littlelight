@@ -54,6 +54,7 @@ export function searchRoutes(app: FastifyInstance, given?: SearchChatDeps): void
             people: q.person ? [q.person] : [],
             tags: q.tag ? [q.tag] : [],
             place: q.place ?? null,
+            media: q.media,
             limit: q.limit,
             timezone: access.timezone,
           },

@@ -142,3 +142,49 @@ If this was you, there's nothing to do. If not, sign that device out: ${url}
 `;
   return { template: "new_device", subject, html, text };
 }
+
+export interface PasskeyChangedEmailInput {
+  action: "added" | "removed";
+  when: Date;
+  /** `userAgentLabel()` output, e.g. "Safari on iPhone". */
+  deviceLabel: string;
+  /** `CF-IPCountry` code or `null`. */
+  country: string | null;
+  /** `PUBLIC_URL` (used for the logo only; this email carries no links by design). */
+  publicUrl: string;
+}
+
+/**
+ * Step 13 (docs/plans/step-13.md 0 Q7, 2.4): a passkey was added to or removed from the account.
+ * New-device-alert family, deliberately without links or buttons (a phishing lookalike cannot
+ * borrow a call to action from it). Never names the passkey.
+ */
+export function passkeyChangedEmail(input: PasskeyChangedEmailInput): EmailContent {
+  const device = oneLine(input.deviceLabel);
+  const when = formatUtc(input.when);
+  const where = input.country ? oneLine(input.country) : null;
+  const details = `${device}, ${when}${where ? `, country ${where}` : ""}`;
+  const added = input.action === "added";
+  const subject = added
+    ? "A passkey was added to your Tinyglow account"
+    : "A passkey was removed from your Tinyglow account";
+  const lead = added
+    ? "A passkey was just added to your Tinyglow account from:"
+    : "A passkey was just removed from your Tinyglow account from:";
+  const advice =
+    "If this was you, there's nothing to do. If not, open Tinyglow, go to Settings, review your passkeys and devices, and check your email account's security.";
+  const html = layout(
+    subject,
+    `<p style="margin:0 0 16px;font-size:16px;">${escapeHtml(lead)}</p>
+<p style="margin:0 0 16px;font-size:15px;"><strong>${escapeHtml(details)}</strong></p>
+<p style="margin:0;font-size:14px;">${escapeHtml(advice)}</p>`,
+    logoUrl(safeUrl(input.publicUrl)),
+  );
+  const text = `${lead}
+
+${details}
+
+${advice}
+`;
+  return { template: added ? "passkey_added" : "passkey_removed", subject, html, text };
+}

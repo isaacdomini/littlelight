@@ -26,5 +26,10 @@ Everything here is a draft for the user to review and submit (part B). Nothing i
 | Play full description | 4000 |
 | Play changelog | 500 |
 
+Withheld until Part B P4 passes (docs/plans/step-13.md 5.3 P5): the passkey line for the
+description's "YOU STAY IN CONTROL" list and the release notes, on both stores:
+"- Sign in faster with a passkey (Face ID, Touch ID or your phone's screen lock). The email code
+always works too." Add it in the same change that records the device verification in PROGRESS.
+
 Rules for copy: no pricing, no mention of purchase or subscription (native hides them; billing is a
 later step), no "best/#1" claims, include the AI disclosure and "no ads, no tracking".

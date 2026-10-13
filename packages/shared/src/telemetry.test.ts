@@ -20,19 +20,19 @@ const SIG = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 describe("redactUrl", () => {
   it.each([
-    ["/api/babies/" + UUID + "/photos", "/api/babies/" + UUID + "/photos"],
-    ["/api/invites/" + INVITE_TOKEN, "/api/invites/[redacted]"],
+    [`/api/babies/${UUID}/photos`, `/api/babies/${UUID}/photos`],
+    [`/api/invites/${INVITE_TOKEN}`, "/api/invites/[redacted]"],
     ["/api/invites/short", "/api/invites/[redacted]"],
-    ["/s/" + SHARE_TOKEN, "/s/[redacted]"],
+    [`/s/${SHARE_TOKEN}`, "/s/[redacted]"],
     ["/api/share/session", "/api/share/session"],
     ["/api/share/photos?cursor=abc", "/api/share/photos?[redacted]"],
     [
-      "/api/share/manifest.webmanifest?t=" + SHARE_TOKEN,
+      `/api/share/manifest.webmanifest?t=${SHARE_TOKEN}`,
       "/api/share/manifest.webmanifest?[redacted]",
     ],
     ["/api/share/some-unknown-word", "/api/share/[redacted]"],
-    ["/share/" + UUID + "/urls", "/share/" + UUID + "/urls"],
-    ["/api/babies/" + UUID + "/exports", "/api/babies/" + UUID + "/exports"],
+    [`/share/${UUID}/urls`, `/share/${UUID}/urls`],
+    [`/api/babies/${UUID}/exports`, `/api/babies/${UUID}/exports`],
     ["/healthz", "/healthz"],
     ["/", "/"],
   ])("%s", (input, out) => {
@@ -75,6 +75,12 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
         "photoLibraryPath",
         "phAssetId",
         "oauthParam",
+        // step 12 (video)
+        "scratchPath",
+        "quicktimeLocationTag",
+        "iso6709",
+        // step 13 (passkeys)
+        "webauthnPair",
       ].sort(),
     );
     for (const re of Object.values(TELEMETRY_SCRUB_PATTERNS)) expect(re.flags).not.toContain("g");
@@ -84,7 +90,7 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
     ["jwt", JWT],
     ["authCredential", "Bearer abcdefghijklmnop"],
     ["authCredential", "basic dXNlcjpwYXNzd29yZA=="],
-    ["amzParam", "X-Amz-Signature=" + SIG],
+    ["amzParam", `X-Amz-Signature=${SIG}`],
     ["amzParam", "X-Amz-Credential=AKIA%2F2026%2Fs3"],
     ["amzParam", "AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE"],
     ["secretPair", "pushToken=abc123"],
@@ -98,7 +104,7 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
     ["labelledCoordinate", '"gps_lng": -122.33'],
     ["pgRowDetail", "Failing row contains (a, b, c)"],
     ["pgRowDetail", "Key (email)=(mom@example.com)"],
-    ["tokenRun", " " + SHARE_TOKEN],
+    ["tokenRun", ` ${SHARE_TOKEN}`],
     ["urlOrPath", "https://x.test/a/b?c=d"],
     ["queryOrFragment", "callback?code=123"],
     ["googleAccessToken", "ya29.a0AfH6SMBx-_abc123"],
@@ -113,6 +119,15 @@ describe("TELEMETRY_SCRUB_PATTERNS", () => {
     ["photoLibraryPath", "/var/mobile/Media/DCIM/100APPLE/IMG_0001.HEIC"],
     ["phAssetId", "ABCDEF01-2345-6789-ABCD-EF0123456789/L0/001"],
     ["oauthParam", "callback code=abc&state=def"],
+    // step 13: WebAuthn material as key=value / key: value / "key":"value"
+    ["webauthnPair", "clientDataJSON=eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0"],
+    ["webauthnPair", 'attestationObject: "o2NmbXRkbm9uZWdhdHRTdG10oA"'],
+    ["webauthnPair", '"authenticatorData":"SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2M"'],
+    ["webauthnPair", "signature=MEUCIQDabc"],
+    ["webauthnPair", "challenge_id=3f2c1b0a-1234-4abc-8def-0123456789ab"],
+    ["webauthnPair", "challengeId: 3f2c1b0a-1234-4abc-8def-0123456789ab"],
+    ["webauthnPair", "rawId=AQIDBA"],
+    ["webauthnPair", "userHandle=dXNlcg"],
   ] as [keyof typeof TELEMETRY_SCRUB_PATTERNS, string][])("%s matches %j", (name, sample) => {
     expect(TELEMETRY_SCRUB_PATTERNS[name].test(sample)).toBe(true);
   });
@@ -417,10 +432,10 @@ function fixtureEvent() {
     request: {
       url: `https://app.test/s/${SHARE_TOKEN}?t=${SHARE_TOKEN}`,
       method: "POST",
-      headers: { cookie: "sb-access-token=" + JWT, "x-forwarded-for": "10.0.0.7" },
+      headers: { cookie: `sb-access-token=${JWT}`, "x-forwarded-for": "10.0.0.7" },
       cookies: { session: JWT },
       data: { note: "Maya took her first steps today" },
-      query_string: "t=" + SHARE_TOKEN,
+      query_string: `t=${SHARE_TOKEN}`,
     },
     user: { id: UUID, email: "mom@example.com", ip_address: "203.0.113.9" },
     breadcrumbs: [
@@ -476,7 +491,7 @@ describe("scrubTelemetryEvent", () => {
     "mom@example.com",
     "47.6062",
     "-122.3321",
-    "X-Amz-Signature=" + SIG,
+    `X-Amz-Signature=${SIG}`,
     "first steps",
     "first bath",
     "203.0.113.9",
@@ -722,5 +737,31 @@ describe("scrubTelemetryEvent: structure limits", () => {
     expect(ok.event_id).toBe("0123456789abcdef0123456789abcdef");
     const bad = scrubTelemetryEvent({ event_id: "mom@example.com" });
     expect(JSON.stringify(bad)).not.toContain("mom@example.com");
+  });
+});
+
+describe("scrubTelemetryString: passkeys (step 13)", () => {
+  it.each([
+    ["clientDataJSON=eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0", "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0"],
+    ['"attestationObject":"o2NmbXRkbm9uZWdhdHRTdG10oA"', "o2NmbXRkbm9uZWdhdHRTdG10oA"],
+    ["authenticatorData: SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2M", "SZYN5YgOjGh0NBcPZHZgW4"],
+    ["signature=MEUCIQDabc", "MEUCIQDabc"],
+    ["challenge_id=3f2c1b0a-1234-4abc-8def-0123456789ab", "3f2c1b0a-1234-4abc-8def-0123456789ab"],
+    ["challengeId: 3f2c1b0a-1234-4abc-8def-0123456789ab", "3f2c1b0a-1234-4abc-8def-0123456789ab"],
+    ['"challenge":"dGVzdC1jaGFsbGVuZ2U"', "dGVzdC1jaGFsbGVuZ2U"],
+    ["rawId=AQIDBA", "AQIDBA"],
+    ["userHandle=dXNlcg", "dXNlcg"],
+  ])("replaces the value of %s and keeps the key", (sample, secret) => {
+    const out = scrubTelemetryString(`passkey verify failed: ${sample} (ctx)`);
+    expect(out).not.toContain(secret);
+    expect(out).toContain(REDACTED);
+    expect(out).toContain("(ctx)");
+    const key = sample.split(/["'=:\s]/).find((p) => p.length > 0) ?? "";
+    expect(out).toContain(key);
+  });
+
+  it("leaves a plain outcome log line alone", () => {
+    const line = "passkey verify refused outcome=no_user_verification";
+    expect(scrubTelemetryString(line)).toBe(line);
   });
 });

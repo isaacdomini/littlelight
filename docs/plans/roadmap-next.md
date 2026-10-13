@@ -10,17 +10,17 @@ sensitive gate, no model calls for free albums) and the step-11 family model.
 
 | # | Decision | Value |
 | --- | --- | --- |
-| R1 | Next step after passkeys | **Billing (step 14), before any public release** (step-9 decision: billing is a separate step; until then Plus is granted by hand with `db:plan`) |
+| R1 | Next step after passkeys | **Billing before any public release** (step-9 decision: billing is a separate step; until then Plus is granted by hand with `db:plan`). Renumbered 2026-10-11: the user's live-updates request became **step 14** (`docs/plans/step-14.md`), so billing is **step 15** |
 | R2 | Plus scope when billing lands | **Per family** (one subscription covers twins/siblings; `families.id` exists; the pool already excludes Plus albums). Price stays $3.99/month |
 | R3 | Web checkout | **Stripe on web too** (PRD "Payments"; RevenueCat keeps entitlements in sync); native apps keep no purchase prompts until store review passes |
 | R4 | Android album sync (needs `READ_MEDIA_*` full-library permission and Play policy review) | **Deferred** until iOS sync has real users; Photo Picker path only |
 | R5 | Languages at launch | **English only**; keys are i18n-ready; first two languages picked later (Spanish, German likely) |
 | R6 | Printing / photo books | **Not before public launch** (PRD non-goal; needs a print partner, payments, address data) |
-| Order | 12 video → 13 passkeys → 14 billing + family-level Plus → 15 step-9 Part B + hardening → 16 Live Photos + real-time AI → 17 languages → 18 Android sync → printing later | **Accepted** |
+| Order | 12 video → 13 passkeys → 14 live updates (OTA web bundle; user request 2026-10-11) → 15 billing + family-level Plus → 16 step-9 Part B + hardening → 17 Live Photos + real-time AI → 18 languages → 19 Android sync → printing later | **Accepted** (14 inserted by the user's request; the rest shifts by one) |
 
 ## Candidates
 
-### A. Billing: RevenueCat (App Store / Play) + Stripe (web) — **M–L**, step 14
+### A. Billing: RevenueCat (App Store / Play) + Stripe (web) — **M–L**, step 15
 
 Entitlement webhooks (`REVENUECAT_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET` already in the env
 table) → a `subscriptions` table (FORCE RLS) → `babies.plan` / per-family plan (R2) with
@@ -42,7 +42,7 @@ Move `plan`, `plan_owner_user_id`, `entitlement_expires_at` from `babies` to `fa
 families only), `db:plan` (per family), and the usage lines. Depends on: R2, step 11 committed.
 Do it as part of A so the subscription key is created once.
 
-### C. Step 9 Part B: store release, Android runtime gate, go-live hardening — **M**, step 15
+### C. Step 9 Part B: store release, Android runtime gate, go-live hardening — **M**, step 16
 
 Everything in `docs/plans/step-9.md` 5.2 (Team ID, signing, APNs, Play Console, Firebase, AASA/
 assetlinks deploy, review account on production, listings), plus the open ops items: Android
@@ -113,13 +113,15 @@ account, tax handling.
 | --- | --- | --- | --- |
 | 12 | Video uploads | L | user request; drives storage planning before pricing |
 | 13 | Passkeys | M | user request; GoTrue-native, mostly web + API; native verification waits for Part B |
-| 14 | Billing (A) with family-level Plus (B) | M–L | required before any public release; one subscription key for families |
-| 15 | Step 9 Part B + go-live hardening (C) | M | needs the user's accounts; unblocks native passkeys, real push, store review |
-| 16 | Live Photos (D) + real-time AI path (F) | S + S–M | small, user-visible polish on top of 12 and the AI pipeline |
-| 17 | Languages (G) | M | after launch feedback decides the first locales |
-| 18 | Android album sync (E) | M | only if iOS sync usage justifies the permission-policy review |
+| 14 | Live updates: OTA web bundle (`docs/plans/step-14.md`) | M | user request 2026-10-11; a web deploy reaches the installed apps without a store release; in-house signed updater, no third-party service |
+| 15 | Billing (A) with family-level Plus (B) | M–L | required before any public release; one subscription key for families |
+| 16 | Step 9 Part B + go-live hardening (C) | M | needs the user's accounts; unblocks native passkeys, real push, store review |
+| 17 | Live Photos (D) + real-time AI path (F) | S + S–M | small, user-visible polish on top of 12 and the AI pipeline |
+| 18 | Languages (G) | M | after launch feedback decides the first locales |
+| 19 | Android album sync (E) | M | only if iOS sync usage justifies the permission-policy review |
 | later | Printing (H), follow-ups (I) | L / S | post-launch |
 
-Step 14 (billing + family-level Plus) is planned when step 13 is committed, on R1–R3 as decided
-above; steps 12 and 13 proceed now on the decisions recorded in their plans. Step 12's build
-starts only after the step-11 commit.
+Step 14 (live updates) is planned (`docs/plans/step-14.md`) and starts after the step-13 commit.
+Step 15 (billing + family-level Plus) is planned when step 14 is committed, on R1–R3 as decided
+above; steps 12 and 13 proceed on the decisions recorded in their plans. Step 12's build starts
+only after the step-11 commit.

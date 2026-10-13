@@ -69,3 +69,10 @@ export const INSTALL_ID_KEY = "ll.install.v1";
  * albumTitle, wifiOnly, paused }`. The album's PHAsset collection id stays on the device (D3).
  */
 export const SYNC_CONFIG_KEY = "ll.sync.v1";
+
+/**
+ * Secure-store / localStorage entry of the passkey enrol card (docs/plans/step-13.md 2.3, Q2):
+ * `{ snoozedUntil: <ISO date-time> }` only, never a credential, challenge or name. Listed in the
+ * native storage hygiene allow-list.
+ */
+export const PASSKEY_PROMPT_KEY = "ll.passkey.prompt.v1";

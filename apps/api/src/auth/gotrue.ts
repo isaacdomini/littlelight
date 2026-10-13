@@ -1,4 +1,12 @@
-import type { OAuthProvider } from "@tinyglow/shared";
+import {
+  type GoTruePasskey,
+  type GoTruePasskeyOptions,
+  goTruePasskeyListSchema,
+  goTruePasskeyOptionsSchema,
+  goTruePasskeySchema,
+  type OAuthProvider,
+  type PublicKeyCredentialJson,
+} from "@tinyglow/shared";
 import type { ApiConfig } from "../config";
 import { mintAdminJwt } from "./admin-jwt";
 
@@ -27,6 +35,13 @@ export interface GoTrueSession {
 export interface GoTrueUser {
   id: string;
   email: string | null;
+  /**
+   * Identity provider of the sign-in that produced this session (`apple`, `google`, `email`, …),
+   * read from the session body: the identity with the latest `last_sign_in_at`, else
+   * `app_metadata.provider`. Present only when GoTrue told us; used to record the OAuth
+   * `method` on `auth.sign_in` for the PKCE exchange, whose request body names no provider.
+   */
+  provider?: string;
 }
 
 export type VerifyInput =
@@ -91,18 +106,70 @@ export interface GeneratedMagicLink {
   hashedToken: string;
 }
 
+/** `{ challengeId, credential }` as the API received it; forwarded to GoTrue as `{ challenge_id, credential }`. */
+export interface PasskeyCeremonyInput {
+  challengeId: string;
+  credential: PublicKeyCredentialJson;
+}
+
+/**
+ * GoTrue's beta passkey routes (docs/plans/step-13.md 0.1, 2.4; verified against
+ * `supabase/auth:v2.197.0`). A separate interface, like `GoTrueReviewLinks`, so recording stubs
+ * written before step 13 still type-check; `createGoTrueClient` always implements it and the
+ * passkey routes fail closed (503) when the client in use does not (`hasPasskeys`). Wire shapes
+ * are parsed with the shared `goTruePasskey*` schemas: `expires_at` is Unix seconds (the routes
+ * convert, decision a), `GET /passkeys/` is a bare array, registration verify answers 200.
+ * Nothing here is logged; a `GoTrueError` carries status + `error_code` only.
+ */
+export interface GoTruePasskeys {
+  /** `POST /passkeys/authentication/options` (public). Forwards the client headers so GoTrue's own limiter keys on the browser IP (decision d). */
+  passkeyAuthOptions(upstream: UpstreamHeaders): Promise<GoTruePasskeyOptions>;
+  /** `POST /passkeys/authentication/verify` → a full session (AMR `passkey`). No GoTrue rate limit: the routes throttle. */
+  passkeyAuthVerify(input: PasskeyCeremonyInput, upstream: UpstreamHeaders): Promise<GoTrueSession>;
+  /** `POST /passkeys/registration/options` with the user's access token (body ignored by GoTrue). */
+  passkeyRegOptions(accessToken: string, upstream: UpstreamHeaders): Promise<GoTruePasskeyOptions>;
+  /** `POST /passkeys/registration/verify` (200 upstream) → the new passkey. */
+  passkeyRegVerify(
+    accessToken: string,
+    input: PasskeyCeremonyInput,
+    upstream: UpstreamHeaders,
+  ): Promise<GoTruePasskey>;
+  /** `GET /passkeys/` → the user's passkeys (bare array upstream). */
+  passkeyList(accessToken: string): Promise<GoTruePasskey[]>;
+  /** `PATCH /passkeys/{id} { friendly_name }` → the updated passkey. Unknown id: 404 `validation_failed`. */
+  passkeyRename(accessToken: string, id: string, name: string): Promise<GoTruePasskey>;
+  /** `DELETE /passkeys/{id}` → 204. Unknown id: 404 `validation_failed`. */
+  passkeyDelete(accessToken: string, id: string): Promise<void>;
+}
+
+export function hasPasskeys<T extends object>(client: T): client is T & GoTruePasskeys {
+  const c = client as Partial<GoTruePasskeys>;
+  return (
+    typeof c.passkeyAuthOptions === "function" &&
+    typeof c.passkeyAuthVerify === "function" &&
+    typeof c.passkeyRegOptions === "function" &&
+    typeof c.passkeyRegVerify === "function" &&
+    typeof c.passkeyList === "function" &&
+    typeof c.passkeyRename === "function" &&
+    typeof c.passkeyDelete === "function"
+  );
+}
+
 const SAFE_CODE = /^[A-Za-z0-9_]{1,64}$/;
 
 /** A GoTrue 4xx/5xx or transport failure. `code` is GoTrue's `error_code` or an errno, never text. */
 export class GoTrueError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Seconds from GoTrue's `Retry-After` on a 429 (`over_request_rate_limit`); undefined otherwise. */
+  readonly retryAfterSec: number | undefined;
 
-  constructor(status: number, code: string) {
+  constructor(status: number, code: string, retryAfterSec?: number) {
     super(`gotrue request failed (${status} ${code})`);
     this.name = "GoTrueError";
     this.status = status;
     this.code = code;
+    this.retryAfterSec = retryAfterSec;
   }
 
   get isClientError(): boolean {
@@ -130,6 +197,31 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
+/** Longest `Retry-After` the API will relay (an hour: GoTrue's limiter windows are 5 min / 1 h). */
+const RETRY_AFTER_MAX_SEC = 3600;
+
+/**
+ * `Retry-After` of a GoTrue response as whole seconds, 1..`RETRY_AFTER_MAX_SEC`: a delta-seconds
+ * value or an HTTP-date; anything else (absent, garbage, in the past) ⇒ undefined. Exported for tests.
+ */
+export function retryAfterSecOf(
+  header: string | null,
+  nowMs: number = Date.now(),
+): number | undefined {
+  if (!header) return undefined;
+  const raw = header.trim();
+  let sec: number;
+  if (/^\d{1,7}$/.test(raw)) {
+    sec = Number(raw);
+  } else {
+    const at = Date.parse(raw);
+    if (Number.isNaN(at)) return undefined;
+    sec = Math.ceil((at - nowMs) / 1000);
+  }
+  if (!Number.isFinite(sec) || sec < 1) return undefined;
+  return Math.min(RETRY_AFTER_MAX_SEC, Math.ceil(sec));
+}
+
 function toSession(body: unknown): GoTrueSession {
   if (!isRecord(body)) throw new GoTrueError(502, "bad_session_body");
   const { access_token, refresh_token, expires_in, user } = body;
@@ -143,12 +235,35 @@ function toSession(body: unknown): GoTrueSession {
     throw new GoTrueError(502, "bad_session_body");
   }
   const email = typeof user.email === "string" && user.email !== "" ? user.email : null;
+  const provider = providerOf(user);
   return {
     accessToken: access_token,
     refreshToken: refresh_token,
     expiresIn: expires_in,
-    user: { id: user.id, email },
+    user: { id: user.id, email, ...(provider ? { provider } : {}) },
   };
+}
+
+/** Provider of the identity used for this sign-in (latest `last_sign_in_at`), else `app_metadata.provider`. */
+function providerOf(user: Record<string, unknown>): string | undefined {
+  let best: { provider: string; at: number } | undefined;
+  if (Array.isArray(user.identities)) {
+    for (const ident of user.identities) {
+      if (!isRecord(ident)) continue;
+      const provider = safeCode(ident.provider, "");
+      if (!provider) continue;
+      const at =
+        typeof ident.last_sign_in_at === "string" ? Date.parse(ident.last_sign_in_at) : NaN;
+      const score = Number.isNaN(at) ? -1 : at;
+      if (!best || score > best.at) best = { provider, at: score };
+    }
+  }
+  if (best) return best.provider;
+  if (isRecord(user.app_metadata)) {
+    const p = safeCode(user.app_metadata.provider, "");
+    if (p) return p;
+  }
+  return undefined;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -169,6 +284,32 @@ function toGeneratedLink(body: unknown): GeneratedMagicLink {
   return { userId: id.toLowerCase(), hashedToken: hashed_token };
 }
 
+// Passkey wire shapes (v2.197.0, docs/plans/step-13.md 0.1). A body that does not parse is a 502
+// `bad_passkey_body`: the routes map it like any other upstream failure, never echoing it.
+
+function toPasskeyOptions(body: unknown): GoTruePasskeyOptions {
+  const parsed = goTruePasskeyOptionsSchema.safeParse(body);
+  if (!parsed.success) throw new GoTrueError(502, "bad_passkey_body");
+  return parsed.data;
+}
+
+function toPasskey(body: unknown): GoTruePasskey {
+  const parsed = goTruePasskeySchema.safeParse(body);
+  if (!parsed.success) throw new GoTrueError(502, "bad_passkey_body");
+  return parsed.data;
+}
+
+function toPasskeyList(body: unknown): GoTruePasskey[] {
+  // GoTrue answers `null` for a user without passkeys in some versions; treat it as empty.
+  const parsed = goTruePasskeyListSchema.safeParse(body ?? []);
+  if (!parsed.success) throw new GoTrueError(502, "bad_passkey_body");
+  return parsed.data;
+}
+
+function ceremonyBody(input: PasskeyCeremonyInput): Record<string, unknown> {
+  return { challenge_id: input.challengeId, credential: input.credential };
+}
+
 export interface GoTrueClientOptions {
   /** Per-request timeout; GoTrue is on the internal network and should answer in milliseconds. */
   timeoutMs?: number;
@@ -181,13 +322,13 @@ type GoTrueConfig = Pick<ApiConfig, "AUTH_INTERNAL_URL" | "JWT_SECRET" | "PUBLIC
 export function createGoTrueClient(
   config: GoTrueConfig,
   options: GoTrueClientOptions = {},
-): GoTrueClient & GoTrueReviewLinks {
+): GoTrueClient & GoTrueReviewLinks & GoTruePasskeys {
   const base = config.AUTH_INTERNAL_URL.replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? 10_000;
   const doFetch = options.fetch ?? fetch;
 
   async function call(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body: unknown,
     headers: Record<string, string>,
@@ -225,7 +366,13 @@ export function createGoTrueClient(
         parsed = undefined;
       }
     }
-    if (!res.ok) throw new GoTrueError(res.status, errorCodeOf(parsed, res.status));
+    if (!res.ok) {
+      throw new GoTrueError(
+        res.status,
+        errorCodeOf(parsed, res.status),
+        res.status === 429 ? retryAfterSecOf(res.headers.get("retry-after")) : undefined,
+      );
+    }
     return parsed;
   }
 
@@ -305,6 +452,65 @@ export function createGoTrueClient(
           { authorization: `Bearer ${jwt}` },
         ),
       );
+    },
+
+    // Passkeys (docs/plans/step-13.md 2.4). The user's own access token authenticates the
+    // registration and management routes; the authentication routes are public.
+    async passkeyAuthOptions(upstream) {
+      return toPasskeyOptions(
+        await call("POST", "/passkeys/authentication/options", {}, { ...upstream }),
+      );
+    },
+
+    async passkeyAuthVerify(input, upstream) {
+      return toSession(
+        await call("POST", "/passkeys/authentication/verify", ceremonyBody(input), {
+          ...upstream,
+        }),
+      );
+    },
+
+    async passkeyRegOptions(accessToken, upstream) {
+      return toPasskeyOptions(
+        await call(
+          "POST",
+          "/passkeys/registration/options",
+          {},
+          { ...upstream, authorization: `Bearer ${accessToken}` },
+        ),
+      );
+    },
+
+    async passkeyRegVerify(accessToken, input, upstream) {
+      return toPasskey(
+        await call("POST", "/passkeys/registration/verify", ceremonyBody(input), {
+          ...upstream,
+          authorization: `Bearer ${accessToken}`,
+        }),
+      );
+    },
+
+    async passkeyList(accessToken) {
+      return toPasskeyList(
+        await call("GET", "/passkeys/", undefined, { authorization: `Bearer ${accessToken}` }),
+      );
+    },
+
+    async passkeyRename(accessToken, id, name) {
+      return toPasskey(
+        await call(
+          "PATCH",
+          `/passkeys/${encodeURIComponent(id)}`,
+          { friendly_name: name },
+          { authorization: `Bearer ${accessToken}` },
+        ),
+      );
+    },
+
+    async passkeyDelete(accessToken, id) {
+      await call("DELETE", `/passkeys/${encodeURIComponent(id)}`, undefined, {
+        authorization: `Bearer ${accessToken}`,
+      });
     },
   };
 }

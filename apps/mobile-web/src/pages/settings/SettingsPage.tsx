@@ -8,6 +8,7 @@ import { FreeTierNotice } from "../../components/FreeTierNotice";
 import { Button } from "../../components/ui";
 import { t } from "../../i18n";
 import { useGoogleConnection } from "../../lib/googleImport";
+import { usePasskeySupport } from "../../lib/passkeys";
 import { useAppleSyncAvailable } from "../../lib/queries/imports";
 import { isNative } from "../../platform/platform";
 import { usePushKinds } from "./NotificationsPage";
@@ -22,6 +23,7 @@ export function SettingsPage() {
   // Google import: any member who can add photos, when the server offers it.
   const google = useGoogleConnection(baby?.role === "admin" || baby?.role === "contributor");
   const googleImport = google.data?.available === true;
+  const passkeys = usePasskeySupport();
   const rows: (readonly [string, string, string])[] = [
     ...(native && (kinds.shareViewed || kinds.photosAnalyzed)
       ? ([["settings-notifications", "/settings/notifications", t("push.settings.row")]] as const)
@@ -35,7 +37,15 @@ export function SettingsPage() {
     ...(baby?.role === "admin"
       ? ([["settings-export", "/settings/export", t("settings.export")]] as const)
       : []),
+    // Passkeys (step 13): only when the server offers them and this device can use them.
+    ...(passkeys.enabled === true
+      ? ([["settings-passkeys", "/settings/passkeys", t("passkey.settings.row")]] as const)
+      : []),
     ["settings-devices", "/settings/devices", t("settings.devices")],
+    // Native: how large videos leave the phone (step 12 Q6 follow-up).
+    ...(native
+      ? ([["settings-uploads", "/settings/uploads", t("settings.uploads")]] as const)
+      : []),
     // Account deletion must be easy to find in the app (App Store 5.1.1(v)).
     [
       "settings-account",

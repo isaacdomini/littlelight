@@ -28,7 +28,14 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@tinyglow/worker..."
 
 # ---------------------------------------------------------------------------
+# ffmpeg/ffprobe (docs/plans/step-12.md 2.6, 2.10): video ingest (probe, poster, keyframes) and
+# the H.264/AAC web rendition. Alpine 3.24's ffmpeg 8.1 is built with --enable-libx264 and
+# --enable-libzimg (zscale + tonemap filters, needed for the HDR tone-map chain). Same package in
+# dev and prod so both images run the same binary; +~103 MiB installed (the package pulls in its
+# full codec/filter set; there is no slimmer Alpine ffmpeg). The worker spawns the binaries by
+# name (FFMPEG_PATH / FFPROBE_PATH default ffmpeg / ffprobe); the demo clip renderer uses them too.
 FROM base AS dev
+RUN apk add --no-cache ffmpeg
 ENV NODE_ENV=development
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
@@ -52,7 +59,10 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS prod
-RUN apk add --no-cache tini
+# tini (PID 1) + ffmpeg/ffprobe (see the dev stage comment). Runs as `node` (uid 1000) with a
+# read-only root filesystem: ffmpeg writes only to /scratch (WORKER_SCRATCH_PATH bind mount) and
+# /tmp (tmpfs), never to the image.
+RUN apk add --no-cache tini ffmpeg
 ENV NODE_ENV=production
 WORKDIR /repo
 # Root-owned and read-only for the runtime user.

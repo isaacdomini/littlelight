@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { testConfig } from "../testing/support";
-import { createGoTrueClient, GoTrueError } from "./gotrue";
+import { createGoTrueClient, GoTrueError, retryAfterSecOf } from "./gotrue";
 
 interface Call {
   url: string;
@@ -253,5 +253,257 @@ describe("createGoTrueClient", () => {
     const f = fakeFetch(() => Response.json({ ...sessionBody, user: { id: "u", email: "" } }));
     const client = createGoTrueClient(testConfig(), { fetch: f.fn });
     expect((await client.refresh("r", UP)).user.email).toBeNull();
+  });
+});
+
+// ---- step 13: passkeys (docs/plans/step-13.md 0.1, 2.4) ----------------------------------------
+
+describe("createGoTrueClient passkeys", () => {
+  const PK = "3f2c1b0a-1234-4abc-8def-0123456789ab";
+  const CH = "7e1d2c3b-4a5f-4e6d-8c7b-0a1b2c3d4e5f";
+  const optionsBody = {
+    challenge_id: CH,
+    options: { challenge: "dGVzdA", rpId: "localhost", userVerification: "preferred" },
+    expires_at: 1_760_000_000,
+  };
+  const credential = {
+    id: "AQIDBA",
+    rawId: "AQIDBA",
+    type: "public-key" as const,
+    response: { clientDataJSON: "eyJ0IjoxfQ", authenticatorData: "AAAA", signature: "BBBB" },
+    clientExtensionResults: {},
+  };
+
+  it("passkeyAuthOptions posts to /passkeys/authentication/options with the client headers (decision d) and keeps Unix seconds", async () => {
+    const f = fakeFetch(() => Response.json(optionsBody));
+    const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+    const o = await client.passkeyAuthOptions(UP);
+    expect(o).toEqual(optionsBody);
+    expect(typeof o.expires_at).toBe("number");
+    const call = f.calls[0];
+    expect(call?.url).toBe("http://auth:9999/passkeys/authentication/options");
+    expect(call?.init.method).toBe("POST");
+    expect(JSON.parse(String(call?.init.body))).toEqual({});
+    const h = headersOf(call);
+    expect(h["x-forwarded-for"]).toBe("203.0.113.5");
+    expect(h["user-agent"]).toBe("UA");
+    expect(h.authorization).toBeUndefined();
+  });
+
+  it("passkeyAuthVerify posts { challenge_id, credential } and maps the session", async () => {
+    const f = fakeFetch(() => Response.json(sessionBody));
+    const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+    const s = await client.passkeyAuthVerify({ challengeId: CH, credential }, UP);
+    expect(s.accessToken).toBe("AT");
+    expect(s.user).toEqual({ id: sessionBody.user.id, email: "a@b.co" });
+    const call = f.calls[0];
+    expect(call?.url).toBe("http://auth:9999/passkeys/authentication/verify");
+    expect(JSON.parse(String(call?.init.body))).toEqual({ challenge_id: CH, credential });
+    expect(headersOf(call).authorization).toBeUndefined();
+    expect(headersOf(call)["x-forwarded-for"]).toBe("203.0.113.5");
+  });
+
+  it("passkeyRegOptions / passkeyRegVerify carry the user's bearer token; verify accepts GoTrue's 200", async () => {
+    const f = fakeFetch((c) =>
+      c.url.endsWith("/registration/options")
+        ? Response.json(optionsBody)
+        : Response.json({ id: PK, friendly_name: "x", created_at: "2026-10-11T12:34:56.123456Z" }),
+    );
+    const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+    const o = await client.passkeyRegOptions("user-at", UP);
+    expect(o.challenge_id).toBe(CH);
+    const created = await client.passkeyRegVerify("user-at", { challengeId: CH, credential }, UP);
+    expect(created).toEqual({
+      id: PK,
+      friendly_name: "x",
+      created_at: "2026-10-11T12:34:56.123456Z",
+    });
+    expect(f.calls.map((c) => c.url)).toEqual([
+      "http://auth:9999/passkeys/registration/options",
+      "http://auth:9999/passkeys/registration/verify",
+    ]);
+    for (const c of f.calls) {
+      expect(c.init.method).toBe("POST");
+      expect(headersOf(c).authorization).toBe("Bearer user-at");
+      expect(headersOf(c)["x-forwarded-for"]).toBe("203.0.113.5");
+    }
+    expect(JSON.parse(String(f.calls[0]?.init.body))).toEqual({});
+    expect(JSON.parse(String(f.calls[1]?.init.body))).toEqual({ challenge_id: CH, credential });
+  });
+
+  it("passkeyList GETs /passkeys/ (trailing slash) with the bearer and parses the bare array", async () => {
+    const f = fakeFetch(() =>
+      Response.json([
+        { id: PK, created_at: "2026-10-11T12:34:56Z" },
+        {
+          id: CH,
+          friendly_name: "Laptop",
+          created_at: "2026-10-10T00:00:00Z",
+          last_used_at: "2026-10-11T00:00:00Z",
+        },
+      ]),
+    );
+    const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+    const list = await client.passkeyList("user-at");
+    expect(list).toHaveLength(2);
+    expect(list[0]).toEqual({ id: PK, created_at: "2026-10-11T12:34:56Z" });
+    expect(list[1]?.friendly_name).toBe("Laptop");
+    const call = f.calls[0];
+    expect(call?.url).toBe("http://auth:9999/passkeys/");
+    expect(call?.init.method).toBe("GET");
+    expect(call?.init.body).toBeUndefined();
+    expect(headersOf(call).authorization).toBe("Bearer user-at");
+    expect(headersOf(call)["content-type"]).toBeUndefined();
+  });
+
+  it("passkeyList: a null body is an empty list; an object body is a 502 bad_passkey_body", async () => {
+    const nul = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(
+        () =>
+          new Response("null", { status: 200, headers: { "content-type": "application/json" } }),
+      ).fn,
+    });
+    expect(await nul.passkeyList("t")).toEqual([]);
+    const empty = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(() => new Response("", { status: 200 })).fn,
+    });
+    expect(await empty.passkeyList("t")).toEqual([]);
+    const obj = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(() => Response.json({ passkeys: [] })).fn,
+    });
+    await expect(obj.passkeyList("t")).rejects.toMatchObject({
+      status: 502,
+      code: "bad_passkey_body",
+    });
+    const badItem = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(() => Response.json([{ id: "not-a-uuid", created_at: "x" }])).fn,
+    });
+    await expect(badItem.passkeyList("t")).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("passkeyRename PATCHes { friendly_name } to /passkeys/{id}; passkeyDelete DELETEs and accepts 204", async () => {
+    const f = fakeFetch((c) =>
+      c.init.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : Response.json({ id: PK, friendly_name: "New", created_at: "2026-10-11T12:34:56Z" }),
+    );
+    const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+    const renamed = await client.passkeyRename("user-at", PK, "New");
+    expect(renamed.friendly_name).toBe("New");
+    await client.passkeyDelete("user-at", PK);
+    expect(f.calls.map((c) => [c.init.method, c.url])).toEqual([
+      ["PATCH", `http://auth:9999/passkeys/${PK}`],
+      ["DELETE", `http://auth:9999/passkeys/${PK}`],
+    ]);
+    expect(JSON.parse(String(f.calls[0]?.init.body))).toEqual({ friendly_name: "New" });
+    for (const c of f.calls) expect(headersOf(c).authorization).toBe("Bearer user-at");
+    expect(f.calls[1]?.init.body).toBeUndefined();
+  });
+
+  it("URL-encodes the passkey id (no path injection)", async () => {
+    const f = fakeFetch(() => new Response(null, { status: 204 }));
+    const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+    await client.passkeyDelete("t", "../admin/users?x=1");
+    expect(f.calls[0]?.url).toBe("http://auth:9999/passkeys/..%2Fadmin%2Fusers%3Fx%3D1");
+  });
+
+  it("options bodies that are not GoTrue's shape (ISO expires_at, missing challenge_id) are 502", async () => {
+    for (const body of [
+      { ...optionsBody, expires_at: "2026-10-11T12:00:00Z" },
+      { options: {}, expires_at: 1 },
+      { challenge_id: "nope", options: {}, expires_at: 1 },
+      [],
+      "text",
+    ]) {
+      const client = createGoTrueClient(testConfig(), {
+        fetch: fakeFetch(() => Response.json(body)).fn,
+      });
+      await expect(client.passkeyAuthOptions(UP)).rejects.toMatchObject({
+        status: 502,
+        code: "bad_passkey_body",
+      });
+    }
+  });
+
+  it("reduces GoTrue error bodies to (status, error_code) for every passkey route, never the message", async () => {
+    const cases: [number, string][] = [
+      [404, "passkey_disabled"],
+      [400, "webauthn_verification_failed"],
+      [400, "webauthn_challenge_expired"],
+      [422, "too_many_passkeys"],
+      [422, "webauthn_credential_exists"],
+      [404, "validation_failed"],
+      [403, "insufficient_aal"],
+    ];
+    for (const [status, code] of cases) {
+      const f = fakeFetch(() =>
+        Response.json(
+          { code: status, error_code: code, msg: `Secret detail for a@b.co ${code}` },
+          { status },
+        ),
+      );
+      const client = createGoTrueClient(testConfig(), { fetch: f.fn });
+      const err = await client
+        .passkeyAuthVerify({ challengeId: CH, credential }, UP)
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(GoTrueError);
+      expect(err).toMatchObject({ status, code });
+      expect(err.message).not.toContain("a@b.co");
+      expect(err.message).not.toContain("Secret");
+    }
+    // the 500 "Failed to initialize WebAuthn" misconfiguration (0.1, decision e) is a 500 http_500
+    const misconfigured = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(() =>
+        Response.json({ code: 500, msg: "Failed to initialize WebAuthn" }, { status: 500 }),
+      ).fn,
+    });
+    await expect(misconfigured.passkeyAuthOptions(UP)).rejects.toMatchObject({
+      status: 500,
+      code: "http_500",
+    });
+  });
+});
+
+describe("retryAfterSecOf (GoTrue 429 Retry-After)", () => {
+  const now = Date.parse("2026-10-11T12:00:00Z");
+  it("delta seconds, HTTP-date in the future, and the 1 h clamp", () => {
+    expect(retryAfterSecOf("120", now)).toBe(120);
+    expect(retryAfterSecOf(" 45 ", now)).toBe(45);
+    expect(retryAfterSecOf(new Date(now + 90_000).toUTCString(), now)).toBe(90);
+    // clamp at 1 h; the delta form accepts 1..7 digits (an 8-digit value is treated as garbage)
+    expect(retryAfterSecOf("9999999", now)).toBe(3600);
+    expect(retryAfterSecOf("99999999", now)).toBeUndefined();
+  });
+
+  it("past dates, garbage and an absent header are undefined", () => {
+    expect(retryAfterSecOf(new Date(now - 60_000).toUTCString(), now)).toBeUndefined();
+    expect(retryAfterSecOf("soon", now)).toBeUndefined();
+    expect(retryAfterSecOf("", now)).toBeUndefined();
+    expect(retryAfterSecOf(null, now)).toBeUndefined();
+    expect(retryAfterSecOf("-5", now)).toBeUndefined();
+  });
+
+  it("the client attaches retryAfterSec to a 429 GoTrueError (and only to a 429)", async () => {
+    const limited = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(() =>
+        Response.json(
+          { code: 429, error_code: "over_request_rate_limit", msg: "x" },
+          { status: 429, headers: { "retry-after": "120" } },
+        ),
+      ).fn,
+    });
+    const err = await limited.passkeyAuthOptions(UP).catch((e) => e);
+    expect(err).toBeInstanceOf(GoTrueError);
+    expect(err).toMatchObject({ status: 429, code: "over_request_rate_limit", retryAfterSec: 120 });
+    const plain = createGoTrueClient(testConfig(), {
+      fetch: fakeFetch(() =>
+        Response.json(
+          { error_code: "user_banned" },
+          { status: 403, headers: { "retry-after": "120" } },
+        ),
+      ).fn,
+    });
+    const e2 = await plain.passkeyAuthOptions(UP).catch((e) => e);
+    expect(e2.retryAfterSec).toBeUndefined();
   });
 });

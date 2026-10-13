@@ -192,7 +192,7 @@ export function UploadPage() {
     const files = Array.from(list);
     if (files.length === 0) return;
     setTooMany(files.length > UPLOAD_MAX_FILES_PER_SESSION);
-    uploadManager.add(babyId, files, toDetails(form));
+    uploadManager.add(babyId, files, toDetails(form), { plan: baby?.plan });
   };
 
   const addNativeOutcome = (out: PickOutcome, source: "library" | "camera") => {
@@ -205,7 +205,9 @@ export function UploadPage() {
     } else if (out.status === "picked" && babyId) {
       setPickMessage(out.failed > 0 ? t("native.upload.skipped", { n: out.failed }) : null);
       setTooMany(false);
-      if (out.files.length > 0) uploadManager.addNative(babyId, out.files, toDetails(form));
+      if (out.files.length > 0) {
+        uploadManager.addNative(babyId, out.files, toDetails(form), { plan: baby?.plan });
+      }
     }
   };
 
@@ -237,7 +239,7 @@ export function UploadPage() {
   const resumeFiles = (list: FileList | null) => {
     if (!babyId || !list || list.length === 0) return;
     setResumable(false);
-    void uploadManager.resume(babyId, Array.from(list), toDetails(form));
+    void uploadManager.resume(babyId, Array.from(list), toDetails(form), { plan: baby?.plan });
   };
 
   const onDrop = (e: DragEvent) => {
@@ -377,6 +379,12 @@ export function UploadPage() {
                       </div>
                       <p className="text-sm text-muted">{t("native.upload.primer")}</p>
                       <p className="text-sm text-muted">{t("upload.limitHint")}</p>
+                      <p className="text-sm text-muted" data-testid="upload-video-hint">
+                        {t(
+                          baby.plan === "free" ? "upload.videoHint.free" : "upload.videoHint.plus",
+                        )}{" "}
+                        {t("upload.wifiOnly")}
+                      </p>
                       <p className="text-sm text-muted" data-testid="upload-background-note">
                         {t("native.upload.background")}
                       </p>
@@ -401,7 +409,16 @@ export function UploadPage() {
                       <p className="hidden text-sm text-muted [@media(pointer:fine)]:block">
                         {dragging ? t("upload.dropActive") : t("upload.dropHint")}
                       </p>
-                      <p className="text-sm text-muted">{t("upload.limitHint")}</p>
+                      <p className="text-sm text-muted">
+                        {t("upload.limitHint")}{" "}
+                        <span data-testid="upload-video-hint">
+                          {t(
+                            baby.plan === "free"
+                              ? "upload.videoHint.free"
+                              : "upload.videoHint.plus",
+                          )}
+                        </span>
+                      </p>
                     </>
                   )}
                   {isContributor ? (
@@ -521,6 +538,7 @@ export function UploadPage() {
                           item={item}
                           onRetry={(id) => uploadManager.retry(id)}
                           onCancel={(id) => uploadManager.cancel(id)}
+                          onWifiOnly={(id, w) => uploadManager.setWifiOnly(id, w)}
                         />
                       ))}
                     </ul>

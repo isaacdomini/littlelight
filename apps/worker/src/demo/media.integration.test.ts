@@ -75,14 +75,14 @@ describe.skipIf(!integrationEnv)("demo media (real database + object storage)", 
   });
 
   describe("ensureDemoMedia (dev family)", () => {
-    it("writes 12 originals and 36 derivatives, all JPEG and metadata-free, rows matching", async () => {
+    it("writes 13 originals (12 JPEGs + the clip) and 43 derivatives, all metadata-free, rows matching", async () => {
       // start from nothing
       await h.storage.deleteAllVersions(babyPrefix(db.DEMO.baby));
       const r = await ensureDemoMedia(mediaDeps());
       expect(r).toMatchObject({
-        photos: 12,
-        originalsWritten: 12,
-        derivativesWritten: 36,
+        photos: 13,
+        originalsWritten: 13,
+        derivativesWritten: 43,
         failed: 0,
       });
 
@@ -90,8 +90,19 @@ describe.skipIf(!integrationEnv)("demo media (real database + object storage)", 
         "SELECT id, mime, storage_key_original AS key, width, height, bytes FROM public.photos WHERE baby_id = $1 ORDER BY id",
         [db.DEMO.baby],
       );
-      expect(rows.rows).toHaveLength(12);
+      expect(rows.rows).toHaveLength(13);
       for (const row of rows.rows) {
+        if (row.mime === "video/mp4") {
+          // the demo clip: original .mp4, poster derivatives + keyframes + the web rendition
+          expect(row.key).toBe(`babies/${db.DEMO.baby}/originals/${row.id}.mp4`);
+          const bytes = await h.storage.getObject(row.key);
+          expect(bytes.byteLength).toBe(Number(row.bytes));
+          for (const kind of ["thumb", "display", "analysis"] as const) {
+            const d = await h.storage.getObject(derivativeKey(db.DEMO.baby, row.id, kind));
+            expect(await isMetadataFree(d), `${row.id} ${kind}`).toBe(true);
+          }
+          continue;
+        }
         expect(row.mime).toBe("image/jpeg");
         expect(row.key).toBe(`babies/${db.DEMO.baby}/originals/${row.id}.jpg`);
         const bytes = await h.storage.getObject(row.key);
@@ -109,19 +120,19 @@ describe.skipIf(!integrationEnv)("demo media (real database + object storage)", 
         "SELECT count(*)::int n FROM public.photo_derivatives WHERE photo_id = ANY($1::uuid[])",
         [[...DEMO_IDS.photos]],
       );
-      expect(derivRows.rows[0]?.n).toBe(36);
+      expect(derivRows.rows[0]?.n).toBe(43);
       expect(checkPassed(await checkDemoMedia(mediaDeps()))).toBe(true);
     }, 120_000);
 
     it("is idempotent: a second run reads and HEADs only", async () => {
       const r = await ensureDemoMedia(mediaDeps());
       expect(r).toMatchObject({
-        photos: 12,
+        photos: 13,
         originalsWritten: 0,
         derivativesWritten: 0,
         derivativeRowsFixed: 0,
         photoRowsUpdated: 0,
-        unchanged: 12,
+        unchanged: 13,
         failed: 0,
       });
     }, 120_000);
@@ -129,7 +140,7 @@ describe.skipIf(!integrationEnv)("demo media (real database + object storage)", 
     it("a re-seed keeps the real sizes (nothing to repair)", async () => {
       await db.seed({ env: env(), databaseUrl: integrationEnv?.databaseUrl, log: quiet });
       const r = await ensureDemoMedia(mediaDeps());
-      expect(r.unchanged).toBe(12);
+      expect(r.unchanged).toBe(13);
       expect(r.originalsWritten + r.derivativesWritten).toBe(0);
     }, 120_000);
 
@@ -161,7 +172,7 @@ describe.skipIf(!integrationEnv)("demo media (real database + object storage)", 
       const photo = db.DEMO.photo(7);
       await h.deleteObject(derivativeKey(db.DEMO.baby, photo, "thumb"));
       const c = await checkDemoMedia(mediaDeps());
-      expect(c.derivatives).toBe(35);
+      expect(c.derivatives).toBe(42);
       expect(checkPassed(c)).toBe(false);
       await ensureDemoMedia(mediaDeps());
       expect(checkPassed(await checkDemoMedia(mediaDeps()))).toBe(true);

@@ -28,19 +28,75 @@ All commands from the repo root with the pnpm on PATH (`export PATH="$HOME/.cach
 
 ## Uploads (in-house uploader)
 
-Photo bytes are uploaded by our own `TinyglowUploader` Capacitor plugin, not a third-party one
-(`@capgo/capacitor-uploader` was removed). It does a raw-body `PUT` of the file to a presigned URL
-(no multipart, no extra headers) and reports `progress`, `done` and `error` events.
+Photo and video bytes are uploaded by our own `TinyglowUploader` Capacitor plugin, not a third-party
+one (`@capgo/capacitor-uploader` was removed). It does a raw-body `PUT` of a byte range of a file to a
+presigned URL (no multipart, no extra headers) and reports `progress`, `done` and `error` events.
 
-- iOS: `ios/App/App/TinyglowUploader.swift`, a background `URLSession`
-  (`app.tinyglow.upload`), so uploads continue after the app is suspended and the system
-  can relaunch the app to deliver results.
-- Android: `TinyglowUploaderPlugin.java` and `UploadWorker.java` (expedited WorkManager work
-  promoted to a visible `dataSync` foreground service, "Uploading N photos").
+### Plugin interface (`TinyglowUploader`, both platforms)
+
+```ts
+upload(opts: {
+  url: string;        // presigned UploadPart URL (http/https)
+  path: string;       // file:// URI or path (iOS, Android); content:// URI also works on Android
+  offset?: number;    // first byte of the part, default 0
+  length?: number;    // bytes in the part, default "to the end of the file"
+  wifiOnly?: boolean; // iOS: the no-cellular background session; Android: UNMETERED constraint
+}): Promise<{ id: string }>;
+cancel(opts: { id: string }): Promise<void>;
+pendingParts(): Promise<{ count: number }>;   // iOS: part copies still on disk; Android: always 0
+// events
+"progress" { id, sent, total }   // total = the part's length
+"done"     { id, status }        // HTTP status of the PUT
+"error"    { id, message }       // "network:<NSURLError code>" (iOS) | "network" | "cancelled" | "file-unreadable" | "bad-range"
+// upload() rejections: bad-args, file-unreadable, bad-range (offset/length leave the file),
+//                      no-space (iOS: not enough free space for the part copy), part-write (iOS)
+```
+
+One `upload()` call is one part; the JS upload manager (`src/lib/upload/manager.ts`, step 12.8)
+splits a file with `partSize` from the api (`UPLOAD_PART_BYTES`, 16 MiB; `partCount = ceil(bytes /
+16 MiB)`, at most 128) and calls `upload` per part with `offset = (n - 1) * partSize`,
+`length = min(partSize, bytes - offset)`. A single-part file (`offset` 0, `length` = size, or both
+omitted) is sent straight from the source on both platforms, exactly as before step 12. Resume after a
+kill: the manager asks the api for `uploadedPartNumbers` (`GET …/parts`) and re-sends only the
+missing parts; the plugin keeps no part table of its own. Q6: the manager passes `wifiOnly: true`
+for items above `VIDEO_LARGE_FILE_BYTES` (50 MiB) unless the parent flips that upload's "Use
+cellular" switch ("Videos over 50 MB upload on Wi-Fi. Use cellular for this one.").
+
+- iOS (`ios/App/App/TinyglowUploader.swift`, `LLPartFile.swift`): background `URLSession`s
+  (`app.tinyglow.upload`, `app.tinyglow.upload.wifi`), so uploads continue after the app is
+  suspended and the system can relaunch the app to deliver results. A background upload task needs a
+  file body, so a ranged part is first copied (1 MiB chunks, protected until first unlock) to
+  `Caches/ll-uploads/parts/<task id>.part`; the copy is deleted in `didCompleteWithError` (success,
+  failure or cancel), and `load()` sweeps copies whose task the sessions no longer know (plus anything
+  older than a day). Peak scratch use is one 16 MiB copy per in-flight part, never the whole video.
+  The copy is refused with `no-space` when the volume has less than `length + 64 MiB` free.
+  `sh ios/scripts/part-file-harness.sh` runs the slicing/deletion harness on the host (no simulator).
+- Android (`TinyglowUploaderPlugin.java`, `UploadWorker.java`, `ByteRange.java`): one WorkManager
+  request per part (expedited, promoted to a visible `dataSync` foreground service, notification
+  "Uploading photos and videos" with no count, because a count would count parts). The worker seeks
+  the source (`RandomAccessFile` for files, a positioned descriptor or `skipFully` for `content://`)
+  and streams exactly `length` bytes with `setFixedLengthStreamingMode`: no copy, nothing to delete.
+  A source that ends early fails with `file-unreadable` (no retry); network errors retry twice.
+  `./gradlew testDebugUnitTest --tests 'app.tinyglow.uploader.*'` runs `ByteRangeTest`.
 - Presigned URLs carry a signature: neither side logs URLs or paths. The web layer is
   `src/platform/native/nativeUploader.ts`.
 - After changing plugin dependencies run `pnpm --filter @tinyglow/mobile-web native:sync` so
   `ios/App/CapApp-SPM/Package.swift` and `android/app/capacitor.build.gradle` match.
+
+### Picking videos (`@capawesome/capacitor-file-picker`)
+
+The JS picker should call `FilePicker.pickMedia({ limit, readData: false, skipTranscoding: true })`
+instead of `pickImages` when videos are allowed. Verified in the 8.1.0 sources: iOS uses
+`PHPickerViewController` with `preferredAssetRepresentationMode = .current` (the original HEVC
+`.mov` as shot, no re-encode) and reads `duration` with `AVAsset` (whole seconds, rounded); Android
+uses the system Photo Picker (`PickVisualMedia.ImageAndVideo`, no `READ_MEDIA_*` permission) and
+`MediaMetadataRetriever` for `duration` (seconds). Each `PickedFile` carries `name`, `size`,
+`mimeType` (`video/quicktime` or `video/mp4`), `duration`; multiply by 1000 for the `durationMs`
+hint, or read it precisely from a `<video>` element on `convertFileSrc(path)`. Q5: a Live Photo picked
+this way is an image item and uploads its HEIC only. Note for the JS side: the plugin already copies
+the picked movie into its own temp dir; `copyIntoUploadCache` makes a second copy. For videos prefer
+`Filesystem.rename` (a move) into `ll-uploads`, so a 2 GB clip never needs 4 GB of free space.
+No new permission on either platform; `Info.plist` strings say "photos and videos".
 
 ## Icons and splash
 
@@ -93,9 +149,14 @@ debug source set only.
 
 ## Placeholders to replace later (need store accounts)
 
-- `public/.well-known/apple-app-site-association`: replace `APPLE_TEAM_ID`.
-- `public/.well-known/assetlinks.json`: replace `PLAY_APP_SIGNING_SHA256` and `UPLOAD_KEY_SHA256`.
+- `public/.well-known/apple-app-site-association`: replace `APPLE_TEAM_ID` (both the `applinks` and
+  the `webcredentials` entry).
+- `public/.well-known/assetlinks.json`: replace `PLAY_APP_SIGNING_SHA256` and `UPLOAD_KEY_SHA256` in
+  both statements (`handle_all_urls` and `get_login_creds`).
   `npx tsx scripts/check-association.ts` lists what remains.
+- Passkeys (step 13, Part B): `GOTRUE_WEBAUTHN_RP_ORIGINS` needs one `android:apk-key-hash:…` per
+  signing key, computed from the same certificates (see "Passkeys" above). Nothing in the repo holds
+  these values.
 - iOS signing: set `DEVELOPMENT_TEAM` in Xcode (empty in the repo). `aps-environment` is
   `development`; the release export sets production. Associated Domains only work once signed.
 - Android push: put Firebase `google-services.json` in `android/app/` (git-ignored); the Google
@@ -113,6 +174,18 @@ when a parent taps Set up), `listAlbums` (user albums only), `listPendingAssets`
 `scheduleBackgroundRefresh`, `completeBackgroundTask`, and events `backgroundSync` and
 `backgroundSyncExpired`. It asks for full Photos access because reading an album's originals with
 EXIF and GPS needs it; only the chosen album is read and nothing is ever deleted.
+
+- Videos (step 12): album enumeration and counts include `mediaType == .video`.
+  `listPendingAssets` items carry `kind: "photo" | "video"`, `durationMs` (from `PHAsset.duration`)
+  and `size` (bytes of the original resource, a hint that can be `null` for an iCloud-only asset), so
+  the JS lane applies the plan's limits (`videoLimitsFor(plan)`) **before** exporting and records
+  `too_large` / `too_long` through `recordOutcomes` (ledger codes `l` / `t`, counted in `skipped`,
+  excluded from `listPendingAssets` unless `includeLimitSkipped: true`, which a plan upgrade should
+  pass once). `exportAssets` writes the `PHAssetResourceType.video` resource (the original container
+  as shot, HEVC kept, `isNetworkAccessAllowed`; never `.fullSizeVideo`, the edited rendition) and
+  returns `kind`, `durationMs`, `mime` (`video/quicktime` | `video/mp4`), `size`, `sha256`,
+  `takenAt`. A Live Photo stays an image: `.photo` only, the paired video is not uploaded (Q5). The
+  JS lane should export one video at a time and keep sync Wi-Fi-only for them.
 
 - Ledger: `Application Support/ll-sync/<sha256(albumId)>.json` records each asset outcome so nothing
   is imported twice. No paths, names, URLs or identifiers are logged.
@@ -135,6 +208,34 @@ EXIF and GPS needs it; only the chosen album is read and nothing is ever deleted
   (not "Limited Access"; the app sets `PHPhotoLibraryPreventAutomaticLimitedAccessAlert`).
   `simctl privacy booted grant photos app.tinyglow` is a shortcut that skips the alert.
 
+## Video upload live check (step 12, task 12.9)
+
+`ios/scripts/video-upload-check.sh` holds the mechanical parts of "a 55 MiB HEVC MOV uploads in 4
+ranged background parts, the part copies are deleted, the upload survives backgrounding":
+
+1. `sh ios/scripts/video-upload-check.sh clip`: ffmpeg renders a 40 s 1080p30 HEVC (`hvc1`) test
+   pattern with an AAC tone into `${TMPDIR}/tinyglow-video-check/clip-60mb.mov` and rescales the
+   bitrate until the file is in (48 MiB, 64 MiB], i.e. exactly four 16 MiB parts (no real child, no
+   speech; never committed).
+2. `pnpm --filter @tinyglow/mobile-web ios:build:sim`, then `… video-upload-check.sh prepare`: boots
+   the iPhone 17 (iOS 26.4) simulator, installs the app, `simctl addmedia` the clip, launches.
+3. Drive the app: sign in as demo mom, Upload tab, Choose photos, pick the clip, press Home while it
+   is uploading, wait a minute, come back. Manual, or XCUITest (the e2e bundle in
+   `e2e/native/ios-uitest`, test-engineer's): `testSignIn`, then a new `testPickVideoAndBackground`
+   that taps "Choose photos", selects the newest video cell of the PHPicker (an out-of-process remote
+   view; address it through the app's own element tree, which XCUITest merges since iOS 16, and fall
+   back to a coordinate tap on the first cell), taps Add, waits for the progress bar, then
+   `XCUIDevice.shared.press(.home)`, `sleep(60)`, `app.activate()` and waits for the tile.
+4. `… video-upload-check.sh verify`: `Library/Caches/ll-uploads/parts` contains no `*.part`; the
+   app's unified log has no `X-Amz-Signature`, upload path or bearer token; with `LL_SESSION`,
+   `LL_FILE`, `LL_TOKEN` it also checks `GET /api/uploads/:s/files/:f/parts` reports
+   `uploadedPartNumbers = [1,2,3,4]` (or, once completed, the photo row has `media_kind = 'video'`).
+5. `… video-upload-check.sh clean` shuts the simulator down and deletes the clip. Delete
+   `ios/DerivedData` afterwards (disk).
+
+Needs the api's video registration (backend 12.4) on the dev stack; do not run it while the api and
+worker are busy on the real AI provider.
+
 ## Google import on devices
 
 Google Photos import connects a Google account, then uses Google's own picker. Google refuses OAuth
@@ -145,6 +246,138 @@ swap this for an in-app WebView or a `window.open`. The server keeps an encrypte
 downloads keep the capture date but Google removes the location. Android has no photo auto-sync and no
 media permission. For local development with the fake Google server run
 `adb reverse tcp:18099 tcp:18099 (the fake Google host port, `GOOGLE_FAKE_PORT`)` on the Android emulator (iOS Simulator shares the host network).
+
+## Passkeys (`TinyglowPasskeys`, step 13)
+
+Passkeys are an addition to the email code, which stays primary (docs/plans/step-13.md). The WebView
+origin (`capacitor://localhost`, `https://localhost`) can never be a WebAuthn origin, so native uses the
+platform passkey APIs through our own plugin with the relying party `tinyglow.app`. The JSON in and
+out is the W3C form the API speaks (`packages/shared/src/api/auth.ts`
+`publicKeyCredentialJsonSchema`), so `lib/passkeys.ts` (frontend, 13.5) branches only on platform.
+
+### Plugin interface (`TinyglowPasskeys`, both platforms)
+
+```ts
+interface TinyglowPasskeysPlugin {
+  /** iOS: iOS 16+ and the embedded provisioning profile grants webcredentials:tinyglow.app
+   *  (device builds signed with the Team ID; simulator and ad-hoc builds: false, no OS call).
+   *  Android: Android 9+ (passkeys need API 28 and Google Play services). */
+  available(): Promise<{ available: boolean }>;
+  /** options = PublicKeyCredentialCreationOptionsJSON from POST /api/me/passkeys/options
+   *  (`response.options`). Returns the PublicKeyCredential JSON for POST /api/me/passkeys. */
+  create(args: { options: Record<string, unknown> }): Promise<{ credential: PublicKeyCredentialJsonInput }>;
+  /** options = PublicKeyCredentialRequestOptionsJSON from POST /api/auth/passkey/options.
+   *  preferImmediatelyAvailable: true for the explicit button (no "no passkey here" sheet; the
+   *  plugin reports `cancelled` instead). Returns the JSON for POST /api/auth/passkey/verify. */
+  get(args: { options: Record<string, unknown>; preferImmediatelyAvailable?: boolean }): Promise<{ credential: PublicKeyCredentialJsonInput }>;
+}
+```
+
+Register it on the JS side with `registerPlugin<TinyglowPasskeysPlugin>("TinyglowPasskeys")` (no web
+implementation: the web uses `navigator.credentials` directly). Rejections carry `err.code` (and the
+same string as the message; nothing from the OS is forwarded):
+
+| code | meaning | JS should |
+| --- | --- | --- |
+| `cancelled` | the user dismissed the sheet; iOS with `preferImmediatelyAvailable` and no passkey; Android DOM `NotAllowedError` (includes timeouts) | do nothing |
+| `not_available` | iOS < 16; Android < 9 or no credential provider / Play services | hide the passkey option |
+| `not_configured` | the options name another RP than `tinyglow.app` (dev stack: `GOTRUE_WEBAUTHN_RP_ID=localhost`), or the app is not associated with the domain yet (no Team ID / AASA not served; Android `SecurityError`, i.e. the apk-key-hash origin or `assetlinks` `get_login_creds` is missing) | "Passkeys are not available in this build", keep the email code |
+| `failed` | malformed options, authenticator error, no passkey on this device (Android `NoCredentialException`), a ceremony already running | "Couldn't use a passkey. Use the email code." |
+
+Credential JSON: `{ id, rawId, type: "public-key", response: { clientDataJSON, attestationObject |
+authenticatorData, signature, userHandle }, authenticatorAttachment, clientExtensionResults }`,
+every binary field base64url **without padding**; `transports: ["internal"]` on iOS registrations;
+`clientExtensionResults` is `{}` on iOS and whatever Credential Manager reports on Android.
+
+Decisions carried by both plugins (step-13.md 0.1 g, h):
+
+- GoTrue's registration `options.user.id` is the base64url of the 36-char UUID string. iOS decodes it
+  to bytes for `createCredentialRegistrationRequest(challenge:name:userID:)`; Android validates it as
+  base64url and sends the options through. Neither interprets or logs it. The assertion's
+  `userHandle` is returned verbatim so GoTrue can match the user.
+- User verification is **required**: `userVerificationPreference = .required` on both iOS requests;
+  Android rewrites `authenticatorSelection.userVerification` / `userVerification` to `"required"`
+  before calling Credential Manager. The API rejects assertions without the UV flag.
+- The RP id is a build-time constant equal to the production host (`LLPasskeyCodec.relyingPartyId`,
+  `PasskeyJson.RP_ID`); options for any other RP are rejected with `not_configured`. Passkeys cannot
+  be exercised against the dev stack from a device or simulator (the RP id must match a served AASA /
+  assetlinks); the iOS e2e gate stubs the plugin.
+
+Files: `ios/App/App/TinyglowPasskeys.swift` (plugin, `ASAuthorizationPlatformPublicKeyCredentialProvider`,
+`ASAuthorizationController`), `ios/App/App/LLPasskeyCodec.swift` (Foundation-only mapping),
+`android/app/src/main/java/app/tinyglow/passkeys/TinyglowPasskeysPlugin.java` (Credential Manager:
+`androidx.credentials:credentials` + `credentials-play-services-auth`, `androidxCredentialsVersion` in
+`variables.gradle`) and `PasskeyJson.java` (org.json mapping).
+
+Tests (no device, no simulator):
+
+- `sh ios/scripts/passkey-codec-harness.sh`: compiles `LLPasskeyCodec.swift` with the harness on the
+  host (base64url, `user.id` pass-through, credential JSON shape, `userHandle` verbatim, RP check,
+  provisioning-profile reader) and asserts the two `.required` lines in the plugin.
+- `JAVA_HOME=<jdk 21> ./gradlew testDebugUnitTest --tests 'app.tinyglow.passkeys.*'` in `android/`
+  runs `PasskeyJsonTest` (UV forced on both requests, `user.id` untouched, `userHandle` verbatim,
+  exact schema keys, base64url validation and unpadding).
+
+### Entitlement and association files
+
+- iOS: `App.entitlements` has `webcredentials:tinyglow.app` next to `applinks:tinyglow.app`. The
+  Debug configuration signs with `App-Debug.entitlements` (`CODE_SIGN_ENTITLEMENTS` in the project):
+  the same list plus `webcredentials:tinyglow.app?mode=developer`, which lets a development-signed
+  build read the AASA directly instead of through Apple's CDN (so a change is visible at once; the
+  device needs Settings > Developer > Associated Domains Development on). Release carries no
+  developer-mode entry. Both files must stay identical otherwise.
+- `public/.well-known/apple-app-site-association` gains `"webcredentials": { "apps":
+  ["APPLE_TEAM_ID.app.tinyglow"] }`; `assetlinks.json` gains a second statement
+  `delegate_permission/common.get_login_creds` for `app.tinyglow` with the same fingerprints. Both
+  are copied into the native `public` folders by `cap sync` (git-ignored there) and are served by
+  nginx with `application/json`. `npx tsx scripts/check-association.ts` lists the placeholders.
+- Android origin at GoTrue: a native passkey's `clientDataJSON.origin` is
+  `android:apk-key-hash:<base64url(sha256(signing certificate))>`, so `GOTRUE_WEBAUTHN_RP_ORIGINS`
+  must list one entry **per signing key** (debug, upload, Play App Signing; GoTrue puts no cap on the
+  list). Compute it from a keystore:
+
+  ```sh
+  keytool -exportcert -alias <alias> -keystore <keystore> -storepass <pw> \
+    | openssl sha256 -binary | openssl base64 | tr '+/' '-_' | tr -d '='
+  # debug key: alias androiddebugkey, keystore ~/.android/debug.keystore, password android
+  # Play App Signing: Play Console > Setup > App signing > App signing key certificate (SHA-256, hex)
+  #   -> echo '<hex>' | xxd -r -p | openssl base64 | tr '+/' '-_' | tr -d '='
+  ```
+
+  The 43-character result goes into `GOTRUE_WEBAUTHN_RP_ORIGINS` as `android:apk-key-hash:<value>`.
+  `assetlinks.json` wants the same certificates as colon-separated **hex** SHA-256 fingerprints
+  (`keytool -list -v`), so the two files are derived from one set of certificates.
+- Permissions: `credentials-play-services-auth` pulls `androidx.biometric`, which adds the
+  install-time (non-runtime) `USE_BIOMETRIC` and `USE_FINGERPRINT` permissions to the merged manifest.
+  That is exactly what passkey user verification uses; `check-android-manifest.mjs` allows them.
+  Nothing else changes in either manifest and no new `Info.plist` key or `PrivacyInfo.xcprivacy`
+  data type is needed (a passkey's public key is an account credential; the private key never leaves
+  the OS).
+
+### Device verification (Part B; needs Team ID, signing certificates, production deploy)
+
+1. Deploy `/.well-known/apple-app-site-association` (Team ID filled in) and `assetlinks.json`
+   (hex fingerprints filled in) to `https://tinyglow.app`; `curl -sI
+   https://tinyglow.app/.well-known/apple-app-site-association | grep -i content-type` must say
+   `application/json`. On `auth`: `GOTRUE_PASSKEY_ENABLED=true`, `GOTRUE_WEBAUTHN_RP_ID=tinyglow.app`,
+   `GOTRUE_WEBAUTHN_RP_ORIGINS=https://tinyglow.app,android:apk-key-hash:<debug>,android:apk-key-hash:<upload>,android:apk-key-hash:<play>`;
+   on `api`: `AUTH_PASSKEYS_ENABLED=true`. Restart both.
+2. iOS (iPhone on iOS 16+): set `DEVELOPMENT_TEAM` in Xcode, build Debug to the device
+   (`?mode=developer` is active), turn on Settings > Developer > Associated Domains Development.
+   Expected: `available()` is true (`strings App.app/App | grep webcredentials` shows the
+   entitlement; the device build has `embedded.mobileprovision`). Sign in with the email code, accept
+   the "Add a passkey" card, Face ID / Touch ID prompt, Settings shows the passkey. Sign out, "Sign in
+   with a passkey", pick it, signed in without a code. Settings > remove the passkey (fresh sign-in
+   gate). A failure with "not associated with domain" in Console.app (`swcd`) means the AASA is not
+   served or the Team ID is wrong; the plugin reports `not_configured`.
+3. Android (phone with Google Play services, Android 9+, screen lock set): install the debug build
+   whose key hash is in `RP_ORIGINS`. Verify the statement:
+   `https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://tinyglow.app&relation=delegate_permission/common.get_login_creds`
+   must list `app.tinyglow` with the certificate. Then the same enrol / sign out / sign in / remove
+   loop. A `SecurityError` (`not_configured`) means the origin is missing at GoTrue or the
+   `assetlinks` statement does not match the installed APK's certificate; `not_available` means no
+   Play services or no screen lock.
+4. Record both runs in `docs/PROGRESS.md`; only then add the listing line (`store/README.md`, P5).
 
 ## Pitfalls
 
@@ -172,9 +405,18 @@ cannot hang the UI. Keep them when refactoring.
 - Android: no media/location permissions (system Photo Picker); manifest removes them explicitly;
   backups and device transfer disabled. iOS: `PrivacyInfo.xcprivacy` declares collected data
   (no tracking); WebKit and `Caches/ll-*` are excluded from backup at launch.
-- `Info.plist` strings: photo library (read and add) and camera only. The read string is now shown only
-  when a parent turns on Album sync (full access); the regular upload uses the system picker.
-  Android is unchanged: still no media or location permission.
+- `Info.plist` strings: photo library (read and add) and camera only, worded "photos and videos". The
+  read string is shown only when a parent turns on Album sync (full access); the regular upload uses
+  the system picker. Android is unchanged: still no media or location permission.
+- Passkeys (step 13) add no `Info.plist` string, no `PrivacyInfo.xcprivacy` data type and no runtime
+  permission: the private key stays in the OS credential store (iCloud Keychain / Google Password
+  Manager, the user's own sync), the server keeps only the public key and a name. Android's merged
+  manifest gains the install-time `USE_BIOMETRIC` / `USE_FINGERPRINT` from `androidx.biometric`
+  (passkey user verification); the plugin never logs options, credentials or OS error text.
+- Videos add no permission, no `PrivacyInfo.xcprivacy` data type (a video is "Photos or Videos") and
+  no manifest change (`READ_MEDIA_VIDEO` stays removed). The app never records video or audio and never
+  asks for the microphone. Store copy: `store/data-safety.md` declares "Photos and videos > Videos",
+  `store/privacy-nutrition-label.md` and the fastlane texts say "photos and short videos".
 
 ## iOS Debug-only surface
 
@@ -182,4 +424,5 @@ cannot hang the UI. Keep them when refactoring.
 `App/Info.plist`. `Info-Debug.plist` is `Info.plist` plus exactly `NSAppTransportSecurity`
 (`NSAllowsLocalNetworking`) and the `tinyglow://` `CFBundleURLTypes`, so Release builds carry
 neither. `pnpm --filter @tinyglow/mobile-web check:ios-plists` enforces this; edit both plists
-together.
+together. Likewise the Debug configuration signs with `App/App-Debug.entitlements`, which is
+`App.entitlements` plus `webcredentials:tinyglow.app?mode=developer` (step 13); edit both together.

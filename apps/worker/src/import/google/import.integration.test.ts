@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -5,8 +6,10 @@ import path from "node:path";
 import type { IngestJob } from "@tinyglow/shared";
 import { googleImportMediaAllowList, IMPORT_MAX_FILE_BYTES, originalKey } from "@tinyglow/shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { ingestPhoto } from "../../ingest";
 import type { WorkerStorage } from "../../storage";
 import { createHarness, type Harness, integrationEnv } from "../../testing/harness";
+import { transcodeVideo } from "../../video/transcode";
 import { sweepImports } from "../sweep";
 import { createWorkerGoogleClient } from "./client";
 import { type FakeGoogleServer, startFakeGoogleServer } from "./fake-server";
@@ -18,6 +21,17 @@ import { type ImportGoogleDeps, ImportRetryError, runImportGoogle } from "./hand
 
 const FIXTURES = path.resolve(import.meta.dirname, "../../../../../e2e/fixtures/heic");
 const REDIRECT = "http://localhost:8080/api/import/google/callback";
+/** Local ffmpeg (worker image or `brew install ffmpeg`); the V-1 ingest→transcode leg is skipped without it. */
+function hasFfmpeg(): boolean {
+  try {
+    execFileSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-version"], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 const SCOPE = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly";
 
 describe.skipIf(!integrationEnv)(
@@ -260,7 +274,7 @@ describe.skipIf(!integrationEnv)(
 
     // --- the main run -----------------------------------------------------------------------------
 
-    it("G-1..G-6 + V-1 + X-1 with G-3 already in the album: 5 booked, 1 duplicate, 1 skipped, 1 failed", async () => {
+    it("G-1..G-6 + V-1 + X-1 with G-3 already in the album: 6 booked (V-1 is a video now), 1 duplicate, 0 skipped, 1 failed", async () => {
       const s = await setup({
         pick: ["G-1", "G-2", "G-3", "G-4", "G-5", "G-6", "V-1", "X-1"],
         tz: "Europe/Paris",
@@ -279,28 +293,28 @@ describe.skipIf(!integrationEnv)(
       const r = await run(s);
       expect(r).toMatchObject({
         outcome: "done",
-        imported: 5,
+        imported: 6,
         duplicates: 1,
         failed: 1,
-        skipped: 1,
+        skipped: 0,
       });
       const b = await batch(s.batchId);
       expect(b).toMatchObject({
         status: "done",
         error: null,
         items_total: 8,
-        items_imported: 5,
+        items_imported: 6,
         items_duplicate: 1,
         items_failed: 1,
-        items_skipped: 1,
+        items_skipped: 0,
       });
       expect(b?.finished_at).not.toBeNull();
 
       const rows = await items(s.batchId);
       const byStatus = (st: string) => rows.filter((x) => x.status === st);
-      expect(byStatus("booked")).toHaveLength(5);
+      expect(byStatus("booked")).toHaveLength(6);
       expect(byStatus("duplicate")).toHaveLength(1);
-      expect(byStatus("skipped")[0]?.error).toBe("unsupported_media_type");
+      expect(byStatus("skipped")).toHaveLength(0);
       expect(byStatus("failed")[0]?.error).toBe("file_too_large");
 
       // Photos: admin => approved by the requester and nobody else.
@@ -321,30 +335,98 @@ describe.skipIf(!integrationEnv)(
           [byStatus("booked").map((x) => x.id)],
         )
       ).rows;
-      expect(photos).toHaveLength(5);
+      expect(photos).toHaveLength(6);
       for (const p of photos) {
         expect(p).toMatchObject({
           approval: "approved",
           approved_by: s.requester,
           uploaded_by: s.requester,
           status: "uploaded",
-          mime: "image/jpeg",
           taken_at_estimated: true,
         });
+        expect(["image/jpeg", "video/mp4"]).toContain(p.mime);
         expect(p.taken_at).toBeInstanceOf(Date);
       }
       // SHA-256 of what was stored equals the fake's catalogue.
-      const expected = new Set(["G-1", "G-2", "G-4", "G-5", "G-6"].map(catalogueSha));
+      const expected = new Set(["G-1", "G-2", "G-4", "G-5", "G-6", "V-1"].map(catalogueSha));
       expect(new Set(photos.map((p) => p.sha))).toEqual(expected);
 
       // photo.ingest once per booked photo, ids only (+ the batch's time zone).
-      expect(ingests).toHaveLength(5);
+      expect(ingests).toHaveLength(6);
       expect(new Set(ingests.map((j) => j.photoId))).toEqual(new Set(photos.map((p) => p.id)));
       for (const j of ingests)
         expect(j).toEqual({ photoId: j.photoId, babyId: s.baby.id, tzHint: "Europe/Paris" });
 
+      // V-1 end to end (step 12): the booked video row goes through the worker's ingest (sniff,
+      // probe, poster) and transcode (web rendition + keyframes) with this machine's ffmpeg.
+      const v1 = photos.find((p) => p.mime === "video/mp4");
+      expect(v1, "V-1 booked as a video row").toBeTruthy();
+      if (v1 && hasFfmpeg()) {
+        const scratch = await mkdtemp(path.join(os.tmpdir(), "ll-import-scratch-"));
+        try {
+          const sent: unknown[] = [];
+          const vdeps = h.deps({
+            video: {
+              ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
+              ffprobePath: process.env.FFPROBE_PATH || "ffprobe",
+              scratchPath: scratch,
+              threads: 1,
+              sendVideoTranscode: async (job) => {
+                sent.push(job);
+                return "job";
+              },
+            },
+          });
+          const ing = await ingestPhoto(vdeps, {
+            photoId: v1.id,
+            babyId: s.baby.id,
+            tzHint: "Europe/Paris",
+          });
+          expect(ing.outcome).toBe("ingested");
+          expect(ing.mediaKind).toBe("video");
+          expect(sent).toEqual([{ photoId: v1.id, babyId: s.baby.id }]);
+          const t = await transcodeVideo(
+            {
+              pool: h.workerPool,
+              storage: h.storage as never,
+              log: h.log,
+              ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
+              ffprobePath: process.env.FFPROBE_PATH || "ffprobe",
+              scratchPath: scratch,
+              threads: 1,
+              timeoutSec: 300,
+              minFreeBytes: 1,
+            } as never,
+            { photoId: v1.id, babyId: s.baby.id },
+          );
+          expect(t.outcome).toBe("ready");
+          const row = await h.one<Record<string, unknown>>(
+            "SELECT media_kind, rendition_status, duration_ms, video_codec, width, height FROM public.photos WHERE id = $1",
+            [v1.id],
+          );
+          expect(row).toMatchObject({
+            media_kind: "video",
+            rendition_status: "ready",
+            video_codec: "h264",
+            width: 160,
+            height: 120,
+          });
+          expect(Number(row?.duration_ms)).toBeGreaterThan(500);
+          const kinds = (
+            await h.admin.query<{ kind: string }>(
+              "SELECT kind FROM public.photo_derivatives WHERE photo_id = $1 ORDER BY kind",
+              [v1.id],
+            )
+          ).rows.map((r) => r.kind);
+          // a 1-second clip gets one keyframe only (never duplicates)
+          expect(kinds).toEqual(["analysis", "display", "keyframe1", "thumb", "web"]);
+        } finally {
+          await rm(scratch, { recursive: true, force: true });
+        }
+      }
+
       // Objects exist only for booked items (+ the pre-seeded one).
-      expect(await objectCount(s.baby.id)).toBe(5 + 1);
+      expect(await objectCount(s.baby.id)).toBe(6 + 1);
       for (const p of photos) expect(await h.versionCount(originalKey(s.baby.id, p.id))).toBe(1);
       for (const x of rows.filter((x) => x.status !== "booked"))
         expect(await h.versionCount(originalKey(s.baby.id, x.id))).toBe(0);
@@ -359,7 +441,7 @@ describe.skipIf(!integrationEnv)(
       expect(audit.rows[0]?.actor_user_id).toBeNull();
       expect(audit.rows[0]?.metadata).toEqual({
         batch_id: s.batchId,
-        count: 5,
+        count: 6,
         duplicates: 1,
         failed: 1,
       });

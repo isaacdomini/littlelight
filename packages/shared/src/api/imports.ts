@@ -305,6 +305,8 @@ export const IMPORT_ITEM_ERRORS = [
   "not_member",
   "baby_trashed",
   "pending_limit",
+  /** Step 12 (migration 22, appended last): a video over the album plan's `maxSeconds`. */
+  "video_too_long",
 ] as const;
 export const importItemErrorSchema = z.enum(IMPORT_ITEM_ERRORS);
 export type ImportItemError = z.infer<typeof importItemErrorSchema>;

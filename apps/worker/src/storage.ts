@@ -1,4 +1,8 @@
-import { PassThrough, Readable } from "node:stream";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { rm, stat } from "node:fs/promises";
+import { PassThrough, Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   AbortMultipartUploadCommand,
   DeleteObjectsCommand,
@@ -10,12 +14,15 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import { UPLOAD_MAX_FILE_BYTES } from "@tinyglow/shared";
+import { UPLOAD_MAX_FILE_BYTES, UPLOAD_MAX_VIDEO_BYTES } from "@tinyglow/shared";
 
 // Worker object storage (docs/plans/step-4.md 2.7, 2.8, D6). The worker uses its bucket-scoped
 // MinIO service account (`tinyglow-worker`: get/put/abort + delete incl. object versions) on
 // the internal S3_ENDPOINT. Errors surface as `StorageError` carrying the SDK error name only:
 // keys are ids, never secrets, but signed URLs and request ids never reach a log line.
+// Step 12 (docs/plans/step-12.md 2.6): `FileStorage` streams originals to the scratch folder
+// (hashing on the way; no 100 MiB cap besides `UPLOAD_MAX_VIDEO_BYTES`) and uploads renditions
+// from files. `getObject` keeps its 100 MiB Buffer cap for photos.
 
 export class StorageError extends Error {
   /** SDK error name or HTTP status class, e.g. `NoSuchKey`, `AccessDenied`, `ObjectTooLarge`. */
@@ -96,7 +103,36 @@ export interface StreamingStorage {
   ): Promise<number>;
 }
 
-export type WorkerStorage = ObjectStorage & StreamingStorage;
+/**
+ * File-backed access (video ingest and transcode, docs/plans/step-12.md 2.6): a 2 GB original is
+ * never held in memory; it is streamed to the scratch folder and renditions are uploaded from
+ * there. Separate from `ObjectStorage` so the in-memory test doubles stay valid.
+ */
+export interface FileStorage {
+  /**
+   * Stream the object to `filePath` (created/truncated, mode 0600), hashing while writing.
+   * `StorageError('ObjectTooLarge')` when the object is larger than `maxBytes` (default
+   * `UPLOAD_MAX_VIDEO_BYTES`), checked on `Content-Length` before any byte is read and again on
+   * the counted bytes; the partial file is removed on any failure.
+   */
+  getObjectToFile(
+    key: string,
+    filePath: string,
+    maxBytes?: number,
+  ): Promise<{ bytes: number; sha256: Buffer }>;
+  /**
+   * Upload the file at `filePath` to `key` (multipart through `@aws-sdk/lib-storage` above one
+   * part, a single PUT below). Resolves with the bytes written.
+   */
+  putObjectFromFile(
+    key: string,
+    filePath: string,
+    contentType: string,
+    opts?: PutOptions,
+  ): Promise<number>;
+}
+
+export type WorkerStorage = ObjectStorage & StreamingStorage & FileStorage;
 
 export const STREAM_PART_BYTES = 16 * 1024 * 1024;
 export const STREAM_QUEUE_SIZE = 2;
@@ -169,6 +205,82 @@ export function createStorage(
         throw opts.signal?.aborted ? new StorageError("Aborted") : toStorageError(err);
       } finally {
         opts.signal?.removeEventListener("abort", onAbort);
+      }
+    },
+
+    async getObjectToFile(key, filePath, maxBytes = UPLOAD_MAX_VIDEO_BYTES) {
+      let body: Readable | undefined;
+      try {
+        const out = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        if (out.ContentLength !== undefined && out.ContentLength > maxBytes) {
+          (out.Body as { destroy?: () => void } | undefined)?.destroy?.();
+          throw new StorageError("ObjectTooLarge");
+        }
+        if (!out.Body) throw new StorageError("EmptyBody");
+        if (out.Body instanceof Readable) body = out.Body;
+        else {
+          const web = (out.Body as { transformToWebStream?: () => unknown }).transformToWebStream;
+          if (typeof web !== "function") throw new StorageError("UnsupportedBody");
+          body = Readable.fromWeb(web.call(out.Body) as Parameters<typeof Readable.fromWeb>[0]);
+        }
+        const hash = createHash("sha256");
+        let bytes = 0;
+        const counter = new Transform({
+          transform(chunk: Buffer, _enc, cb) {
+            bytes += chunk.byteLength;
+            if (bytes > maxBytes) {
+              cb(new StorageError("ObjectTooLarge"));
+              return;
+            }
+            hash.update(chunk);
+            cb(null, chunk);
+          },
+        });
+        await pipeline(body, counter, createWriteStream(filePath, { mode: 0o600 }));
+        return { bytes, sha256: hash.digest() };
+      } catch (err) {
+        body?.destroy();
+        await rm(filePath, { force: true }).catch(() => undefined);
+        throw toStorageError(err);
+      }
+    },
+
+    async putObjectFromFile(key, filePath, contentType, opts = {}) {
+      let size: number;
+      try {
+        size = (await stat(filePath)).size;
+      } catch {
+        throw new StorageError("FileNotFound");
+      }
+      const upload = new Upload({
+        client: s3 as S3Client,
+        params: {
+          Bucket: bucket,
+          Key: key,
+          Body: createReadStream(filePath),
+          ContentType: contentType,
+          ...(opts.cacheControl ? { CacheControl: opts.cacheControl } : {}),
+        },
+        partSize: STREAM_PART_BYTES,
+        queueSize: STREAM_QUEUE_SIZE,
+        leavePartsOnError: false,
+      });
+      try {
+        await upload.done();
+        return size;
+      } catch (err) {
+        if (upload.uploadId) {
+          await s3
+            .send(
+              new AbortMultipartUploadCommand({
+                Bucket: bucket,
+                Key: key,
+                UploadId: upload.uploadId,
+              }),
+            )
+            .catch(() => undefined);
+        }
+        throw toStorageError(err);
       }
     },
 

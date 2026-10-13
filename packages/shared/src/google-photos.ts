@@ -107,9 +107,37 @@ const jsonIntSchema = z.union([
 ]);
 
 /**
+ * Picker `VideoProcessingStatus`; unknown future values parse as `UNSPECIFIED`. Only `READY`
+ * videos have a downloadable `=dv` original.
+ */
+export const PICKER_VIDEO_PROCESSING_STATUSES = [
+  "UNSPECIFIED",
+  "PROCESSING",
+  "READY",
+  "FAILED",
+] as const;
+export const pickerVideoProcessingStatusSchema = z
+  .enum(PICKER_VIDEO_PROCESSING_STATUSES)
+  .catch("UNSPECIFIED");
+export type PickerVideoProcessingStatus = (typeof PICKER_VIDEO_PROCESSING_STATUSES)[number];
+
+/**
+ * Picker `VideoMetadata` (step 12, docs/plans/step-12.md 2.6): Google's API exposes **only**
+ * `fps` and `processingStatus` for a video — dimensions are on `mediaFileMetadata` and there is
+ * **no duration field**, so `import_items.duration_ms_hint` is null by design for Picker imports
+ * (the worker learns the duration from ffprobe after download).
+ */
+export const pickerVideoMetadataSchema = z.object({
+  fps: z.number().nonnegative().optional(),
+  processingStatus: pickerVideoProcessingStatusSchema.optional(),
+});
+export type PickerVideoMetadata = z.infer<typeof pickerVideoMetadataSchema>;
+
+/**
  * One `PickedMediaItem`. `baseUrl` is a short-lived capability (~60 min, needs the bearer token):
  * kept in worker memory for one run only. `filename` is the user's file name: never stored,
- * never logged. `mediaFileMetadata` has dimensions and camera, never GPS (D20).
+ * never logged. `mediaFileMetadata` has dimensions and camera, never GPS (D20); its union field
+ * is `photoMetadata` (ignored) or `videoMetadata` (`pickerVideoMetadataSchema`).
  */
 export const pickerMediaItemSchema = z.object({
   id: z.string().min(1).max(512),
@@ -125,6 +153,7 @@ export const pickerMediaItemSchema = z.object({
         height: jsonIntSchema.optional(),
         cameraMake: z.string().max(255).optional(),
         cameraModel: z.string().max(255).optional(),
+        videoMetadata: pickerVideoMetadataSchema.optional(),
       })
       .optional(),
   }),

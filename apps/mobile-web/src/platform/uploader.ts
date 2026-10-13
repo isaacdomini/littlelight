@@ -2,13 +2,29 @@
 // so a native background uploader (URLSession / WorkManager) can replace the web implementation
 // without any API change.
 
+/**
+ * Native uploader refusals that no retry can fix (step 12 follow-up): `no-space` = not enough
+ * free disk for the part copy; `bad-range` = the requested byte range is outside the file (it
+ * changed or vanished since it was picked). Anything else is a plain transport failure.
+ */
+export type PartUploadReason = "no-space" | "bad-range";
+
 export class PartUploadError extends Error {
-  /** HTTP status of the storage response; 0 for a network failure. */
+  /** HTTP status of the storage response; 0 for a network failure or a local refusal. */
   readonly status: number;
-  constructor(status: number) {
-    super(status === 0 ? "network error" : `part upload failed (${status})`);
+  /** Set for a non-retryable local refusal from the native uploader. */
+  readonly reason: PartUploadReason | null;
+  constructor(status: number, reason: PartUploadReason | null = null) {
+    super(
+      reason
+        ? `part upload refused (${reason})`
+        : status === 0
+          ? "network error"
+          : `part upload failed (${status})`,
+    );
     this.name = "PartUploadError";
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -16,8 +32,12 @@ export interface PutPartOptions {
   /** Bytes of this part sent so far. */
   onProgress?: (loaded: number) => void;
   signal?: AbortSignal;
-  /** Native whole-file PUTs: keep the transfer off the cellular network. */
+  /** Native PUTs: keep the transfer off the cellular network. */
   wifiOnly?: boolean;
+  /** Native ranged part (step 12): first byte of the part in the file; default 0. */
+  offset?: number;
+  /** Native ranged part: bytes in this part; default "to the end of the file". */
+  length?: number;
 }
 
 /** A picked or captured file on the device, copied into app-private storage (native only). */
@@ -31,13 +51,16 @@ export interface NativeFileRef {
   sha256?: string;
   /** ISO capture time from the platform (album sync); a hint, the server re-reads EXIF. */
   takenAt?: string;
+  /** A video's duration in ms when the platform picker/sync reported it (step 12); a hint. */
+  durationMs?: number;
 }
 
 export interface Uploader {
   putPart(url: string, blob: Blob, opts?: PutPartOptions): Promise<void>;
   /**
-   * Native only: PUT the whole file from disk as one raw-body request that keeps running while
-   * the app is backgrounded. Used when the file is a single part (<= the part size).
+   * Native only: PUT one part (`opts.offset` / `opts.length`; the whole file when omitted) from
+   * disk as one raw-body request that keeps running while the app is backgrounded. The manager
+   * calls it once per part, resuming from the api's `uploadedPartNumbers` (NATIVE.md "Uploads").
    */
   putFile?(url: string, file: NativeFileRef, opts?: PutPartOptions): Promise<void>;
 }

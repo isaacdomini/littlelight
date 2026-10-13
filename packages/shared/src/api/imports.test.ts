@@ -195,21 +195,29 @@ describe("import source and batch responses are strict", () => {
     expect(IMPORT_ITEM_ERRORS).toContain("file_too_large");
   });
 
-  it("source and item error enums match migration 21's CHECKs (value and order)", () => {
-    const sql = readFileSync(
-      new URL("../../../db/migrations/1792400000100_free-tier-abuse.sql", import.meta.url),
-      "utf8",
-    ).split("-- Down Migration")[0] as string;
-    const values = (constraint: string, column: string): string[] => {
+  it("source and item error enums match the latest migration CHECKs (value and order)", () => {
+    // Sources: last changed by migration 21; items: migration 22 (`1792500000100_video.sql`) adds
+    // `video_too_long`. Up sections only.
+    const up = (file: string) =>
+      readFileSync(new URL(`../../../db/migrations/${file}`, import.meta.url), "utf8").split(
+        "-- Down Migration",
+      )[0] as string;
+    const values = (sql: string, constraint: string, column: string): string[] => {
       const m = new RegExp(`${constraint}\\s+CHECK \\(${column} IN \\(([^)]*)\\)`, "s").exec(sql);
       return [...(m?.[1] ?? "").matchAll(/'([^']+)'/g)].map((x) => x[1] as string);
     };
+    const m21 = up("1792400000100_free-tier-abuse.sql");
+    const m22 = up("1792500000100_video.sql");
     expect([...IMPORT_SOURCE_ERRORS]).toEqual(
-      values("import_sources_last_error_check", "last_error"),
+      values(m21, "import_sources_last_error_check", "last_error"),
     );
-    expect([...IMPORT_ITEM_ERRORS]).toEqual(values("import_items_error_check", "error"));
+    expect([...IMPORT_ITEM_ERRORS]).toEqual(values(m22, "import_items_error_check", "error"));
     expect(IMPORT_SOURCE_ERRORS).toContain("pending_limit");
     expect(IMPORT_ITEM_ERRORS).toContain("pending_limit");
+    expect(IMPORT_ITEM_ERRORS).toContain("video_too_long");
+    // migration 21's item list is a prefix of migration 22's: nothing reordered or dropped
+    const items21 = values(m21, "import_items_error_check", "error");
+    expect([...IMPORT_ITEM_ERRORS].slice(0, items21.length)).toEqual(items21);
   });
 
   it("pollIntervalSec is 1..60", () => {

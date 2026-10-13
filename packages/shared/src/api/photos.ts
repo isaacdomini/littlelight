@@ -1,18 +1,38 @@
 import { z } from "zod";
-import { photoApprovalSchema, photoMimeSchema, photoStatusSchema } from "../db-enums";
+import {
+  mediaKindSchema,
+  mediaMimeSchema,
+  photoApprovalSchema,
+  photoStatusSchema,
+  renditionStatusSchema,
+  videoCodecSchema,
+} from "../db-enums";
+import { VIDEO_MAX_DURATION_MS } from "../video";
 import { aiStatusSchema, photoAiSchema } from "./ai";
 import { isoDateTimeSchema } from "./common";
 import { measurementSchema } from "./measurements";
 
 // `/api/babies/:id/photos` and `/api/photos/:id…` contracts (docs/plans/step-4.md 2.4, 2.6, 2.10;
 // PRD "FR-6 Storage and indexing", "FR-8 Browsing"). URLs are presigned `GetObject` URLs for
-// exactly one `thumb` or `display` key (never `analysis`), valid ≤ `SIGNED_URL_TTL_SEC`;
-// `urlExpiresAt` tells the client when to refetch. No schema here carries GPS or `raw_json`.
+// exactly one `thumb`, `display` or (videos) `web` key (never `analysis`/keyframes), valid ≤
+// `SIGNED_URL_TTL_SEC`; `urlExpiresAt` tells the client when to refetch. No schema here carries
+// GPS or `raw_json`.
 // Step 5 (docs/plans/step-5.md 2.4, 2.6; PRD "FR-3", "FR-8") adds the milestone and the
 // override-aware AI caption to every summary, the timeline summary (age groups + jump cursors),
 // bidirectional keyset paging, batch URL refresh and parent-details editing (one or many photos).
 // Step 6 (docs/plans/step-6.md 2.4) adds `aiStatus` to every summary and the `ai` block to the
 // single-photo response.
+// Step 12 (docs/plans/step-12.md 2.3, 2.4): a `photos` row may be a video (`mediaKind`,
+// `durationMs`, `renditionStatus` on every summary; `videoUrl`, `videoCodec`, `hasAudio` on the
+// detail; `media` filter on the list and summary). `thumbUrl`/`displayUrl` of a video are its
+// poster frame, so every grid and viewer path works unchanged.
+
+/** The `media` filter of the timeline list, summary and search: omitted = both. */
+export const mediaFilterSchema = z.enum(["photo", "video"]);
+export type MediaFilter = z.infer<typeof mediaFilterSchema>;
+
+/** `photos.duration_ms` on the wire: positive integer milliseconds, null for photos / until probed. */
+export const durationMsSchema = z.number().int().min(1).max(VIDEO_MAX_DURATION_MS).nullable();
 
 /** Limits of parent-supplied details (`photo_details`), trimmed; the DB enforces the caps too. */
 export const PHOTO_DETAILS_LIMITS = {
@@ -44,8 +64,14 @@ export const photoSummarySchema = z.object({
   ageDays: z.number().int().nullable(),
   width: z.number().int().nullable(),
   height: z.number().int().nullable(),
-  /** Sniffed type of the original (null until ingest). */
-  mime: photoMimeSchema.nullable(),
+  /** Sniffed type of the original (null until ingest); a video mime for videos. */
+  mime: mediaMimeSchema.nullable(),
+  /** `photos.media_kind`: a video's `thumbUrl` is its poster frame (step 12). */
+  mediaKind: mediaKindSchema,
+  /** `photos.duration_ms` (videos, after ingest); null for photos. The tile's duration badge. */
+  durationMs: durationMsSchema,
+  /** `photos.rendition_status`: `none` for photos; `pending` → `ready` | `failed` for videos. */
+  renditionStatus: renditionStatusSchema,
   isSensitive: z.boolean(),
   /** Near-duplicate (pHash) of an earlier live photo; flag only. */
   duplicateOfPhotoId: z.uuid().nullable(),
@@ -90,8 +116,17 @@ export type PhotoDetails = z.infer<typeof photoDetailsSchema>;
 
 /** `GET /photos/:id`. */
 export const photoSchema = photoSummarySchema.extend({
-  /** Signed URL of the `display` derivative; null until it exists. */
+  /** Signed URL of the `display` derivative (a video's poster); null until it exists. */
   displayUrl: z.url().nullable(),
+  /**
+   * Signed URL of a video's `web` rendition (H.264/AAC MP4, range requests, `response-content-type
+   * video/mp4`, ≤ `SIGNED_URL_TTL_SEC`); null for photos and until `renditionStatus = ready`.
+   */
+  videoUrl: z.url().nullable(),
+  /** `photos.video_codec` of the original (the rendition is always h264); null for photos. */
+  videoCodec: videoCodecSchema.nullable(),
+  /** `photos.has_audio`; null for photos and until probed. */
+  hasAudio: z.boolean().nullable(),
   exif: photoExifSchema.nullable(),
   details: photoDetailsSchema.nullable(),
   /** Measurements linked to this photo (`measurements.photo_id`), by `measuredAt` ascending. */
@@ -135,6 +170,8 @@ export const photosListQuerySchema = z.object({
   dir: photosListDirSchema.default("older"),
   limit: z.coerce.number().int().min(1).max(200).default(100),
   milestoneId: z.uuid().optional(),
+  /** Keep only photos or only videos (step 12); omitted = both. */
+  media: mediaFilterSchema.optional(),
 });
 export type PhotosListQuery = z.infer<typeof photosListQuerySchema>;
 
@@ -157,9 +194,10 @@ export const originalUrlResponseSchema = z.object({
 });
 export type OriginalUrlResponse = z.infer<typeof originalUrlResponseSchema>;
 
-/** `GET /babies/:id/photos/summary` query. */
+/** `GET /babies/:id/photos/summary` query (`media` as on the list, so groups match the filtered stream). */
 export const photosSummaryQuerySchema = z.object({
   view: photosViewSchema.default("album"),
+  media: mediaFilterSchema.optional(),
 });
 export type PhotosSummaryQuery = z.infer<typeof photosSummaryQuerySchema>;
 
@@ -187,10 +225,11 @@ export const photoUrlsRequestSchema = z.object({
 });
 export type PhotoUrlsRequest = z.infer<typeof photoUrlsRequestSchema>;
 
-/** Fresh URLs of one photo (same meaning as in `photoSchema`). */
+/** Fresh URLs of one photo (same meaning as in `photoSchema`; `videoUrl` null unless a ready video). */
 export const photoUrlSetSchema = z.object({
   thumbUrl: z.url().nullable(),
   displayUrl: z.url().nullable(),
+  videoUrl: z.url().nullable(),
   urlExpiresAt: isoDateTimeSchema.nullable(),
 });
 export type PhotoUrlSet = z.infer<typeof photoUrlSetSchema>;

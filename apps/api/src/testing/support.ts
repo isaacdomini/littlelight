@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
-import type { GoTrueClient, GoTrueReviewLinks, GoTrueSession } from "../auth/gotrue";
+import type {
+  GoTrueClient,
+  GoTruePasskeys,
+  GoTrueReviewLinks,
+  GoTrueSession,
+} from "../auth/gotrue";
 import type { ApiConfig } from "../config";
 
 // Test-only helpers for the API unit and integration tests (docs/plans/step-3.md 3.10). Not
@@ -82,14 +87,28 @@ export function unsignedToken(payload: Record<string, unknown>): string {
   return `${b64({ alg: "none", typ: "JWT" })}.${b64(payload)}.`;
 }
 
-/** Everything the real `createGoTrueClient` implements (step 9 adds the review links). */
-export type FullGoTrueClient = GoTrueClient & GoTrueReviewLinks;
+/**
+ * Everything the real `createGoTrueClient` implements (step 9 adds the review links, step 13 the
+ * passkey routes).
+ */
+export type FullGoTrueClient = GoTrueClient & GoTrueReviewLinks & GoTruePasskeys;
 
 export type GoTrueStub = FullGoTrueClient & {
   calls: Record<keyof FullGoTrueClient, unknown[][]>;
   /** Behaviour per method; assign to change what GoTrue answers mid-test. */
   impl: Partial<FullGoTrueClient>;
 };
+
+/** The seven passkey methods (docs/plans/step-13.md 2.4), in the order `GoTruePasskeys` lists them. */
+export const PASSKEY_METHODS = [
+  "passkeyAuthOptions",
+  "passkeyAuthVerify",
+  "passkeyRegOptions",
+  "passkeyRegVerify",
+  "passkeyList",
+  "passkeyRename",
+  "passkeyDelete",
+] as const satisfies readonly (keyof GoTruePasskeys)[];
 
 export interface StubGoTrueOptions {
   /**
@@ -98,13 +117,65 @@ export interface StubGoTrueOptions {
    * `hasReviewLinks` is false: the review sign-in's fail-closed 503 path.
    */
   reviewLinks?: boolean;
+  /**
+   * Default true: the stub has the seven passkey methods, like the real client. `false` leaves
+   * them off the object (a pre-step-13 client), so `hasPasskeys` is false: every passkey route's
+   * fail-closed 503 path.
+   */
+  passkeys?: boolean;
+}
+
+// GoTrue wire shapes (v2.197.0, docs/plans/step-13.md 0.1): what the stub's helpers below answer
+// with, so tests exercise the API's conversions (Unix-seconds `expires_at` -> ISO, bare list
+// array, absent `friendly_name` / `last_used_at`).
+
+/** `{ challenge_id, options, expires_at: <Unix seconds> }` as GoTrue's options routes answer. */
+export function goTruePasskeyOptionsBody(
+  over: Partial<{
+    challenge_id: string;
+    options: Record<string, unknown>;
+    expires_at: number;
+  }> = {},
+) {
+  return {
+    challenge_id: over.challenge_id ?? randomUUID(),
+    options: over.options ?? {
+      challenge: "dGVzdC1jaGFsbGVuZ2U",
+      rpId: "localhost",
+      userVerification: "preferred",
+      timeout: 300000,
+    },
+    // GoTrue: int64 Unix seconds, never ISO.
+    expires_at: over.expires_at ?? Math.floor(Date.now() / 1000) + 300,
+  };
+}
+
+/** One GoTrue passkey item (`GET /passkeys/` entry, registration verify / PATCH response). */
+export function goTruePasskeyBody(
+  over: Partial<{
+    id: string;
+    friendly_name: string | null;
+    created_at: string;
+    last_used_at: string | null;
+  }> = {},
+) {
+  return {
+    id: over.id ?? randomUUID(),
+    ...(over.friendly_name === undefined
+      ? {}
+      : over.friendly_name === null
+        ? {}
+        : { friendly_name: over.friendly_name }),
+    created_at: over.created_at ?? "2026-10-11T12:34:56.123456Z",
+    ...(over.last_used_at ? { last_used_at: over.last_used_at } : {}),
+  };
 }
 
 /**
- * A recording GoTrue client (`GoTrueClient` + `GoTrueReviewLinks`). `stub.calls.<method>` lists
- * the argument arrays of every call. By default `sendOtp`, `logout` and `adminDeleteUser` succeed
- * and every other method (including `adminGenerateMagicLink`) throws (a test must say what GoTrue
- * does); pass `impl` to override any of them.
+ * A recording GoTrue client (`GoTrueClient` + `GoTrueReviewLinks` + `GoTruePasskeys`).
+ * `stub.calls.<method>` lists the argument arrays of every call. By default `sendOtp`, `logout` and
+ * `adminDeleteUser` succeed and every other method (including `adminGenerateMagicLink` and the seven
+ * passkey methods) throws (a test must say what GoTrue does); pass `impl` to override any of them.
  */
 export function stubGoTrue(
   initial: Partial<FullGoTrueClient> = {},
@@ -120,15 +191,24 @@ export function stubGoTrue(
     logout: [],
     adminDeleteUser: [],
     adminGenerateMagicLink: [],
+    passkeyAuthOptions: [],
+    passkeyAuthVerify: [],
+    passkeyRegOptions: [],
+    passkeyRegVerify: [],
+    passkeyList: [],
+    passkeyRename: [],
+    passkeyDelete: [],
   };
   const defaults: Record<string, (...a: never[]) => Promise<unknown>> = {
     sendOtp: async () => undefined,
     logout: async () => undefined,
     adminDeleteUser: async () => undefined,
   };
+  const passkeyNames = new Set<string>(PASSKEY_METHODS);
   const client: Record<string, unknown> = {};
   for (const name of Object.keys(calls) as (keyof FullGoTrueClient)[]) {
     if (name === "adminGenerateMagicLink" && opts.reviewLinks === false) continue;
+    if (passkeyNames.has(name) && opts.passkeys === false) continue;
     client[name] = async (...args: unknown[]) => {
       calls[name].push(args);
       const fn = (impl[name] ?? defaults[name]) as

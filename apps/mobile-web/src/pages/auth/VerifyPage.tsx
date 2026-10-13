@@ -7,6 +7,7 @@ import { CodeEntry } from "../../components/CodeEntry";
 import { FlowPage } from "../../components/Page";
 import { Button, Message } from "../../components/ui";
 import { t } from "../../i18n";
+import { offerPasskeyPrompt } from "../../lib/passkeyPrompt";
 import { pendingEmail, pendingInvite } from "../../lib/session";
 
 /**
@@ -26,8 +27,10 @@ export function VerifyPage() {
   const onVerified = useCallback(async () => {
     const fresh = await refetchMe();
     pendingEmail.clear();
+    // A sign-in by email code (not a re-verification) may show the one-time "Add a passkey" card.
+    if (!reauth) offerPasskeyPrompt();
     navigate(next ?? nextOnboardingRoute(fresh, pendingInvite.get()), { replace: true });
-  }, [refetchMe, navigate, next]);
+  }, [refetchMe, navigate, next, reauth]);
 
   if (!email) return <ActiveNavigate path="/verify" to={reauth ? "/settings" : "/welcome"} />;
 

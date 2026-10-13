@@ -37,7 +37,14 @@ export type PhotoStatus = z.infer<typeof photoStatusSchema>;
 export const photoApprovalSchema = z.enum(["pending", "approved", "rejected"]);
 export type PhotoApproval = z.infer<typeof photoApprovalSchema>;
 
-/** `photos.mime`. */
+/**
+ * `photos.media_kind`, `upload_files.media_kind`, `import_items.media_kind` (docs/plans/step-12.md
+ * 2.2). A video is one **item** of the family's free pool, like a photo.
+ */
+export const mediaKindSchema = z.enum(["photo", "video"]);
+export type MediaKind = z.infer<typeof mediaKindSchema>;
+
+/** The image part of `photos.mime` (photo-only call sites: EXIF, sharp decode). */
 export const photoMimeSchema = z.enum([
   "image/jpeg",
   "image/png",
@@ -47,12 +54,50 @@ export const photoMimeSchema = z.enum([
 ]);
 export type PhotoMime = z.infer<typeof photoMimeSchema>;
 
+/** The video part of `photos.mime` (step 12): MP4 and QuickTime containers, H.264 or HEVC inside. */
+export const videoMimeSchema = z.enum(["video/mp4", "video/quicktime"]);
+export type VideoMime = z.infer<typeof videoMimeSchema>;
+
 /**
- * `photo_derivatives.kind`. All derivatives are EXIF/GPS-stripped; `analysis` is the only copy
- * that may ever reach a model; viewers only ever get `thumb`/`display`.
+ * `photos.mime` (the `photos_mime_check` CHECK since migration 22): photo mimes then video mimes,
+ * in CHECK order. DTO fields carrying `photos.mime` use this; `photoMimeSchema` stays for
+ * photo-only code paths.
  */
-export const derivativeKindSchema = z.enum(["thumb", "display", "analysis"]);
+export const mediaMimeSchema = z.enum([...photoMimeSchema.options, ...videoMimeSchema.options]);
+export type MediaMime = z.infer<typeof mediaMimeSchema>;
+
+/**
+ * `photo_derivatives.kind`. All derivatives are EXIF/GPS/QuickTime-tag-stripped; `analysis` (and,
+ * for videos, `keyframe1..3`) are the only copies that may ever reach a model; viewers only ever
+ * get `thumb`/`display` and, for videos, the `web` rendition (H.264/AAC MP4, ≤ 1080p). For a
+ * video, `thumb`/`display`/`analysis` are its poster frame.
+ */
+export const derivativeKindSchema = z.enum([
+  "thumb",
+  "display",
+  "analysis",
+  "web",
+  "keyframe1",
+  "keyframe2",
+  "keyframe3",
+]);
 export type DerivativeKind = z.infer<typeof derivativeKindSchema>;
+
+/** The JPEG derivative kinds of every item (poster frame for a video); `DERIVATIVE_LONG_EDGE` keys. */
+export const imageDerivativeKindSchema = z.enum(["thumb", "display", "analysis"]);
+export type ImageDerivativeKind = z.infer<typeof imageDerivativeKindSchema>;
+
+/**
+ * `photos.rendition_status` (step 12): `none` for photos; a video is `pending` from upload
+ * complete until `video.transcode` wrote the `web` rendition (`ready`) or gave up (`failed`:
+ * poster, original download and export still work).
+ */
+export const renditionStatusSchema = z.enum(["none", "pending", "ready", "failed"]);
+export type RenditionStatus = z.infer<typeof renditionStatusSchema>;
+
+/** `photos.video_codec`: the original's codec as probed (the `web` rendition is always h264). */
+export const videoCodecSchema = z.enum(["h264", "hevc"]);
+export type VideoCodec = z.infer<typeof videoCodecSchema>;
 
 /**
  * `measurements.kind`. Convention for `measurements.value_metric`: **grams** for `weight`,

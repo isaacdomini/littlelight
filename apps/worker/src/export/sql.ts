@@ -72,6 +72,7 @@ const PHOTO_ROW_COLUMNS = `
        p.id, p.taken_at, p.taken_at_estimated, e.tz_offset_minutes, p.age_days, p.status,
        p.approval, p.is_sensitive, pr.display_name AS uploaded_by_name, p.width, p.height,
        p.bytes::text AS bytes, p.mime, encode(p.sha256, 'hex') AS sha256,
+       p.media_kind, p.duration_ms, p.video_codec,
        d.milestone_id, m.name AS milestone_name, m.category AS milestone_category,
        COALESCE(d.people, '{}') AS people, d.note, d.location_label,
        e.taken_at AS exif_taken_at, e.place_label, e.camera_make, e.camera_model, e.orientation,

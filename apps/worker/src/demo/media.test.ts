@@ -7,6 +7,7 @@ import { type Handler, recordingLog, scriptedPool } from "../testing/stubs";
 import {
   checkPassed,
   demoMediaEnabled,
+  EXPECTED_DEMO_DERIVATIVES,
   headSize,
   isMetadataFree,
   isUuid,
@@ -95,15 +96,16 @@ describe("headSize", () => {
 });
 
 describe("checkPassed", () => {
+  // 13 demo items (12 photos + the clip): 12 × 3 JPEG derivatives + the clip's 7 = 43.
   const ok = {
-    photos: 12,
-    expectedPhotos: 12,
-    originals: 12,
-    derivatives: 36,
-    expectedDerivatives: 36,
-    rowsMatching: 12,
-    metadataFree: 48,
-    objectsChecked: 48,
+    photos: 13,
+    expectedPhotos: 13,
+    originals: 13,
+    derivatives: 43,
+    expectedDerivatives: 43,
+    rowsMatching: 13,
+    metadataFree: 56,
+    objectsChecked: 56,
   };
   it("passes only when everything is present, matching and metadata-free", () => {
     expect(checkPassed(ok)).toBe(true);
@@ -113,6 +115,7 @@ describe("checkPassed", () => {
     expect(checkPassed({ ...ok, metadataFree: 47 })).toBe(false);
     expect(checkPassed({ ...ok, photos: 11 })).toBe(false);
     expect(ok.expectedPhotos).toBe(DEMO_IDS.photos.length);
+    expect(ok.expectedDerivatives).toBe(EXPECTED_DEMO_DERIVATIVES);
   });
 });
 

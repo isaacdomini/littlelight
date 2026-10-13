@@ -5,6 +5,9 @@ import {
   OTP_PER_EMAIL_PER_HOUR,
   OTP_PER_IP_PER_HOUR,
   OTP_TTL_MIN,
+  PASSKEY_OPTIONS_PER_IP_PER_HOUR,
+  PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN,
+  PASSKEY_VERIFY_PER_IP_PER_HOUR,
 } from "@tinyglow/shared";
 import type { FastifyBaseLogger } from "fastify";
 import { type ApiConfig, abuseSettings } from "../config";
@@ -30,6 +33,12 @@ export interface AuthThrottles {
   verifyPerIp: Throttle;
   /** `GET /invites/:token` (3.5): 60 per hour per IP. */
   inviteLookupPerIp: Throttle;
+  /** `POST /auth/passkey/options` (step 13): 60 per hour per client IP. */
+  passkeyOptionsPerIp: Throttle;
+  /** `POST /auth/passkey/verify`: 60 attempts per hour per IP, success or failure (GoTrue has no limiter there). */
+  passkeyVerifyPerIp: Throttle;
+  /** `POST /auth/passkey/verify` failures: 10 per 15 minutes per IP; also drives the Turnstile threshold on `options`. */
+  passkeyVerifyFailuresPerIp: Throttle;
 }
 
 export interface AuthRuntime {
@@ -66,6 +75,18 @@ export function createAuthThrottles(): AuthThrottles {
     verifyPerEmail: createThrottle({ limit: OTP_MAX_ATTEMPTS, windowMs: OTP_TTL_MIN * 60_000 }),
     verifyPerIp: createThrottle({ limit: OTP_MAX_ATTEMPTS, windowMs: OTP_TTL_MIN * 60_000 }),
     inviteLookupPerIp: createThrottle({ limit: INVITE_LOOKUPS_PER_IP_PER_HOUR, windowMs: HOUR_MS }),
+    passkeyOptionsPerIp: createThrottle({
+      limit: PASSKEY_OPTIONS_PER_IP_PER_HOUR,
+      windowMs: HOUR_MS,
+    }),
+    passkeyVerifyPerIp: createThrottle({
+      limit: PASSKEY_VERIFY_PER_IP_PER_HOUR,
+      windowMs: HOUR_MS,
+    }),
+    passkeyVerifyFailuresPerIp: createThrottle({
+      limit: PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN,
+      windowMs: 15 * 60_000,
+    }),
   };
 }
 

@@ -460,9 +460,11 @@ describe.skipIf(!databaseUrl)("share-link viewer (api + db)", () => {
         expect(Object.keys(p).sort()).toEqual(
           [
             "ageDays",
+            "durationMs",
             "height",
             "hidden",
             "id",
+            "mediaKind",
             "milestone",
             "takenAt",
             "takenAtEstimated",

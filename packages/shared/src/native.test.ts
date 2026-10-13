@@ -8,6 +8,7 @@ import {
   NATIVE_AUTH_CALLBACK_PATH,
   NATIVE_ORIGINS_DEFAULT,
   NATIVE_UPLOAD_PICK_MAX,
+  PASSKEY_PROMPT_KEY,
 } from "./native";
 import { UPLOAD_MAX_FILES_PER_SESSION } from "./upload";
 
@@ -83,5 +84,11 @@ describe("DEEP_LINK_PATTERNS", () => {
         expect(re.test(p)).toBe(true);
       }
     }
+  });
+});
+
+describe("PASSKEY_PROMPT_KEY (step 13)", () => {
+  it("is the documented storage key for the enrol-card snooze and holds no credential material", () => {
+    expect(PASSKEY_PROMPT_KEY).toBe("ll.passkey.prompt.v1");
   });
 });

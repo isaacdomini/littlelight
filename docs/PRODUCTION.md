@@ -9,7 +9,8 @@ This guide takes Tinyglow from this repo to a running production server. It assu
 
 Work through the parts in order. Parts A–F get the web app live. Parts G–I are optional features
 and the phone apps, and you can do them later. Part J is the routine for spotting and stopping
-free-tier abuse once families start using it.
+free-tier abuse once families start using it. Part K covers videos: limits, disk planning and
+what to do when one gets stuck.
 
 ---
 
@@ -26,8 +27,8 @@ You need these before the first start:
 | **Support mailbox `support@tinyglow.app`** | Suspended accounts are told "This account has been suspended. Contact support@tinyglow.app." (the address is built into the app), and a suspended person who wants their account deleted has to write there (Part J). Mail sent there must reach you. | A mailbox or a forwarding alias at your mail host for `tinyglow.app`. Send it a test message before launch. |
 | **Cloudflare Turnstile widget** (strongly recommended) | Bot protection on sign-in. Without it, nothing but the per-network cap on new families slows down scripted accounts (Part C2). | Cloudflare → Turnstile → Add widget, hostname `tinyglow.app`. You get a site key and a secret key. |
 
-Optional, any time later: Sentry, Google Photos import, Apple and Google sign-in, and the push
-notification keys. See Part G.
+Optional, any time later: Sentry, Google Photos import, Apple and Google sign-in, passkey sign-in
+(once the domain is final), and the push notification keys. See Part G.
 
 ---
 
@@ -43,9 +44,12 @@ sudo install -d -m 755 /mnt/data/tinyglow
 sudo install -d -m 700 -o 999 -g 999 /mnt/data/tinyglow/postgres   # database (postgres runs as uid 999)
 sudo install -d -m 700 /mnt/data/tinyglow/photos                    # photo library (MinIO)
 sudo install -d -m 700 /mnt/data/tinyglow/backups                   # nightly database dumps
+sudo install -d -m 700 -o 1000 -g 1000 /mnt/data/tinyglow/scratch  # video work folder (worker runs as uid 1000)
 ```
 
-`postgres/` must be empty on the first start.
+`postgres/` must be empty on the first start. `scratch/` holds each video while the worker
+prepares it (the original, up to 2 GB, plus the ~1 GB playback copy), so keep it on the data disk
+with at least 6 GB free; it is emptied after every video and is not backed up (Part K).
 
 ### 2. Create the app folder and get the code
 
@@ -92,7 +96,7 @@ The resulting folder:
   .env.offsite         (off-site backup settings, Part F)
   app/                 (this repo)
 /mnt/data/tinyglow/
-  postgres/  photos/  backups/
+  postgres/  photos/  backups/  scratch/
 ```
 
 ---
@@ -216,7 +220,11 @@ style, all AI and search tuning, and the backup retention (35 days at 03:00) als
 defaults. So do the family-start safeguards (`FAMILIES_PER_IP_PER_DAY=5`, `BLOCK_DISPOSABLE_EMAIL=true`,
 empty `EMAIL_DOMAIN_DENYLIST` and `EMAIL_DOMAIN_ALLOWLIST`); Part G says when to change them. The
 cap of 200 photos waiting for approval per guest is a database setting, not a `.env` value
-(Part J).
+(Part J). The video settings (`WORKER_SCRATCH_PATH=/mnt/data/tinyglow/scratch`,
+`VIDEO_CONCURRENCY=1`, `VIDEO_FFMPEG_THREADS=2`, `VIDEO_TRANSCODE_TIMEOUT_SEC=3600`, and the
+commented-out `WORKER_CPUS`) are right for a 4-core box; Part K says when to touch them. Passkeys
+start off (`AUTH_PASSKEYS_ENABLED=false`, `WEBAUTHN_RP_ID=tinyglow.app`, `PASSKEY_MAX_PER_USER=5`,
+empty `WEBAUTHN_NATIVE_ORIGINS`); G2 says when and how to turn them on.
 
 Never set:
 - `GOOGLE_IMPORT_PROVIDER=fake` or `PUSH_PROVIDER=fake`; production refuses fake providers.
@@ -330,7 +338,10 @@ Backblaze B2 or any S3 bucket.
    ```
    The second job restores into a scratch area each month and checks it.
 
-`postgres/` is not copied raw; the nightly dump is the consistent copy. Your password manager
+`postgres/` is not copied raw; the nightly dump is the consistent copy. `scratch/` is never
+copied (work files only). Videos make the off-site copy grow faster than photos did: the
+original of every clip plus its playback copy (about 15 % extra) sit under `photos/` and are both
+backed up, so a restore needs no re-encoding (Part K has the sizing). Your password manager
 should hold: `DATA_ENCRYPTION_KEY`, `JWT_SECRET`, `RESTIC_PASSWORD` and the B2 key.
 
 ---
@@ -363,6 +374,7 @@ Other commands also run from `~/servers/tinyglow`:
 | **Error reporting** | `SENTRY_DSN` (server), `SENTRY_WEB_DSN` (web), `WEB_CSP_CONNECT_EXTRA=https://oNNN.ingest.<region>.sentry.io` | sentry.io → project → Client Keys. After changing `SENTRY_WEB_DSN`, run `docker compose build web && docker compose up -d web`. |
 | **Enforce the security policy** | `WEB_CSP_HEADER=Content-Security-Policy` | Only after a week or two in report-only mode with no reported violations |
 | **Google Photos import** | `GOOGLE_IMPORT_PROVIDER=live`, `GOOGLE_IMPORT_CLIENT_ID`, `GOOGLE_IMPORT_CLIENT_SECRET` | See G1 |
+| **Passkey sign-in** | `AUTH_PASSKEYS_ENABLED=true` (plus `WEBAUTHN_NATIVE_ORIGINS` for the Android app) | See G2. Only once the domain is final: the relying-party id `tinyglow.app` is baked into every passkey. |
 | **Sign in with Google** | `GOTRUE_EXTERNAL_GOOGLE_ENABLED=true`, `GOOGLE_CLIENT_ID=<web>,<iOS>,<Android>`, `GOOGLE_CLIENT_SECRET` | Google Cloud → Credentials. Redirect URI `https://tinyglow.app/auth/callback`. |
 | **Sign in with Apple** | `GOTRUE_EXTERNAL_APPLE_ENABLED=true`, `APPLE_CLIENT_ID=<Services ID>,app.tinyglow`, `APPLE_CLIENT_SECRET` | Apple Developer → Services ID + Sign in with Apple key. The secret is an ES256 JWT you must regenerate every 6 months. Return URL `https://tinyglow.app/auth/callback`. |
 | **iPhone push** | `PUSH_PROVIDER=live`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY_BASE64` | Apple Developer → Keys → APNs key (.p8). Encode with `base64 -w0 AuthKey_XXXX.p8` (on a Mac, `base64 -i … \| tr -d '\n'`). |
@@ -389,6 +401,43 @@ Other commands also run from `~/servers/tinyglow`:
 7. To go public, **publish** the consent screen and submit the sensitive scope for Google
    verification. That takes days to weeks.
 
+### G2. Passkey sign-in
+
+Passkeys (Face ID, Touch ID, Windows Hello, a password manager) let people sign in to an
+existing account without waiting for an email code. The code stays primary and is the way back
+in when a passkey is lost. The sign-in server (GoTrue) does the cryptography; this is a **beta**
+feature of the pinned `supabase/auth` version, so re-run the check below after any upgrade.
+
+**Before turning it on:** the domain must be final. Every passkey is tied to the relying-party
+id `tinyglow.app` (`WEBAUTHN_RP_ID`). Changing it later invalidates all of them.
+
+1. In `.env`, set `AUTH_PASSKEYS_ENABLED=true` (leave `WEBAUTHN_RP_ID=tinyglow.app` and
+   `PASSKEY_MAX_PER_USER=5`). The web app and iPhones need nothing else. For the Android app, also
+   fill `WEBAUTHN_NATIVE_ORIGINS` (Part H, step 3).
+2. `docker compose up -d auth api`.
+3. **Check it** (this is the only check that proves it works: a wrong RP id or origin is **not**
+   a start-up error; GoTrue logs one warning, reports healthy and answers 500 "Failed to
+   initialize WebAuthn" to every passkey request). From `~/servers/tinyglow`:
+   ```sh
+   docker compose exec -T api node -e "fetch('http://auth:9999/passkeys/authentication/options',{method:'POST'}).then(async r=>{const j=await r.json();console.log(r.status, Object.keys(j), typeof j.expires_at)})"
+   # expect:  200 [ 'challenge_id', 'options', 'expires_at' ] number
+   # 404 {"error_code":"passkey_disabled"} = the flag is still off;  500 = fix WEBAUTHN_RP_ID / origins, then `up -d auth`
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://tinyglow.app/auth/passkeys/authentication/options   # 404: browsers never reach GoTrue directly
+   curl -s https://tinyglow.app/api/auth/config | grep -o '"passkeys":[a-z]*'                                   # "passkeys":true
+   ```
+   The command prints only the status and the key names, never the challenge.
+4. In the app: sign in with a code, accept the "Add a passkey" card (or Settings → Passkeys),
+   sign out, and sign back in with the passkey. Removing a passkey asks for a fresh sign-in.
+
+**Limits built in:** 5 passkeys per account; a passkey sign-in may be started 30 times per
+network address per 5 minutes at GoTrue (`GOTRUE_RATE_LIMIT_PASSKEY`, fixed in compose) and the
+api adds its own limits on finishing one; challenges expire after 5 minutes. The store-review
+account can't register passkeys. Deleting an account deletes its passkeys with it.
+
+**Turning it off** (`AUTH_PASSKEYS_ENABLED=false`, `docker compose up -d auth api`) hides the
+buttons and makes GoTrue refuse the endpoints; registered passkeys stay in the database and work
+again when it is turned back on.
+
 ---
 
 ## Part H: Phone apps (App Store and Google Play)
@@ -401,11 +450,25 @@ The phone apps use the same server. Shipping them needs your developer accounts:
    - Create the App Store Connect app record, and an App Store Connect API key for uploads.
 2. **Google:** a Play Console account and the app `app.tinyglow` with Play App Signing.
    Copy the SHA-256 fingerprints of the app signing key and the upload key.
-3. **Deep-link files.** Replace the placeholders, then redeploy (`git pull` + `up -d --build`):
-   - In `app/apps/mobile-web/public/.well-known/apple-app-site-association`: `APPLE_TEAM_ID`.
-   - In `assetlinks.json`: `PLAY_APP_SIGNING_SHA256` and `UPLOAD_KEY_SHA256`.
+3. **Deep-link and passkey files.** Replace the placeholders, then redeploy (`git pull` +
+   `up -d --build`):
+   - In `app/apps/mobile-web/public/.well-known/apple-app-site-association`: `APPLE_TEAM_ID`. The
+     file carries two keys that both use `<TEAM_ID>.app.tinyglow`: `applinks` (invite and share
+     links open in the app) and `webcredentials` (lets the iPhone app use passkeys for
+     `tinyglow.app`). The app itself is signed with the Associated Domains entitlement
+     `webcredentials:tinyglow.app`.
+   - In `assetlinks.json`: `PLAY_APP_SIGNING_SHA256` and `UPLOAD_KEY_SHA256`. Each certificate is
+     listed twice, for `delegate_permission/common.handle_all_urls` (links) and
+     `delegate_permission/common.get_login_creds` (passkeys).
+   - For Android passkeys, also put the same certificates into `.env` as WebAuthn origins
+     (`WEBAUTHN_NATIVE_ORIGINS`, comma-separated, one per certificate, then `docker compose up -d
+     auth`). From a colon-separated SHA-256 fingerprint:
+     ```sh
+     echo 'AA:BB:…:FF' | tr -d ':' | xxd -r -p | base64 | tr '+/' '-_' | tr -d '='   # -> android:apk-key-hash:<output>
+     ```
    - Check them with `curl https://tinyglow.app/.well-known/apple-app-site-association` and
-     `…/assetlinks.json`.
+     `…/assetlinks.json`. Apple fetches the first file through its CDN, which can take up to a day
+     to refresh; `assetlinks.json` is read by Google when the app is installed.
 4. **Push keys:** set the APNs and FCM values from Part G.
 5. **Build and upload:** follow `app/apps/mobile-web/NATIVE.md` and
    `app/apps/mobile-web/store/release-checklist.md`, then upload to TestFlight and Play internal
@@ -420,6 +483,10 @@ The phone apps use the same server. Shipping them needs your developer accounts:
    family share link open in the app.
 
 **Still to verify on real devices:**
+- Passkeys on an iPhone (iOS 16+) and an Android phone with Google Play services: add one, sign
+  out, sign in with it, remove it. Needs the Team ID (iOS) and the certificate fingerprints
+  (Android) above, and `AUTH_PASSKEYS_ENABLED=true` on the server (G2). Keep passkeys out of the
+  store listing until this passes.
 - Android, end to end (the emulator crashes on the dev Mac).
 - On iPhone: background album sync, Wi-Fi-only on cellular, iCloud-only originals, the "selected
   photos only" permission flow, and downloading an export.
@@ -440,6 +507,8 @@ The phone apps use the same server. Shipping them needs your developer accounts:
 - [ ] `DATA_ENCRYPTION_KEY`, `JWT_SECRET`, `RESTIC_PASSWORD` and the B2 key are in your password manager.
 - [ ] Real Privacy Policy and Terms pages exist.
 - [ ] A share link works for a family member who has no account.
+- [ ] Passkeys are turned on only now that the domain is final (G2), and the in-network check
+      printed `200 [ 'challenge_id', 'options', 'expires_at' ] number`.
 
 ---
 
@@ -657,6 +726,137 @@ This is also how you settle a support request from a family with a real need.
 **Don't delete accounts by hand** (for example `delete from auth.users`): it breaks the "every
 album keeps an admin" rule and leaves photos behind in storage. Deletion goes through the app's
 own account deletion only.
+
+---
+
+## Part K: Videos
+
+Parents and contributors can add short videos next to photos. A video goes through the same
+upload (straight to `files.tinyglow.app` in 16 MB pieces), the same approval queue, trash, export
+and family links as a photo. The worker then prepares it with ffmpeg (built into its image): a
+poster frame (what the grid and the AI see), three keyframes for the AI, and one 1080p H.264 MP4
+"playback copy" that every browser and both apps play. The original file is kept unchanged.
+
+### Limits (fixed in code)
+
+| | Free album | Plus album |
+| --- | --- | --- |
+| Per clip | up to **60 s** and **250 MB** | up to **5 min** and **2 GB** |
+| Formats | MP4 or MOV, H.264 or HEVC, longest side up to 4096 px (phones, 4K included) | same |
+| Stored | original + 1080p playback copy + poster/keyframes | same (a 4K original stays 4K) |
+| Counts as | **1 item** of the family's 1,000 free photos+videos (Part J) | not counted |
+| Volume | at most **100 videos per family** across its free albums | **200 GB per family** fair use: shown in the abuse report, nothing is enforced |
+| AI | never sent to a model (like free photos) | described from the poster + keyframes, in the usual batches |
+
+People see these as "Free albums hold clips up to 1 minute long…", "This video is 1.2 GB; free
+albums take videos up to 250 MB…" and "Your family's free albums already hold 100 videos…". The
+answer to a family that hits them is Plus (see "Billing" under Known limits).
+
+**Changing the free video count.** Like the pending-photo cap (Part J), it is a database
+setting, so the database trigger and the app agree. From `~/servers/tinyglow`:
+
+```sh
+docker compose exec db psql -U postgres tinyglow -c "alter database tinyglow set app.free_tier_video_limit = '200'"
+docker compose restart api worker        # their open database connections pick up the new value
+docker compose exec db psql -U postgres tinyglow -c "select free_tier_video_limit()"   # 200
+```
+
+Back to the default (100): `alter database tinyglow reset app.free_tier_video_limit`, then the
+same restart. Videos already above a lowered limit stay; the family just can't add more.
+
+### Disk planning
+
+Videos are what fills the disk. Rules of thumb (phone footage, 1080p–4K):
+
+- A phone minute of 4K is 300–400 MB; of 1080p 60–130 MB. The playback copy adds about 15 %
+  (roughly 60 MB per minute at 1080p). The original and the copy are both kept under
+  `/mnt/data/tinyglow/photos` and both go off-site (Part F), so a restore needs no re-encoding.
+- A free family can hold at most 100 × 250 MB ≈ **25 GB** of video originals plus copies.
+- A Plus family that uploads five minutes of 4K every week adds **50–100 GB per year** of
+  originals plus ~15 % copies. The abuse report (Part J) has a `videos` and `video_bytes` column
+  per family and marks families past the 200 GB fair-use line; that is a conversation, not an
+  automatic block.
+- The worker's 80 % disk alert (`STORAGE_DISK_ALERT_PCT`) is your early warning; check `df -h
+  /mnt/data` monthly, more often once Plus families upload video.
+
+**The scratch folder.** While a video is being prepared, its original (up to 2 GB) and its
+playback copy (~1 GB) sit in `/mnt/data/tinyglow/scratch` (`WORKER_SCRATCH_PATH`), then are
+deleted.
+
+*Which failures are final.* A genuine ffmpeg failure on the clip (a non-zero exit, a crash or
+out-of-memory kill, an oversized output) and a timeout (`VIDEO_TRANSCODE_TIMEOUT_SEC`, 3600 s)
+mark the clip as failed after its retries: it shows "This video couldn't be prepared for
+playback. Parents can still download the original.", and the poster, download and export keep
+working. ffprobe refusing the file is final too. Only "the worker couldn't run at all" conditions
+defer instead: the scratch filesystem below 6 GB free (`VIDEO_SCRATCH_MIN_FREE_BYTES`, fixed in
+code), storage or the database unreachable, or the ffmpeg/ffprobe binary missing. A deferred clip
+is retried two minutes apart, then stays on "Preparing video…" and `ingest.reconcile` re-sends
+it every 15 minutes until it succeeds; nothing is lost and the worker keeps running.
+
+*Scratch is self-healing.* A transcode that defers for lack of scratch space deletes its own staged files at once (other deferrals keep the staged original for the retry and leave it to the sweep). The
+`uploads.sweep` job (every 30 minutes) deletes any scratch file older than 6 hours
+(`VIDEO_SCRATCH_TTL_HOURS`) and, while free space is under 6 GB, the oldest files older than the
+transcode timeout (1 hour) until 6 GB is free again. Staged originals are only a cache (MinIO
+holds the original) and are re-downloaded with a size and checksum check when needed. So a full
+scratch disk never needs emptying by hand: the heartbeat warns "scratch low" and also reports
+`videosPendingStuck` (clips pending for more than 15 minutes; warned once while it is above 0),
+and the reconcile logs a warning when it has re-sent the same clip three times or more. Those
+two lines are your signal to look at the data disk, storage or database, or to nudge a clip with
+`run-job video.transcode` (below). `scratch/` is never backed up.
+
+**CPU and memory.** One encode uses `VIDEO_FFMPEG_THREADS` (2) cores for a few minutes: about
+2–3× real time for 1080p at these settings, 10–15 minutes for a 5-minute 4K clip. The worker
+container is capped at 3 GB (`mem_limit`), enough for the usual photo work plus one encode of a
+4K HEVC source. On a box with 4 or more cores you can set `VIDEO_FFMPEG_THREADS=4`; on a box the
+database shares, set `WORKER_CPUS=2` so encodes never starve Postgres. Leave
+`VIDEO_CONCURRENCY=1` unless the queue of "Preparing video…" clips regularly runs long; `2` needs
+`mem_limit` raised to 4–5 GB (edit a `docker-compose.local.yml` as described in
+`app/deploy/server-compose.example.yml`) and 12 GB of free scratch. After changing any of these:
+`docker compose up -d worker`.
+
+### When a video is stuck on "Preparing video…"
+
+The poster shows at once; the playback copy follows within minutes. If a clip stays on
+"Preparing video…" for more than half an hour:
+
+1. `docker compose logs --since 1h worker | grep -i -E 'video|scratch|ffmpeg|reconcile'`. Logs
+   never contain file names, URLs or paths with content; look for `scratch low` or
+   `videosPendingStuck` in the heartbeat lines, a storage or database error, a reconcile warning
+   that the same clip was re-sent three times or more (see 2), or `transcode: failed` (see 3).
+2. **Still "Preparing video…" (the clip is pending, not failed).** This is a deferral: the scratch
+   filesystem had less than 6 GB free, storage or the database was unreachable, or the
+   ffmpeg/ffprobe binary is missing from the worker image. The worker retried two minutes apart,
+   left the clip pending, and `ingest.reconcile` re-sends it every 15 minutes until it succeeds.
+   Scratch cleans itself (a transcode deferred for lack of space deleted its staged files; the half-hourly sweep
+   removes anything older than 6 hours and, while space is short, the oldest files older than an
+   hour), so if the disk itself is full it is the photo library or something else on it: check
+   `df -h /mnt/data`, bring storage or the database back, and the clip finishes on the next
+   reconcile. To push one now, with the IDs from the logs:
+   ```sh
+   docker compose exec worker node apps/worker/dist/run-job.js video.transcode '{"photoId":"<photoId>","babyId":"<babyId>"}'
+   ```
+3. **"This video couldn't be prepared for playback. Parents can still download the original."**
+   A final failure: ffmpeg could not encode the clip (non-zero exit, crash or out-of-memory kill,
+   oversized output), ffprobe refused the file, or the encode ran past `VIDEO_TRANSCODE_TIMEOUT_SEC`
+   (3600 s), after its retries. The poster, download and export keep working. The usual causes
+   are a codec the phone wrote that ffmpeg could not decode (the upload is refused for anything
+   but H.264/HEVC, so this is rare), a corrupt file, a worker short of memory (`mem_limit`), or a
+   box too slow for the timeout. The same `run-job video.transcode` command retries a failed clip
+   once you've addressed the cause; raise the timeout only on a very slow box.
+4. HDR footage (iPhone "HDR video", Dolby Vision) is tone-mapped to standard colour for the
+   playback copy; the original keeps its HDR. If colours look washed out, check
+   `docker compose exec worker ffmpeg -version | tr ' ' '\n' | grep -c -- --enable-libzimg`
+   prints `1` (the image is built with it; a rebuilt image without it falls back to plain colour
+   conversion and logs `hdr_tonemap: false`).
+
+### Cloudflare and playback
+
+Nothing to configure beyond Part D. Uploads use the same 16 MB pieces as photos, so no request
+approaches Cloudflare's 100 MB body limit; a piece must upload within Cloudflare's 100-second
+limit, which needs about 1.4 Mbit/s upstream (a slower connection sees pieces retried; the apps
+default to Wi-Fi only for files over 50 MB). Playback is ordinary range requests on the MP4 copy
+via `files.tinyglow.app` with 30-minute links (family-link viewers get the playback copy only,
+never the original), and the cache-bypass rule from Part D keeps them out of Cloudflare's cache.
 
 ---
 

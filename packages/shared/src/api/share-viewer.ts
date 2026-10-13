@@ -10,12 +10,14 @@ import {
   SHARE_VIEWER_PAGE_SIZE,
   SHARE_VIEWER_URLS_MAX,
 } from "../constants";
+import { mediaKindSchema } from "../db-enums";
 import { isoDateSchema, isoDateTimeSchema } from "./common";
+import { durationMsSchema } from "./photos";
 
 // Share-link viewer contracts (`/api/share/*`; PRD "FR-9 Sharing", "Accounts and authentication →
-// Share-link viewers (no account)", "Privacy and child safety"; docs/plans/step-8.md 2.4, 2.6).
-// Browser-safe. A viewer has no account, no chat and no search: these routes are the whole
-// surface.
+// Share-link viewers (no account)", "Privacy and child safety"; docs/plans/step-8.md 2.4, 2.6;
+// docs/plans/step-12.md 2.3, 2.5). Browser-safe. A viewer has no account, no chat and no search:
+// these routes are the whole surface.
 //
 // Rules:
 // - The token travels only in the `POST /share/session` body (and the SPA's `/s/<token>` route,
@@ -25,8 +27,11 @@ import { isoDateSchema, isoDateTimeSchema } from "./common";
 //   original URL, an uploader id — fails to parse. The API parses every viewer response before
 //   sending it, so a query that selects too much fails closed (500) instead of leaking.
 // - Viewers never see AI captions or parent notes (D10), only age, date and milestone.
-// - Media URLs are presigned GETs of one `thumb` or `display` derivative (`viewerMediaUrlSchema`
-//   refuses anything else); hidden (sensitive, not released) photos get no URL at all (D4).
+// - Media URLs are presigned GETs of one `thumb` or `display` derivative, or of a video's `web`
+//   rendition (`viewerMediaUrlSchema` refuses anything else: never an original, `analysis` or a
+//   keyframe); hidden (sensitive, not released) photos get no URL at all (D4). `web` is signed
+//   only for `media_kind = 'video'` rows (the derivatives RLS policy gates it), with
+//   `SHARE_VIDEO_URL_TTL_SEC`; a video download is the rendition, never the original (Q9).
 
 /**
  * A share token as accepted on input: base64url, 22..64 chars. Minted tokens are exactly
@@ -52,12 +57,13 @@ export const shareCursorSchema = z
 export const viewerMediaKindSchema = z.enum(SHARE_VIEWER_MEDIA_KINDS);
 export type ViewerMediaKind = z.infer<typeof viewerMediaKindSchema>;
 
-/** Path tail of a derivative object key: `derivatives/{photoId}/{thumb|display}.jpg`. */
-const VIEWER_MEDIA_PATH_RE = /\/derivatives\/[0-9a-f-]{36}\/(thumb|display)\.jpg$/;
+/** Path tail of a viewer object key: `derivatives/{photoId}/{thumb|display}.jpg` or `…/web.mp4`. */
+const VIEWER_MEDIA_PATH_RE = /\/derivatives\/[0-9a-f-]{36}\/(?:(?:thumb|display)\.jpg|web\.mp4)$/;
 
 /**
- * A signed viewer media URL: http(s), and the object is a `thumb` or `display` derivative. An
- * original (`…/originals/…`) or `analysis` key can never pass, whatever a query returned.
+ * A signed viewer media URL: http(s), and the object is a `thumb` or `display` derivative or a
+ * video's `web` rendition. An original (`…/originals/…`), `analysis` or keyframe key can never
+ * pass, whatever a query returned.
  */
 export const viewerMediaUrlSchema = z.url({ protocol: /^https?$/ }).refine((u) => {
   try {
@@ -65,7 +71,7 @@ export const viewerMediaUrlSchema = z.url({ protocol: /^https?$/ }).refine((u) =
   } catch {
     return false;
   }
-}, "must be a thumb or display derivative URL");
+}, "must be a thumb, display or web derivative URL");
 
 /**
  * A share link URL: `${PUBLIC_URL}/s/<token>`. Appears only in the create and regenerate
@@ -137,11 +143,14 @@ export type ShareSessionResponse = z.infer<typeof shareSessionResponseSchema>;
  * uploader, caption, AI fields, note, people, place, GPS, `isSensitive` (only `hidden`), mime or
  * `displayUrl` (display URLs come from `POST /share/photos/urls` for the slides on screen).
  * `hidden` = sensitive and not released to this link by an admin: no URL, the client renders a
- * frosted placeholder and requests no image.
+ * frosted placeholder and requests no image. `mediaKind`/`durationMs` (step 12) drive the tile's
+ * duration badge and the player; the viewer `SELECT` grant covers exactly these two new columns.
  */
 export const viewerPhotoSchema = z
   .strictObject({
     id: z.uuid(),
+    mediaKind: mediaKindSchema,
+    durationMs: durationMsSchema,
     /**
      * Capture date only, `YYYY-MM-DD` in UTC (docs/plans/review-fixes.md 2.11, D19): no time of
      * day reaches a viewer. The viewer role cannot read the EXIF offset, so a late-evening photo
@@ -184,7 +193,10 @@ export const viewerPhotosResponseSchema = z.strictObject({
 });
 export type ViewerPhotosResponse = z.infer<typeof viewerPhotosResponseSchema>;
 
-/** `POST /share/photos/urls`: fresh URLs of one kind for the given ids. */
+/**
+ * `POST /share/photos/urls`: fresh URLs of one kind for the given ids. `kind: "web"` (step 12)
+ * yields entries for video rows only (TTL `SHARE_VIDEO_URL_TTL_SEC`); photos are omitted.
+ */
 export const viewerUrlsRequestSchema = z.strictObject({
   ids: z
     .array(z.uuid())
@@ -210,7 +222,8 @@ export type ViewerUrlsResponse = z.infer<typeof viewerUrlsResponseSchema>;
 /**
  * `POST /share/photos/:id/download`: 403 `forbidden` unless the link allows downloads; 404 for a
  * hidden or non-shared photo. The URL is the 1600 px `display` derivative (metadata-free, never
- * the original, D9) as an attachment, valid `SHARE_DOWNLOAD_URL_TTL_SEC`.
+ * the original, D9) as an attachment, valid `SHARE_DOWNLOAD_URL_TTL_SEC`; for a video the `web`
+ * rendition as `attachment; filename="<id>.mp4"` (Q9), never the original.
  */
 export const viewerDownloadResponseSchema = z.strictObject({
   url: viewerMediaUrlSchema,

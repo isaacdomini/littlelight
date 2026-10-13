@@ -17,6 +17,8 @@ export interface SearchParams {
   tag: string;
   ageFrom: string;
   ageTo: string;
+  /** `"" | "photo" | "video"` (step 12); empty = both (`any`, never sent). */
+  media: string;
 }
 
 export const EMPTY_SEARCH: SearchParams = {
@@ -29,6 +31,7 @@ export const EMPTY_SEARCH: SearchParams = {
   tag: "",
   ageFrom: "",
   ageTo: "",
+  media: "",
 };
 
 /** True when a query or any filter is set. */

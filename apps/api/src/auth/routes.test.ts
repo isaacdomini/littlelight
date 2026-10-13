@@ -52,6 +52,7 @@ describe("GET /auth/config", () => {
       turnstileSiteKey: null,
       termsVersion: TERMS_VERSION,
       privacyVersion: PRIVACY_VERSION,
+      passkeys: false,
     });
   });
 

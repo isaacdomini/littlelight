@@ -32,8 +32,16 @@
 #   STORAGE_PATH  /mnt/data/tinyglow/photos    MinIO data (the photo library), at /data (storage)
 #                                              and read-only at /storage (worker, disk alert)
 #   BACKUP_PATH   /mnt/data/tinyglow/backups   nightly pg_dump archives (docker/backup/pg-backup.sh)
+#   WORKER_SCRATCH_PATH /mnt/data/tinyglow/scratch  worker video staging (docs/plans/step-12.md
+#                                              Q8, 2.10): originals up to 2 GB + the rendition
+#                                              while ffmpeg runs, at /scratch (worker, read-write,
+#                                              owner 1000:1000 = the image's `node` user). Not
+#                                              backed up: everything in it is re-creatable and
+#                                              deleted after each job (sweep after 6 h).
 # Off-site copies of photos + backups: docker/backup/offsite-backup.sh from host cron (the
-# postgres folder is not copied raw: the nightly dump is the consistent copy).
+# postgres folder is not copied raw: the nightly dump is the consistent copy). Video renditions
+# (derivatives/<id>/web.mp4 under STORAGE_PATH) are copied too (step-12 D9: cheaper than a
+# re-transcode after a restore).
 #
 # Configuration: .env (from .env.example) is used ONLY for ${VAR} interpolation in this file. No
 # service gets the whole file (no env_file): each one receives exactly the variables listed in
@@ -325,6 +333,32 @@ services:
       GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${PUBLIC_URL:-https://tinyglow.app}/auth/callback
+      # Passkeys (docs/plans/step-13.md 0.1, 2.7; beta in GoTrue v2.197.0, absent from its
+      # example.env: the names are those of configuration.go at that tag; re-run the section-4
+      # check after any GoTrue upgrade). Off until AUTH_PASSKEYS_ENABLED=true in .env (the same
+      # flag turns the buttons on in the api, below). Browsers never reach /auth/passkeys/*
+      # (nginx allow-list: 404); the api is GoTrue's only passkey client.
+      #   RP id      = the site's registrable domain (WEBAUTHN_RP_ID, default tinyglow.app).
+      #                CHANGING IT LATER INVALIDATES EVERY REGISTERED PASSKEY.
+      #   RP origins = PUBLIC_URL, plus the Android app's android:apk-key-hash:<...> origins from
+      #                WEBAUTHN_NATIVE_ORIGINS (one per signing key; .env.example "Passkeys"), or
+      #                the whole comma list from WEBAUTHN_RP_ORIGINS. iOS needs no origin here
+      #                (it is matched through the apple-app-site-association webcredentials key).
+      # A wrong RP id/origin is NOT a start-up error: GoTrue logs a warning, stays healthy and
+      # answers 500 "Failed to initialize WebAuthn" on every passkey request. After enabling, run
+      # the in-network check from docs/PRODUCTION.md G2 (expects 200 + challenge_id). The
+      # healthcheck stays /health on purpose: a probe every 10 s would eat the 30-per-5-minute
+      # GoTrue limit below.
+      GOTRUE_PASSKEY_ENABLED: ${AUTH_PASSKEYS_ENABLED:-false}
+      GOTRUE_PASSKEY_MAX_PASSKEYS_PER_USER: ${PASSKEY_MAX_PER_USER:-5}
+      GOTRUE_WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-tinyglow.app}
+      GOTRUE_WEBAUTHN_RP_DISPLAY_NAME: Tinyglow
+      GOTRUE_WEBAUTHN_RP_ORIGINS: ${WEBAUTHN_RP_ORIGINS:-${PUBLIC_URL:-https://tinyglow.app}${WEBAUTHN_NATIVE_ORIGINS:+,${WEBAUTHN_NATIVE_ORIGINS}}}
+      GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION: 5m
+      # GoTrue's per-IP (CF-Connecting-IP, forwarded by the api) limit on authentication/options:
+      # 30 per 5 minutes, GoTrue's default, stated here so an upgrade cannot change it silently.
+      # authentication/verify has no GoTrue limit; the api caps it (docs/plans/step-13.md 2.4).
+      GOTRUE_RATE_LIMIT_PASSKEY: "30"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
       interval: 10s
@@ -406,6 +440,9 @@ services:
       AUTH_INTERNAL_URL: http://auth:9999
       AUTH_APPLE_ENABLED: ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
       AUTH_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
+      # Passkeys (docs/plans/step-13.md 2.4, 2.7): the same .env flag as GoTrue's
+      # GOTRUE_PASSKEY_ENABLED above, so /api/auth/config advertises what GoTrue accepts.
+      AUTH_PASSKEYS_ENABLED: ${AUTH_PASSKEYS_ENABLED:-false}
       # Cloudflare Turnstile on the sign-in form after 3 code requests per IP per hour; inert
       # while the secret is empty.
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
@@ -523,11 +560,31 @@ services:
       SMTP_SECURE: ${SMTP_SECURE:-false}
       MAIL_FROM: ${MAIL_FROM:-${SMTP_ADMIN_EMAIL:?Set SMTP_ADMIN_EMAIL in .env}}
       # Photo import (docs/plans/step-10.md 2.7): Picker downloads in flight per import.google job
-      # (1-4). Each streams to /tmp (<= 100 MiB per file) before it goes to MinIO; see tmpfs.
+      # (1-4). Each photo streams to /tmp (<= 100 MiB per file) before it goes to MinIO (see
+      # tmpfs); imported videos stage in /scratch like uploaded ones.
       IMPORT_CONCURRENCY: ${IMPORT_CONCURRENCY:-2}
-    # Read-only root (x-hardened); /tmp is the only writable path. Import staging needs at most
-    # IMPORT_CONCURRENCY x 100 MiB (400 MiB at the maximum of 4); 1 GiB leaves headroom for
-    # libvips temp files. tmpfs pages count against mem_limit below.
+      # Video (docs/plans/step-12.md 2.6, 2.10; videoEnvSchema), worker only. Uploaded videos are
+      # staged on disk at WORKER_SCRATCH_PATH (the bind mount below, always /scratch inside the
+      # container: the HOST path is the .env variable of the same name used as the mount source)
+      # while ffprobe/ffmpeg make the poster, keyframes and the 1080p H.264 web rendition.
+      #   VIDEO_CONCURRENCY            video.transcode jobs per worker process (1-2; default 1:
+      #                                one libx264 1080p encode saturates ~VIDEO_FFMPEG_THREADS
+      #                                cores and holds ~1.5 GB with a 4K HEVC decode)
+      #   VIDEO_FFMPEG_THREADS         -threads for each ffmpeg run (1-8; default 2)
+      #   VIDEO_TRANSCODE_TIMEOUT_SEC  kill + retry a single rendition after this (default 3600)
+      # Empty = the code default. Not configurable: transcodes wait (job retried, heartbeat
+      # alert "scratch low") while /scratch has < 6 GiB free (VIDEO_SCRATCH_MIN_FREE_BYTES, a
+      # constant in packages/shared: a 2 GB original + ~1 GB rendition with headroom).
+      # FFMPEG_PATH / FFPROBE_PATH are not passed: the image's /usr/bin/ffmpeg and ffprobe are used.
+      WORKER_SCRATCH_PATH: /scratch
+      VIDEO_CONCURRENCY: ${VIDEO_CONCURRENCY:-}
+      VIDEO_FFMPEG_THREADS: ${VIDEO_FFMPEG_THREADS:-}
+      VIDEO_TRANSCODE_TIMEOUT_SEC: ${VIDEO_TRANSCODE_TIMEOUT_SEC:-}
+    # Read-only root (x-hardened); /tmp (tmpfs) and /scratch (disk) are the only writable paths.
+    # /tmp: import staging needs at most IMPORT_CONCURRENCY x 100 MiB (400 MiB at the maximum of
+    # 4); 1 GiB leaves headroom for libvips temp files. tmpfs pages count against mem_limit
+    # below, which is why videos (up to 2 GB each, plus a ~1 GB rendition) never go to /tmp but
+    # to the disk-backed /scratch bind mount (docs/plans/step-12.md Q8).
     tmpfs:
       - /tmp:size=1g
     volumes:
@@ -538,8 +595,21 @@ services:
         read_only: true
         bind:
           create_host_path: false
-    # Two concurrent 48 MP HEIC decodes are ~800 MB RSS (INGEST_CONCURRENCY=2).
-    mem_limit: 2g
+      # Video staging (read-write). Must exist, owned by uid 1000 (the image's `node` user):
+      #   sudo install -d -m 700 -o 1000 -g 1000 /mnt/data/tinyglow/scratch
+      # Needs >= 6 GiB free per transcode (the fixed VIDEO_SCRATCH_MIN_FREE_BYTES); the worker
+      # deletes a job's files when it finishes and sweeps leftovers older than 6 h.
+      - type: bind
+        source: ${WORKER_SCRATCH_PATH:?Set WORKER_SCRATCH_PATH to the worker's video scratch folder}
+        target: /scratch
+        bind:
+          create_host_path: false
+    # Two concurrent 48 MP HEIC decodes are ~800 MB RSS (INGEST_CONCURRENCY=2); one libx264
+    # 1080p encode with a 4K HEVC decode adds ~1.5 GB (docs/plans/step-12.md 2.10), so 3 GB.
+    mem_limit: 3g
+    # Optional CPU cap for the video encodes (Compose `cpus`, e.g. 2 or 3.5). 0 = no cap (the
+    # default): ffmpeg is already bounded by VIDEO_FFMPEG_THREADS x VIDEO_CONCURRENCY threads.
+    cpus: ${WORKER_CPUS:-0}
     depends_on:
       migrate:
         condition: service_completed_successfully

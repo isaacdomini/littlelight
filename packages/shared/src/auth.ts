@@ -71,6 +71,71 @@ export const INVITE_LOOKUPS_PER_IP_PER_HOUR = 60;
 /** Pending co-admin removal requests older than this are ignored. */
 export const MEMBER_REMOVAL_REQUEST_TTL_DAYS = 7;
 
+// ---------------------------------------------------------------------------------------------
+// Passkeys (docs/plans/step-13.md 0 (Q2–Q5), 0.1, 2.3, 2.4). GoTrue (v2.197.0) owns credentials
+// and challenges; the API fronts its routes with these limits. Browser-safe.
+// ---------------------------------------------------------------------------------------------
+
+/** `POST /auth/passkey/options` per client IP per hour (GoTrue adds its own 30 / 5 min limiter). */
+export const PASSKEY_OPTIONS_PER_IP_PER_HOUR = 60;
+/** `POST /auth/passkey/verify` attempts per IP per hour, success or failure (GoTrue has no limiter there). */
+export const PASSKEY_VERIFY_PER_IP_PER_HOUR = 60;
+/** Failed verifies per IP per 15 minutes ⇒ 429 `rate_limited`. */
+export const PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN = 10;
+/** Turnstile (when configured) is required on `options` after this many failed verifies from the IP in 15 min. */
+export const PASSKEY_CAPTCHA_AFTER_FAILURES = 3;
+/** Passkeys per account (Q3; mirror of `GOTRUE_PASSKEY_MAX_PASSKEYS_PER_USER`). */
+export const PASSKEY_MAX_PER_USER = 5;
+/** `friendly_name` length as typed in Tinyglow (GoTrue allows 120). */
+export const PASSKEY_NAME_MAX = 60;
+/** Name shown when GoTrue has no `friendly_name` for a passkey. */
+export const PASSKEY_DEFAULT_NAME = "Passkey";
+/** "Not now" on the enrol card hides it for this long (Q2); re-offered at most once. */
+export const PASSKEY_PROMPT_SNOOZE_DAYS = 30;
+
+/**
+ * Character caps of the base64url fields of a `PublicKeyCredential.toJSON()` body
+ * (`publicKeyCredentialJsonSchema`): the encoded string may not exceed these, so the decoded blob
+ * is at most ¾ of it. Real values are a few hundred bytes (attestation objects a few KiB).
+ */
+export const WEBAUTHN_FIELD_MAX_CHARS = {
+  id: 1024,
+  clientDataJSON: 8 * 1024,
+  authenticatorData: 8 * 1024,
+  signature: 2048,
+  userHandle: 1024,
+  attestationObject: 64 * 1024,
+} as const;
+
+/** Authenticator data: RP ID hash (32) + flags (1) + sign count (4) = the first 37 bytes. */
+export const WEBAUTHN_AUTH_DATA_MIN_BYTES = 37;
+/** Offset of the flags byte in authenticator data. */
+export const WEBAUTHN_FLAGS_OFFSET = 32;
+/** Flags bit: user present (UP). */
+export const WEBAUTHN_FLAG_UP = 0x01;
+/** Flags bit: user verified (UV). GoTrue asks for UV as `preferred`; the API requires it (decision g). */
+export const WEBAUTHN_FLAG_UV = 0x04;
+
+/**
+ * True when WebAuthn authenticator data (decoded bytes: an assertion's `authenticatorData`, or
+ * the `authData` inside a registration's attestation object) is at least
+ * `WEBAUTHN_AUTH_DATA_MIN_BYTES` long and has the UV flag set. Reads one byte; parses nothing else.
+ */
+export function authenticatorDataHasUserVerification(authData: Uint8Array): boolean {
+  if (authData.length < WEBAUTHN_AUTH_DATA_MIN_BYTES) return false;
+  const flags = authData[WEBAUTHN_FLAGS_OFFSET] ?? 0;
+  return (flags & WEBAUTHN_FLAG_UV) === WEBAUTHN_FLAG_UV;
+}
+
+/**
+ * How a session was created (`audit_log.metadata.method` on `auth.sign_in`, and the devices
+ * list's `signInMethod`): `otp` (email code or magic link), `apple`/`google` (OAuth or native
+ * id token), `passkey` (step 13), `review` (the store-review account, step 9).
+ */
+export const SIGN_IN_METHODS = ["otp", "apple", "google", "passkey", "review"] as const;
+export const signInMethodSchema = z.enum(SIGN_IN_METHODS);
+export type SignInMethod = z.infer<typeof signInMethodSchema>;
+
 /** Current Terms / Privacy Policy versions; consent must match both exactly. */
 export const TERMS_VERSION = "2026-10-08";
 export const PRIVACY_VERSION = "2026-10-08";
@@ -382,6 +447,15 @@ export const AUDIT_EVENTS = [
   "account.suspended",
   /** An operator lifted a suspension; metadata `{target_user_id}`. */
   "account.unsuspended",
+  // Passkeys (docs/plans/step-13.md 2.3, 2.4). Metadata `{passkey_id}` only: never the name the
+  // user typed, never a credential id, challenge or any WebAuthn material. A passkey sign-in is
+  // `auth.sign_in` with `method: "passkey"`.
+  /** The user registered a passkey; metadata `{passkey_id}`. */
+  "auth.passkey_added",
+  /** The user removed a passkey (fresh sign-in required); metadata `{passkey_id}`. */
+  "auth.passkey_removed",
+  /** The user renamed a passkey; metadata `{passkey_id}` (never the name). */
+  "auth.passkey_renamed",
 ] as const;
 export const auditEventSchema = z.enum(AUDIT_EVENTS);
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -396,8 +470,12 @@ export type ShareLinkAuditField = z.infer<typeof shareLinkAuditFieldSchema>;
  * notes, prompts, people, location labels, milestone names or measurement values. Strict: any other key is rejected, so `audit()` cannot be handed one.
  */
 export const auditMetadataSchema = z.strictObject({
-  /** `auth.sign_in` through the store-review account (step 9, D4); absent for normal sign-ins. */
-  method: z.enum(["review"]).optional(),
+  /**
+   * `auth.sign_in` method (`SIGN_IN_METHODS`): `review` for the store-review account (step 9, D4),
+   * `passkey` for a passkey sign-in (step 13); OTP/OAuth sign-ins may record theirs too. Absent
+   * on rows written before step 13.
+   */
+  method: signInMethodSchema.optional(),
   /** `CF-IPCountry` value (ISO 3166-1 alpha-2, or Cloudflare's `XX`/`T1`). */
   ip_country: z
     .string()
@@ -465,5 +543,7 @@ export const auditMetadataSchema = z.strictObject({
    * family-start checks ran); omitted otherwise. Never the family id, IP or address.
    */
   family_start: z.boolean().optional(),
+  /** `auth.passkey_*` (step 13): GoTrue's passkey row id (never a credential id or a name). */
+  passkey_id: z.uuid().optional(),
 });
 export type AuditMetadata = z.infer<typeof auditMetadataSchema>;

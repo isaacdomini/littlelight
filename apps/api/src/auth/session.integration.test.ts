@@ -149,10 +149,13 @@ describe.skipIf(!databaseUrl)("session-issuing endpoints", () => {
 
     const audit = await h.audit({ event: "auth.sign_in", actor: u.id });
     expect(audit).toHaveLength(1);
+    // step 13: every sign-in records its method and the GoTrue session it created
     expect(audit[0]?.metadata).toEqual({
       client: "web",
       user_agent_label: "Safari on iPhone",
       ip_country: "DE",
+      method: "otp",
+      session_id: u.sessionId,
     });
     expect(JSON.stringify(audit[0]?.metadata)).not.toContain(u.email);
     // First and only device: no alert.

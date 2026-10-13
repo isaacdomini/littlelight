@@ -7,6 +7,10 @@ import {
   type BabyRole,
   type DerivativeKind,
   derivativeKey,
+  FREE_TIER_VIDEO_LIMIT,
+  type MediaFilter,
+  type MediaKind,
+  type MediaMime,
   PENDING_PHOTOS_PER_GUEST_PER_FAMILY,
   PHOTO_DETAILS_LIMITS,
   type PhotoAiStatus,
@@ -15,13 +19,14 @@ import {
   type PhotoDetailsPatch,
   type PhotoExif,
   type PhotoGroup,
-  type PhotoMime,
   type PhotoStatus,
   type PhotoSummary,
   type PhotosBatchDetailsRequest,
   type PhotosListDir,
   type PhotosView,
   type PhotoUrlSet,
+  type RenditionStatus,
+  type VideoCodec,
 } from "@tinyglow/shared";
 import type { Tx } from "../auth";
 import { ApiError } from "../lib/errors";
@@ -116,7 +121,8 @@ export const PHOTO_SUMMARY_EXTRA_COLUMNS = `
 export const PHOTO_SUMMARY_COLUMNS = `
   p.id, p.baby_id, p.status, p.approval, p.taken_at, p.taken_at_estimated, p.age_days,
   p.width, p.height, p.mime, p.is_sensitive, p.duplicate_of_photo_id, p.uploaded_by,
-  p.created_at, p.deleted_at, (t.photo_id IS NOT NULL) AS has_thumb,
+  p.created_at, p.deleted_at, p.media_kind, p.duration_ms, p.rendition_status,
+  (t.photo_id IS NOT NULL) AS has_thumb,
   ${PHOTO_SUMMARY_EXTRA_COLUMNS}`;
 
 /** The thumb derivative row, if the worker has written it. */
@@ -133,12 +139,18 @@ export interface PhotoSummaryRow {
   age_days: number | null;
   width: number | null;
   height: number | null;
-  mime: PhotoMime | null;
+  mime: MediaMime | null;
   is_sensitive: boolean;
   duplicate_of_photo_id: string | null;
   uploaded_by: string | null;
   created_at: Date;
   deleted_at: Date | null;
+  /** Step 12: `photos.media_kind`; a video's thumb/display are its poster frame. */
+  media_kind: MediaKind;
+  /** `photos.duration_ms` (videos, after ingest). */
+  duration_ms: number | null;
+  /** `photos.rendition_status`: `none` for photos. */
+  rendition_status: RenditionStatus;
   has_thumb: boolean;
   /** `photo_details.milestone_id` (absent from rows read without `PHOTO_SUMMARY_EXTRA_COLUMNS`). */
   milestone_id?: string | null;
@@ -162,6 +174,22 @@ export function signDerivative(
   return signer.signGet(derivativeKey(babyId, photoId, kind));
 }
 
+/**
+ * Sign a video's `web` rendition (step 12, docs/plans/step-12.md 2.4): one object, default TTL
+ * (≤ 1 h), `response-content-type video/mp4` so the player streams it with range requests
+ * straight from MinIO. Callers only reach this for rows with `rendition_status = 'ready'` and
+ * an existing `web` derivative (`has_web`); the key is rebuilt from ids, never read from a row.
+ */
+export function signVideoRendition(signer: UrlSigner, babyId: string, photoId: string) {
+  return signer.signGet(derivativeKey(babyId, photoId, "web"), { contentType: "video/mp4" });
+}
+
+/** SQL (alias `p`): true when the video's rendition is ready and its `web` derivative exists. */
+export const HAS_WEB_SQL = `
+  (p.media_kind = 'video' AND p.rendition_status = 'ready'
+   AND EXISTS (SELECT 1 FROM public.photo_derivatives w
+                WHERE w.photo_id = p.id AND w.kind = 'web'))`;
+
 /** Row → `photoSummary`, with a fresh signed `thumbUrl` when the thumb exists. */
 export async function toPhotoSummary(signer: UrlSigner, r: PhotoSummaryRow): Promise<PhotoSummary> {
   const thumb = r.has_thumb ? await signDerivative(signer, r.baby_id, r.id, "thumb") : null;
@@ -181,6 +209,9 @@ export async function toPhotoSummary(signer: UrlSigner, r: PhotoSummaryRow): Pro
     uploadedBy: r.uploaded_by,
     createdAt: r.created_at.toISOString(),
     deletedAt: r.deleted_at?.toISOString() ?? null,
+    mediaKind: r.media_kind,
+    durationMs: r.duration_ms,
+    renditionStatus: r.rendition_status,
     thumbUrl: thumb?.url ?? null,
     urlExpiresAt: thumb?.expiresAt.toISOString() ?? null,
     milestoneId: r.milestone_id ?? null,
@@ -289,6 +320,29 @@ export async function countPoolPhotos(client: Tx, babyId: string): Promise<numbe
 }
 
 /**
+ * Live videos across the free-tier pool this baby draws from (step 12 Q3, docs/plans/step-12.md
+ * 2.2 A, 2.4): `free_tier_pool_videos` (SECURITY DEFINER; the pool predicate AND `media_kind =
+ * 'video'`). Runs under the caller's claims; `photos_free_tier_video_cap` is the hard stop.
+ */
+export async function countPoolVideos(client: Tx, babyId: string): Promise<number> {
+  const { rows } = await client.query<{ n: number }>(
+    "SELECT public.free_tier_pool_videos($1) AS n",
+    [babyId],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * Most live videos a free family may hold: `public.free_tier_video_limit()` (SQL default 100 =
+ * `FREE_TIER_VIDEO_LIMIT`; operator override through `app.free_tier_video_limit`), so the API
+ * pre-check and the trigger agree by construction.
+ */
+export async function freeTierVideoLimit(client: Tx): Promise<number> {
+  const { rows } = await client.query<{ n: number }>("SELECT public.free_tier_video_limit() AS n");
+  return rows[0]?.n ?? FREE_TIER_VIDEO_LIMIT;
+}
+
+/**
  * The caller's live pending photos across the family of `babyId` (docs/plans/step-11.md 2.2 C,
  * 2.5): `my_pending_photo_count` (SECURITY DEFINER, member-gated, same predicate as the
  * `photos_pending_cap` trigger). Runs under the caller's claims.
@@ -347,6 +401,15 @@ export interface ListPhotosInput {
   dir?: PhotosListDir;
   /** Keep only photos whose `photo_details.milestone_id` is this milestone. */
   milestoneId?: string | null;
+  /** Keep only photos or only videos (step 12); omitted = both. */
+  media?: MediaFilter | null;
+}
+
+/** `AND p.media_kind = $n` for a `media` filter, pushing the bind value; empty when unset. */
+function mediaFilterSql(media: MediaFilter | null | undefined, values: unknown[]): string {
+  if (!media) return "";
+  values.push(media);
+  return `AND p.media_kind = $${values.length}::text`;
 }
 
 /**
@@ -366,6 +429,7 @@ export function listPhotosSql(input: ListPhotosInput): { text: string; values: u
     milestone = `AND EXISTS (SELECT 1 FROM public.photo_details f
                               WHERE f.photo_id = p.id AND f.milestone_id = $${values.length}::uuid)`;
   }
+  const media = mediaFilterSql(input.media, values);
   let keyset = "";
   if (input.cursor) {
     values.push(input.cursor.sortKey, input.cursor.id);
@@ -377,7 +441,7 @@ export function listPhotosSql(input: ListPhotosInput): { text: string; values: u
   const order = newer ? `${SORT_EXPR} ASC, p.id ASC` : `${SORT_EXPR} DESC, p.id DESC`;
   const text = `SELECT ${PHOTO_SUMMARY_COLUMNS}, ${SORT_KEY_SQL} AS sort_key
        FROM public.photos p ${PHOTO_THUMB_JOIN}
-      WHERE p.baby_id = $1 AND ${filter} ${milestone} ${keyset}
+      WHERE p.baby_id = $1 AND ${filter} ${milestone} ${media} ${keyset}
       ORDER BY ${order}
       LIMIT $${values.length}`;
   return { text, values };
@@ -457,15 +521,18 @@ export async function groupCounts(
   client: Tx,
   babyId: string,
   view: PhotosView,
+  media?: MediaFilter | null,
 ): Promise<GroupCountRow[]> {
+  const values: unknown[] = [babyId];
+  const mediaSql = mediaFilterSql(media, values);
   const { rows } = await client.query<GroupCountRow>(
     `SELECT public.age_group(p.age_days) AS key, count(*)::int AS n,
             to_char(max(${SORT_EXPR}) AT TIME ZONE 'UTC',
                     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS top
        FROM public.photos p
-      WHERE p.baby_id = $1 AND ${VIEW_FILTER[view]}
+      WHERE p.baby_id = $1 AND ${VIEW_FILTER[view]} ${mediaSql}
       GROUP BY 1`,
-    [babyId],
+    values,
   );
   return rows;
 }
@@ -532,16 +599,28 @@ export async function photoWithRole(
   | (PhotoSummaryRow & {
       role: BabyRole | null;
       has_display: boolean;
+      /** Step 12: a ready video with its `web` rendition object booked (`HAS_WEB_SQL`). */
+      has_web: boolean;
+      video_codec: VideoCodec | null;
+      has_audio: boolean | null;
       storage_key_original: string;
     })
   | null
 > {
   const { rows } = await client.query<
-    PhotoSummaryRow & { role: BabyRole | null; has_display: boolean; storage_key_original: string }
+    PhotoSummaryRow & {
+      role: BabyRole | null;
+      has_display: boolean;
+      has_web: boolean;
+      video_codec: VideoCodec | null;
+      has_audio: boolean | null;
+      storage_key_original: string;
+    }
   >(
-    `SELECT ${PHOTO_SUMMARY_COLUMNS}, m.role, p.storage_key_original,
+    `SELECT ${PHOTO_SUMMARY_COLUMNS}, m.role, p.storage_key_original, p.video_codec, p.has_audio,
             EXISTS (SELECT 1 FROM public.photo_derivatives d
-                     WHERE d.photo_id = p.id AND d.kind = 'display') AS has_display
+                     WHERE d.photo_id = p.id AND d.kind = 'display') AS has_display,
+            ${HAS_WEB_SQL} AS has_web
        FROM public.photos p ${PHOTO_THUMB_JOIN}
        LEFT JOIN public.baby_members m ON m.baby_id = p.baby_id AND m.user_id = $1
       WHERE p.id = $2 AND p.status <> 'duplicate'`,
@@ -612,6 +691,8 @@ export interface PhotoUrlRow {
   deleted_at: Date | null;
   has_thumb: boolean;
   has_display: boolean;
+  /** Step 12: a ready video with its `web` rendition (`HAS_WEB_SQL`). */
+  has_web: boolean;
 }
 
 /** Derivative presence of photos of one baby (RLS-filtered; unknown ids are absent). */
@@ -626,7 +707,8 @@ export async function photoUrlRows(
             EXISTS (SELECT 1 FROM public.photo_derivatives x
                      WHERE x.photo_id = p.id AND x.kind = 'thumb') AS has_thumb,
             EXISTS (SELECT 1 FROM public.photo_derivatives x
-                     WHERE x.photo_id = p.id AND x.kind = 'display') AS has_display
+                     WHERE x.photo_id = p.id AND x.kind = 'display') AS has_display,
+            ${HAS_WEB_SQL} AS has_web
        FROM public.photos p
       WHERE p.id = ANY($1::uuid[]) AND p.baby_id = $2 AND p.status <> 'duplicate'`,
     [ids, babyId],
@@ -634,20 +716,25 @@ export async function photoUrlRows(
   return rows;
 }
 
-/** Fresh thumb/display URLs of one photo; `urlExpiresAt` is the earlier expiry. */
+/** Fresh thumb/display (and, for a ready video, `web`) URLs of one photo; `urlExpiresAt` is the earliest expiry. */
 export async function signPhotoUrls(
   signer: UrlSigner,
-  r: Pick<PhotoUrlRow, "id" | "baby_id" | "has_thumb" | "has_display">,
+  r: Pick<PhotoUrlRow, "id" | "baby_id" | "has_thumb" | "has_display"> &
+    Partial<Pick<PhotoUrlRow, "has_web">>,
 ): Promise<PhotoUrlSet> {
-  const [thumb, display] = await Promise.all([
+  const [thumb, display, video] = await Promise.all([
     r.has_thumb ? signDerivative(signer, r.baby_id, r.id, "thumb") : null,
     r.has_display ? signDerivative(signer, r.baby_id, r.id, "display") : null,
+    r.has_web ? signVideoRendition(signer, r.baby_id, r.id) : null,
   ]);
-  const expiries = [thumb?.expiresAt, display?.expiresAt].filter((d): d is Date => !!d);
+  const expiries = [thumb?.expiresAt, display?.expiresAt, video?.expiresAt].filter(
+    (d): d is Date => !!d,
+  );
   const earliest = expiries.length ? new Date(Math.min(...expiries.map((d) => d.getTime()))) : null;
   return {
     thumbUrl: thumb?.url ?? null,
     displayUrl: display?.url ?? null,
+    videoUrl: video?.url ?? null,
     urlExpiresAt: earliest?.toISOString() ?? null,
   };
 }

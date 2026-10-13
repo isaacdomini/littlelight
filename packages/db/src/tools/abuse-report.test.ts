@@ -111,6 +111,8 @@ function report(over: Partial<AbuseReport> = {}): AbuseReport {
     limit: 20,
     showEmails: false,
     pendingLimit: 200,
+    videoLimit: 100,
+    fairUseBytes: 200 * 1024 * 1024 * 1024,
     familyStartsPerNetwork: [
       {
         network: "abcdef012345",
@@ -126,20 +128,24 @@ function report(over: Partial<AbuseReport> = {}): AbuseReport {
         parents: 2,
         freeAlbums: 2,
         photos: 1000,
+        videos: 12,
         pending: 3,
         bytes: 5_000_000,
         pct: 100,
         over: false,
+        videosOver: false,
       },
       {
         familyId: "44444444-4444-4444-8444-444444444444",
         parents: 1,
         freeAlbums: 1,
         photos: 1012,
+        videos: 101,
         pending: 0,
         bytes: 6_000_000,
         pct: 101.2,
         over: true,
+        videosOver: true,
       },
     ],
     topStorage: {
@@ -149,12 +155,25 @@ function report(over: Partial<AbuseReport> = {}): AbuseReport {
           familyId: FAMILY,
           plan: "free",
           photos: 500,
+          videos: 3,
           pending: 1,
           bytes: 2048,
+          videoBytes: 1024,
           trashed: false,
         },
       ],
-      families: [{ familyId: FAMILY, parents: 2, albums: 2, photos: 1000, bytes: 5_000_000 }],
+      families: [
+        {
+          familyId: FAMILY,
+          parents: 2,
+          albums: 2,
+          photos: 1000,
+          videos: 3,
+          bytes: 5_000_000,
+          videoBytes: 1024,
+          fairUse: false,
+        },
+      ],
     },
     recentFamilyStarts: [
       {
@@ -401,6 +420,8 @@ describe("collectReport: the JSON shape", () => {
     expect(Object.keys(r).sort()).toEqual(
       [
         "generatedAt",
+        "fairUseBytes",
+        "videoLimit",
         "windowDays",
         "limit",
         "showEmails",
@@ -433,6 +454,7 @@ describe("collectReport: the JSON shape", () => {
       bytes: 5000,
       pct: 100,
       over: false,
+      videosOver: false,
     });
     expect(r.recentFamilyStarts[0]?.flags).toEqual([
       "plus_tag",
@@ -471,7 +493,8 @@ describe("collectReport: the JSON shape", () => {
     await collectReport(asQueryable(c), { days: 3, limit: 9, showEmails: true, json: false });
     const byFragment = (frag: string) => c.calls.find((x) => x.sql.includes(frag))?.params;
     expect(byFragment("GROUP BY s.ip_hash")).toEqual([3]);
-    expect(byFragment("WITH pool AS")).toEqual([true]);
+    // step 12: the pool query also binds the effective video limit (default 100)
+    expect(byFragment("WITH pool AS")).toEqual([true, 100]);
     expect(byFragment("b.id AS baby_id")).toEqual([9, true]);
     expect(byFragment("canonical_dup")).toEqual([3, true]);
     expect(byFragment("HAVING count(*) >= $1::int")).toEqual([100, true]);

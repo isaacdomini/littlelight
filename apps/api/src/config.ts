@@ -19,8 +19,10 @@ import {
   NATIVE_ORIGINS_DEFAULT,
   type NativeCorsEnv,
   nativeCorsEnvSchema,
+  type PasskeyEnv,
   PUSH_PHOTOS_DEBOUNCE_SEC_DEFAULT,
   PUSH_SHARE_DEBOUNCE_SEC_DEFAULT,
+  passkeyEnvSchema,
   pushEnvSchema,
   type ReviewAccountEnv,
   reviewAccountEnvSchema,
@@ -72,6 +74,9 @@ import { z } from "zod";
 // `BLOCK_DISPOSABLE_EMAIL` (default true), `EMAIL_DOMAIN_DENYLIST` / `EMAIL_DOMAIN_ALLOWLIST`
 // (comma lists of domains). They apply when an account starts its family (first album), never at
 // sign-in. Every one has a default, so the api boots with none set. Read through `abuseSettings`.
+// Step 13 (docs/plans/step-13.md 2.3, 2.4, 2.7) adds `AUTH_PASSKEYS_ENABLED` (`passkeyEnvSchema`,
+// default false; must equal GoTrue's `GOTRUE_PASSKEY_ENABLED`, both fed by one `.env` flag). Read
+// through `passkeysEnabled`: off ⇒ every passkey route answers 404 `passkey_disabled`.
 
 const serverEnvSchema = z.object({
   API_HOST: z.string().min(1).default("0.0.0.0"),
@@ -139,7 +144,9 @@ export type ApiConfig = z.output<typeof serverEnvSchema> &
   // Optional in the type (always set by `loadConfig`); read through `googleImportSettings`.
   Partial<Omit<GoogleImportEnv, "NODE_ENV">> &
   // Optional in the type (always set by `loadConfig`); read through `abuseSettings`.
-  Partial<AbuseEnv>;
+  Partial<AbuseEnv> &
+  // Optional in the type (always set by `loadConfig`); read through `passkeysEnabled`.
+  Partial<PasskeyEnv>;
 
 export class ConfigError extends Error {
   readonly fields: string[];
@@ -187,6 +194,7 @@ export function loadConfig(
     sentryEnvSchema,
     googleImportEnvSchema,
     abuseEnvSchema,
+    passkeyEnvSchema,
     embedDimsGuardSchema,
   ];
   const fields: string[] = [];
@@ -299,4 +307,12 @@ export function abuseSettings(config: Partial<AbuseEnv>): AbuseEnv {
     EMAIL_DOMAIN_DENYLIST: config.EMAIL_DOMAIN_DENYLIST ?? [],
     EMAIL_DOMAIN_ALLOWLIST: config.EMAIL_DOMAIN_ALLOWLIST ?? [],
   };
+}
+
+/**
+ * Passkeys on or off (step 13, `passkeyEnvSchema`): `AUTH_PASSKEYS_ENABLED`, default false. A
+ * config built by hand without the field (tests) means off, the safe direction.
+ */
+export function passkeysEnabled(config: Partial<PasskeyEnv>): boolean {
+  return config.AUTH_PASSKEYS_ENABLED ?? false;
 }

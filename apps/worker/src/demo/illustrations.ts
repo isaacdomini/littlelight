@@ -1041,6 +1041,60 @@ export async function renderScene(scene: Scene): Promise<RenderedIllustration> {
   return { buffer: data, width: info.width, height: info.height, bytes: data.byteLength };
 }
 
+// --- The demo clip (step 12, docs/plans/step-12.md 2.6): two frames ffmpeg cross-fades ----------
+
+/**
+ * Frames of the 4-second demo clip (`DEMO_IDS.video`): Maya on the living-room rug clapping
+ * (hands apart, then together, laughing). `demo/clip.ts` renders them and lets ffmpeg cross-fade
+ * between the two; the first frame is also the poster.
+ */
+export const DEMO_CLIP_SCENES: readonly [Scene, Scene] = [
+  {
+    slug: "clip-clapping-apart",
+    draw: () =>
+      doc([
+        wall(C.cream),
+        frame(880, 220, 260, 200, C.sageSoft, C.mustard),
+        floor(1100, C.oat),
+        rug(600, 1380, 620, 190, [C.sageSoft, C.cream, C.coralSoft, C.cream]),
+        plant(150, 1110, 1.1),
+        place(
+          600,
+          1420,
+          1.5,
+          babySitting(maya(C.coralSoft, C.white, "tuft"), "happy", {
+            hands: [
+              [-150, -250],
+              [150, -250],
+            ],
+          }),
+        ),
+      ]),
+  },
+  {
+    slug: "clip-clapping-together",
+    draw: () =>
+      doc([
+        wall(C.cream),
+        frame(880, 220, 260, 200, C.sageSoft, C.mustard),
+        floor(1100, C.oat),
+        rug(600, 1380, 620, 190, [C.sageSoft, C.cream, C.coralSoft, C.cream]),
+        plant(150, 1110, 1.1),
+        place(
+          600,
+          1420,
+          1.5,
+          babySitting(maya(C.coralSoft, C.white, "tuft"), "happy", {
+            hands: [
+              [-30, -270],
+              [30, -270],
+            ],
+          }),
+        ),
+      ]),
+  },
+];
+
 /** Scene of seeded demo photo `nn` (1..12). */
 export function demoScene(nn: number): Scene {
   const scene = DEMO_SCENES[nn - 1];

@@ -2,7 +2,7 @@
 #
 #   docker compose -f docker-compose.dev.yml up            (or: pnpm dev)
 #   docker compose -f docker-compose.dev.yml down          (or: pnpm dev:down)
-#   docker compose -f docker-compose.dev.yml down -v       wipe dev-db / dev-s3 (pnpm dev:reset)
+#   docker compose -f docker-compose.dev.yml down -v       wipe dev-db / dev-s3 / dev-scratch (pnpm dev:reset)
 #
 # Config: .env.dev (committed, dev-only defaults) + optional git-ignored .env.local overrides,
 # loaded by the Node services (migrate, api, worker, web). db-init, auth, storage and
@@ -14,7 +14,12 @@
 # DATABASE_URL below); GoTrue as `supabase_auth_admin`.
 # Start order: db -> db-init (roles + auth schema) -> auth (GoTrue runs its own migrations, so
 # auth.users exists once it is healthy) -> migrate (app migrations + demo seed) -> api, worker.
-# Data: named volumes only (dev-db, dev-s3); no host folders to create.
+# Data: named volumes only (dev-db, dev-s3, dev-scratch); no host folders to create.
+# Video (docs/plans/step-12.md 2.6, 2.10): the worker image carries ffmpeg/ffprobe (Alpine
+# package, libx264 + libzimg). Uploaded clips are staged in the named volume dev-scratch at
+# /scratch (WORKER_SCRATCH_PATH; disk-backed, not the 1 GiB /tmp) while the poster, keyframes and
+# the 1080p H.264 web rendition are made. VIDEO_CONCURRENCY, VIDEO_FFMPEG_THREADS and
+# VIDEO_TRANSCODE_TIMEOUT_SEC are read from .env.dev / .env.local; `down -v` empties the scratch.
 # MinIO (docs/plans/step-4.md 2.11): the root key (dev / devdevdev) goes to storage and
 # storage-init only. storage-init (docker/minio/init.sh) creates the bucket, the 7-day
 # noncurrent-version lifecycle rule and two bucket-scoped users: api signs and calls S3 as
@@ -146,6 +151,15 @@ x-dev-shared:
   # feeds GoTrue (GOTRUE_EXTERNAL_*_ENABLED) and the API (AUTH_*_ENABLED, shows the button).
   apple-enabled: &dev-apple-enabled ${GOTRUE_EXTERNAL_APPLE_ENABLED:-false}
   google-enabled: &dev-google-enabled ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
+  # Passkeys (docs/plans/step-13.md 2.7; GoTrue beta, names verified against v2.197.0 in 0.1): ON
+  # in dev. One flag feeds GoTrue (GOTRUE_PASSKEY_ENABLED) and the api (AUTH_PASSKEYS_ENABLED,
+  # shows the buttons). WebAuthn relying party = the browser's origin: `localhost` on any WEB_PORT
+  # (http is allowed for localhost only, so a phone on the LAN cannot use passkeys in dev; the
+  # email code still works there). Compose INTERPOLATION variables (shell or the project `.env`):
+  #   AUTH_PASSKEYS_ENABLED=false docker compose -f docker-compose.dev.yml up -d --no-deps auth api
+  passkeys-enabled: &dev-passkeys-enabled ${AUTH_PASSKEYS_ENABLED:-true}
+  webauthn-rp-id: &dev-webauthn-rp-id ${WEBAUTHN_RP_ID:-localhost}
+  webauthn-rp-origins: &dev-webauthn-rp-origins ${WEBAUTHN_RP_ORIGINS:-http://localhost:${WEB_PORT:-8080}}
   # Fake Google (photo import; see the header). Internal URL = service name + container port
   # (fixed); public URL = what the browser / simulator opens, follows GOOGLE_FAKE_PORT.
   google-fake-internal-url: &dev-google-fake-internal-url http://google-fake:8099
@@ -371,6 +385,24 @@ services:
       GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: http://localhost:${WEB_PORT:-8080}/auth/callback
+      # Passkeys (docs/plans/step-13.md 0.1, 2.7; beta in GoTrue, absent from its example.env, so
+      # the names are those of configuration.go at v2.197.0). The browser never reaches
+      # /auth/passkeys/* (Vite proxy here, nginx allow-list in production: 404); the api is the
+      # only client (/api/auth/passkey/*, /api/me/passkeys). The relying-party id must equal the
+      # site's registrable domain and every origin must be listed exactly: a wrong value is NOT a
+      # start-up error (GoTrue only logs a warning and stays healthy) but every passkey request
+      # then answers 500 "Failed to initialize WebAuthn"; the healthcheck below catches that.
+      # Changing the RP id later invalidates every passkey already registered.
+      GOTRUE_PASSKEY_ENABLED: *dev-passkeys-enabled
+      GOTRUE_PASSKEY_MAX_PASSKEYS_PER_USER: "5"
+      GOTRUE_WEBAUTHN_RP_ID: *dev-webauthn-rp-id
+      GOTRUE_WEBAUTHN_RP_DISPLAY_NAME: Tinyglow
+      GOTRUE_WEBAUTHN_RP_ORIGINS: *dev-webauthn-rp-origins
+      GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION: 5m
+      # GoTrue's own per-IP limit on authentication/options (production 30 per 5 min); raised in
+      # dev like the other GOTRUE_RATE_LIMIT_* so tests exercise the api's limits, and because the
+      # healthcheck below spends one request per probe.
+      GOTRUE_RATE_LIMIT_PASSKEY: "1000"
     depends_on:
       db-init:
         condition: service_completed_successfully
@@ -379,7 +411,16 @@ services:
     ports:
       - "127.0.0.1:${AUTH_PORT:-9999}:9999"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:9999/health"]
+      # /health, plus (while passkeys are on) one POST to authentication/options that must answer
+      # with a challenge_id: a misconfigured RP id/origins answers 500 and leaves /health green
+      # (docs/plans/step-13.md 0.1), so `up --wait` would otherwise pass with passkeys broken.
+      # Dev only: each probe is one request against GOTRUE_RATE_LIMIT_PASSKEY (1000 here, 30 in
+      # production) and one 5-minute challenge row that GoTrue purges itself. The body is never
+      # printed; the empty POST body carries nothing. The X-Forwarded-For header (GoTrue's
+      # GOTRUE_RATE_LIMIT_HEADER here) keys the probe under the limiter; without it GoTrue logs a
+      # "rate limiting is not applied" warning on every probe.
+      # One line on purpose: a folded block would put the pipe at a line start (sh syntax error).
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider http://127.0.0.1:9999/health && { [ \"$$GOTRUE_PASSKEY_ENABLED\" != \"true\" ] || wget -q --tries=1 -O - --header 'X-Forwarded-For: 127.0.0.1' --post-data= http://127.0.0.1:9999/passkeys/authentication/options | grep -q '\"challenge_id\"'; }"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -476,6 +517,9 @@ services:
       PUBLIC_URL: *dev-public-url
       AUTH_APPLE_ENABLED: *dev-apple-enabled
       AUTH_GOOGLE_ENABLED: *dev-google-enabled
+      # Passkeys (docs/plans/step-13.md 2.4, 2.7): same flag as GoTrue's GOTRUE_PASSKEY_ENABLED
+      # (x-dev-shared), so /api/auth/config advertises exactly what GoTrue will accept.
+      AUTH_PASSKEYS_ENABLED: *dev-passkeys-enabled
       SMTP_HOST: *dev-smtp-host
       SMTP_PORT: *dev-smtp-port
       SMTP_SECURE: "false"
@@ -607,6 +651,13 @@ services:
       # import.google job (1..4); each streams to /tmp (<= 100 MiB). Provider + fake URLs come
       # from *dev-google-import-env; GOOGLE_IMPORT_CLIENT_ID / _SECRET from .env.local.
       IMPORT_CONCURRENCY: ${IMPORT_CONCURRENCY:-2}
+      # Video (docs/plans/step-12.md 2.6, 2.10): where uploaded clips are staged while ffmpeg
+      # runs. Pinned here because it must match the dev-scratch mount below (same path as
+      # production). VIDEO_CONCURRENCY / VIDEO_FFMPEG_THREADS / VIDEO_TRANSCODE_TIMEOUT_SEC come
+      # from .env.dev (override in .env.local). Transcodes wait while the volume's filesystem
+      # (Docker Desktop's disk image) has < 6 GiB free (VIDEO_SCRATCH_MIN_FREE_BYTES, a shared
+      # constant, not an env var): keep the Docker disk roomy when testing videos.
+      WORKER_SCRATCH_PATH: /scratch
     volumes:
       - ./apps/worker/src:/repo/apps/worker/src
       - ./packages/shared/src:/repo/packages/shared/src
@@ -618,8 +669,16 @@ services:
         read_only: true
         volume:
           nocopy: true
-    # Same cap as production: two concurrent 48 MP HEIC decodes are ~800 MB RSS.
-    mem_limit: 2g
+      # Video staging (read-write; the dev image runs as root, so no ownership setup). A named
+      # volume, not a host folder: zero setup, and it lives on Docker's disk, not in the repo.
+      - type: volume
+        source: dev-scratch
+        target: /scratch
+        volume:
+          nocopy: true
+    # Same cap as production: two concurrent 48 MP HEIC decodes are ~800 MB RSS, plus ~1.5 GB
+    # for one libx264 1080p encode with a 4K HEVC decode.
+    mem_limit: 3g
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -700,3 +759,4 @@ services:
 volumes:
   dev-db:
   dev-s3:
+  dev-scratch:

@@ -1,18 +1,22 @@
 import { z } from "zod";
-import { photoMimeSchema } from "../db-enums";
+import { mediaKindSchema, mediaMimeSchema } from "../db-enums";
 import {
   UPLOAD_MAX_FILE_BYTES,
   UPLOAD_MAX_FILES_PER_REQUEST,
+  UPLOAD_MAX_VIDEO_BYTES,
   uploadFileErrorSchema,
   uploadFileStateSchema,
 } from "../upload";
+import { VIDEO_MAX_DURATION_MS } from "../video";
 import { isoDateTimeSchema } from "./common";
 import { photoSummarySchema } from "./photos";
 
-// `/api/babies/:id/uploads` and `/api/uploads/…` contracts (docs/plans/step-4.md 2.4, 2.6; PRD
-// "FR-2 Upload", "FR-3 Parent-supplied details"). The client's `clientSha256`, `mime` and
-// `takenAt` are hints only: the worker re-hashes, sniffs and reads EXIF. Part URLs are presigned
-// `UploadPart` URLs for one key, plain `PUT`s with no custom headers.
+// `/api/babies/:id/uploads` and `/api/uploads/…` contracts (docs/plans/step-4.md 2.4, 2.6;
+// docs/plans/step-12.md 2.3, 2.4; PRD "FR-2 Upload", "FR-3 Parent-supplied details"). The
+// client's `clientSha256`, `mime`, `takenAt` and `durationMs` are hints only: the worker
+// re-hashes, sniffs, reads EXIF and probes videos. Part URLs are presigned `UploadPart` URLs for
+// one key, plain `PUT`s with no custom headers. Videos (step 12) use the same session and parts;
+// the api applies the plan's per-clip limits (`videoLimitsFor`) at register.
 
 /** Route params `/uploads/:sessionId…`. */
 export const uploadParamsSchema = z.object({ sessionId: z.uuid() });
@@ -37,22 +41,48 @@ export const uploadSessionCreateSchema = z.object({
 });
 export type UploadSessionCreate = z.infer<typeof uploadSessionCreateSchema>;
 
-/** One file in `POST /uploads/:sessionId/files`. */
-export const uploadFileRegisterSchema = z.object({
-  /** The browser's handle for the file, echoed back. */
-  clientId: z.string().min(1).max(64),
-  bytes: z.number().int().min(1).max(UPLOAD_MAX_FILE_BYTES),
-  /** Lowercase hex SHA-256 for the instant duplicate pre-check; never trusted. */
-  clientSha256: z
-    .string()
-    .regex(/^[0-9a-f]{64}$/)
-    .optional(),
-  mime: photoMimeSchema.optional(),
-  /** Capture-time hint from the client's EXIF read. */
-  takenAt: isoDateTimeSchema.optional(),
-  tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
-});
+/**
+ * One file in `POST /uploads/:sessionId/files`. `kind` defaults to `photo`; a `video` may declare
+ * up to `UPLOAD_MAX_VIDEO_BYTES` (the api then applies the plan's cap: `failed / file_too_large`),
+ * a photo up to `UPLOAD_MAX_FILE_BYTES`. `durationMs` is the client's `loadedmetadata` read, a
+ * hint for the early `video_too_long` outcome (the worker re-checks after ffprobe).
+ */
+export const uploadFileRegisterSchema = z
+  .object({
+    /** The browser's handle for the file, echoed back. */
+    clientId: z.string().min(1).max(64),
+    kind: mediaKindSchema.default("photo"),
+    bytes: z.number().int().min(1).max(UPLOAD_MAX_VIDEO_BYTES),
+    /** Lowercase hex SHA-256 for the instant duplicate pre-check; never trusted. */
+    clientSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+    mime: mediaMimeSchema.optional(),
+    /** Capture-time hint from the client's EXIF read. */
+    takenAt: isoDateTimeSchema.optional(),
+    tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
+    /** Video duration hint, milliseconds (videos only). */
+    durationMs: z.number().int().min(1).max(VIDEO_MAX_DURATION_MS).optional(),
+  })
+  .superRefine((f, ctx) => {
+    if (f.kind === "photo" && f.bytes > UPLOAD_MAX_FILE_BYTES) {
+      ctx.addIssue({
+        code: "too_big",
+        origin: "number",
+        maximum: UPLOAD_MAX_FILE_BYTES,
+        inclusive: true,
+        path: ["bytes"],
+        message: `a photo must be at most ${UPLOAD_MAX_FILE_BYTES} bytes`,
+      });
+    }
+    if (f.kind === "photo" && f.durationMs !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["durationMs"], message: "only for videos" });
+    }
+  });
 export type UploadFileRegister = z.infer<typeof uploadFileRegisterSchema>;
+/** The wire shape (before defaults): `kind` may be omitted. */
+export type UploadFileRegisterInput = z.input<typeof uploadFileRegisterSchema>;
 
 export const uploadFilesRegisterRequestSchema = z.object({
   files: z.array(uploadFileRegisterSchema).min(1).max(UPLOAD_MAX_FILES_PER_REQUEST),
@@ -70,6 +100,8 @@ export const uploadFileSchema = z.object({
   /** `upload_files.id`, which becomes `photos.id` on complete. */
   id: z.uuid(),
   clientId: z.string().nullable(),
+  /** `upload_files.media_kind`, as registered (the worker's sniff is the truth and may flip the photo row). */
+  kind: mediaKindSchema,
   state: uploadFileStateSchema,
   error: uploadFileErrorSchema.nullable(),
   bytes: z.number().int(),

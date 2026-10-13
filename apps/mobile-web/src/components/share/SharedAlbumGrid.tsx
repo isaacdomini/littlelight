@@ -1,6 +1,6 @@
 import { IonIcon } from "@ionic/react";
-import { ageGroupKey, type ViewerPhoto } from "@tinyglow/shared";
-import { eyeOffOutline, flag, imageOutline } from "ionicons/icons";
+import { ageGroupKey, formatDuration, type ViewerPhoto } from "@tinyglow/shared";
+import { eyeOffOutline, flag, imageOutline, play } from "ionicons/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GroupedVirtuoso } from "react-virtuoso";
 import { t, tn } from "../../i18n";
@@ -41,11 +41,30 @@ function group(photos: readonly ViewerPhoto[], cols: number): Group[] {
 }
 
 export function photoAlt(p: ViewerPhoto, name: string): string {
+  const video = p.mediaKind === "video";
   const base =
     p.ageDays === null
-      ? t("shareViewer.altNoAge", { name })
-      : t("shareViewer.alt", { name, age: ageText(p.ageDays) });
+      ? t(video ? "shareViewer.videoAltNoAge" : "shareViewer.altNoAge", { name })
+      : t(video ? "shareViewer.videoAlt" : "shareViewer.alt", { name, age: ageText(p.ageDays) });
   return p.milestone ? `${base}, ${p.milestone.name}` : base;
+}
+
+/** Bottom-right duration badge of a video tile (same look as the parents' grid). */
+export function ShareDurationBadge({ photo }: { photo: ViewerPhoto }) {
+  const text = photo.durationMs === null ? null : formatDuration(photo.durationMs);
+  return (
+    <span
+      data-testid={`share-video-${photo.id}`}
+      role="img"
+      aria-label={
+        text ? t("timeline.videoBadge", { duration: text }) : t("timeline.videoBadgeNoDuration")
+      }
+      className="absolute bottom-1.5 right-1.5 flex h-6 items-center gap-0.5 rounded-full bg-black/60 px-1.5 text-xs font-semibold text-white tabular-nums"
+    >
+      <IonIcon icon={play} aria-hidden className="h-3 w-3" />
+      {text}
+    </span>
+  );
 }
 
 function Tile({
@@ -125,6 +144,7 @@ function Tile({
           <IonIcon icon={flag} aria-hidden className="h-4 w-4" />
         </span>
       ) : null}
+      {photo.mediaKind === "video" ? <ShareDurationBadge photo={photo} /> : null}
     </button>
   );
 }

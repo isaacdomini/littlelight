@@ -10,13 +10,17 @@ import {
   type IngestJob,
   importGoogleJobSchema,
   ingestJobSchema,
-  type PhotoMime,
+  isVideoMime as isVideoMimeValue,
+  type MediaKind,
+  type MediaMime,
   type PickerMediaItem,
+  type Plan,
+  videoLimitsFor,
 } from "@tinyglow/shared";
 import type { JobWithMetadata } from "pg-boss";
 import { errorCategory } from "../../clients";
 import { type PipelinePool, runAsPipeline } from "../../db";
-import { sniffPhotoMime } from "../../ingest/sniff";
+import { isVideoMime, sniffMediaMime } from "../../ingest/sniff";
 import type { WorkerLog } from "../../log-types";
 import type { WorkerStorage } from "../../storage";
 import {
@@ -63,8 +67,11 @@ import {
 //
 // Runs as `pipeline`. No model call and no embedding call: booked photos follow the normal
 // ingest → reindex path, whose paid-tier gate is unchanged (free-tier photos are never sent to a
-// model). Videos and anything outside the five accepted photo types are skipped (v1 is photos
-// only). The worker never inserts into `photos` (D10) and never reads `google_accounts`.
+// model). Anything outside the five accepted photo types and the two video containers is
+// skipped. Step 12 (docs/plans/step-12.md 2.6): `type: VIDEO` items download `baseUrl=dv`, are
+// capped at the album plan's per-clip bytes, stage on the scratch folder, and `import_book_photo`
+// may answer `video_too_long` / `file_too_large` (the item fails, the batch continues). The
+// worker never inserts into `photos` (D10) and never reads `google_accounts`.
 //
 // Idempotent: a retried job re-claims its `running` batch, re-lists the session (`baseUrl`s live
 // in memory for one run only), keeps the outcomes of items already booked/duplicate/failed/skipped
@@ -138,6 +145,7 @@ interface ItemRow {
   provider_item_id: string;
   status: string;
   storage_key: string;
+  media_kind: MediaKind;
 }
 
 /** Why the item loop stopped early. */
@@ -153,8 +161,14 @@ type Stop =
   | { kind: "fail"; error: ImportBatchError; itemError: ImportItemError }
   | { kind: "transient"; category: string };
 
+/** `import_items.error` values the worker writes (`IMPORT_ITEM_ERRORS`, incl. `video_too_long`). */
+type ItemError = ImportItemError;
+
 const ACCEPTED = new Set<string>(ACCEPTED_UPLOAD_MIMES);
 const INT_MAX = 2_147_483_647;
+
+/** Plan of the album (the video per-clip cap at download time; `import_book_photo` re-checks). */
+const BABY_PLAN_SQL = `SELECT plan FROM babies WHERE id = $1`;
 
 /** Requester state ⇒ batch error (`null` for `ok`, `"skip"` for `not_active`). */
 export function stateError(state: string): ImportBatchError | "skip" | null {
@@ -173,11 +187,17 @@ export function stateError(state: string): ImportBatchError | "skip" | null {
   }
 }
 
-/** The Picker item as an `import_items` row: accepted photo ⇒ `pending`, else `skipped`. */
+/**
+ * The Picker item as an `import_items` row: an accepted photo (`PHOTO` + photo mime) or video
+ * (`VIDEO` + video mime, step 12) ⇒ `pending`, else `skipped`. The Picker's item schema carries no
+ * duration, so `durationMsHint` is null; the worker measures the real one after download.
+ */
 export function classifyItem(item: PickerMediaItem): {
-  mime: PhotoMime | null;
+  mime: MediaMime | null;
+  kind: MediaKind;
   width: number | null;
   height: number | null;
+  durationMsHint: number | null;
   status: "pending" | "skipped";
   error: ImportItemError | null;
 } {
@@ -186,10 +206,31 @@ export function classifyItem(item: PickerMediaItem): {
     typeof v === "number" && Number.isInteger(v) && v > 0 && v <= INT_MAX ? v : null;
   const width = dim(item.mediaFile.mediaFileMetadata?.width);
   const height = dim(item.mediaFile.mediaFileMetadata?.height);
-  if (item.type !== "PHOTO" || !ACCEPTED.has(mime)) {
-    return { mime: null, width, height, status: "skipped", error: "unsupported_media_type" };
+  const kind: MediaKind = item.type === "VIDEO" ? "video" : "photo";
+  const accepted =
+    ACCEPTED.has(mime) &&
+    ((item.type === "PHOTO" && !isVideoMimeValue(mime)) ||
+      (item.type === "VIDEO" && isVideoMimeValue(mime)));
+  if (!accepted) {
+    return {
+      mime: null,
+      kind,
+      width,
+      height,
+      durationMsHint: null,
+      status: "skipped",
+      error: "unsupported_media_type",
+    };
   }
-  return { mime: mime as PhotoMime, width, height, status: "pending", error: null };
+  return {
+    mime: mime as MediaMime,
+    kind,
+    width,
+    height,
+    durationMsHint: null,
+    status: "pending",
+    error: null,
+  };
 }
 
 /** `photo.ingest` payload with the batch's time zone when it is a valid one. */
@@ -443,12 +484,16 @@ export async function runImportGoogle(
     ts: [] as string[],
     status: [] as string[],
     err: [] as (string | null)[],
+    kind: [] as MediaKind[],
+    dur: [] as (number | null)[],
   };
   let unsupported = 0;
+  let videos = 0;
   for (const item of taken) {
     const c = classifyItem(item);
     if (c.status === "pending") baseUrls.set(item.id, item.mediaFile.baseUrl);
     else unsupported++;
+    if (c.status === "pending" && c.kind === "video") videos++;
     cols.pid.push(item.id);
     cols.mime.push(c.mime);
     cols.w.push(c.width);
@@ -456,7 +501,13 @@ export async function runImportGoogle(
     cols.ts.push(item.createTime);
     cols.status.push(c.status);
     cols.err.push(c.error);
+    cols.kind.push(c.kind);
+    cols.dur.push(c.durationMsHint);
   }
+  // The album plan decides the per-clip byte cap of video downloads (free: 250 MB).
+  const plan: Plan =
+    videos > 0 ? ((await q<{ plan: Plan }>(BABY_PLAN_SQL, [babyId]))[0]?.plan ?? "free") : "free";
+  const maxVideoBytes = videoLimitsFor(plan).maxBytes;
   const items = await runAsPipeline(pool, {}, async (c) => {
     if (cols.pid.length > 0) {
       await c.query(INSERT_ITEMS_SQL, [
@@ -469,6 +520,8 @@ export async function runImportGoogle(
         cols.ts,
         cols.status,
         cols.err,
+        cols.kind,
+        cols.dur,
       ]);
     }
     await c.query(SET_TOTAL_SQL, [batchId, taken.length + overflow]);
@@ -476,7 +529,7 @@ export async function runImportGoogle(
     return (await c.query<ItemRow>(LIST_ITEMS_SQL, [batchId])).rows;
   });
   log.info(
-    { batchId, babyId, count: taken.length, skipped: unsupported, overflow },
+    { batchId, babyId, count: taken.length, videos, skipped: unsupported, overflow },
     "import.google: items listed",
   );
   if (taken.length === 0 && overflow > 0) return finish("failed", "too_many_items", overflow);
@@ -488,7 +541,7 @@ export async function runImportGoogle(
     stop ??= s;
   };
 
-  const markItem = (id: string, status: string, error: ImportItemError | null) =>
+  const markItem = (id: string, status: string, error: ItemError | null) =>
     q(MARK_ITEM_SQL, [id, status, error]);
 
   async function dropObject(key: string, itemId: string): Promise<void> {
@@ -513,7 +566,10 @@ export async function runImportGoogle(
     let file: DownloadedFile | undefined;
     try {
       try {
-        file = await downloadMedia(deps.download, tokens as AccessTokenSource, item.id, baseUrl);
+        file = await downloadMedia(deps.download, tokens as AccessTokenSource, item.id, baseUrl, {
+          kind: item.media_kind,
+          maxVideoBytes,
+        });
       } catch (err) {
         if (isGoogleError(err) && err.category === "google_reconnect") {
           setStop({ kind: "reconnect" });
@@ -529,9 +585,15 @@ export async function runImportGoogle(
         );
         return;
       }
-      const mime = await sniffPhotoMime(file.head);
+      const mime = await sniffMediaMime(file.head);
       if (!mime) {
         await markItem(item.id, "skipped", "unsupported_media_type");
+        return;
+      }
+      // The sniff is the truth for the kind; a free album's per-clip size cap applies to videos.
+      const kind: MediaKind = isVideoMime(mime) ? "video" : "photo";
+      if (kind === "video" && file.bytes > maxVideoBytes) {
+        await markItem(item.id, "failed", "file_too_large");
         return;
       }
       const dup = await q(DUPLICATE_PRECHECK_SQL, [babyId, file.sha256]);
@@ -539,7 +601,7 @@ export async function runImportGoogle(
         await markItem(item.id, "duplicate", null);
         return;
       }
-      await q(MARK_DOWNLOADED_SQL, [item.id, file.bytes, file.sha256, mime]);
+      await q(MARK_DOWNLOADED_SQL, [item.id, file.bytes, file.sha256, mime, kind]);
       try {
         await deps.storage.putObjectStream(item.storage_key, createReadStream(file.path), mime);
       } catch (err) {
@@ -571,6 +633,12 @@ export async function runImportGoogle(
           await dropObject(item.storage_key, item.id);
           await markItem(item.id, "failed", outcome);
           setStop({ kind: "cap", itemError: outcome });
+          break;
+        case "video_too_long":
+        case "file_too_large":
+          // A free album's per-clip limit (step 12): this item fails, the batch goes on.
+          await dropObject(item.storage_key, item.id);
+          await markItem(item.id, "failed", outcome);
           break;
         case "not_member":
           await dropObject(item.storage_key, item.id);

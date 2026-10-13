@@ -239,6 +239,9 @@ describe("parseChatToolArguments: the other tools", () => {
 describe("tool result schemas (nothing private can ride along)", () => {
   const item = {
     photo_id: P1,
+    // step 12: every tool item says whether it is a photo or a video (never the file or a URL)
+    media_kind: "photo",
+    duration_seconds: null,
     taken_at: "2026-06-14",
     age: "11 months",
     caption: "c",
@@ -269,6 +272,8 @@ describe("tool result schemas (nothing private can ride along)", () => {
   it("only get_photo may carry the note and text in the photo", () => {
     const photo = {
       photo_id: P1,
+      media_kind: "video",
+      duration_seconds: 42,
       taken_at: null,
       age: null,
       caption: null,

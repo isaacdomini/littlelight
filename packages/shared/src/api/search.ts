@@ -25,14 +25,20 @@ export const SEARCH_QUERY_LIMITS = {
 const L = SEARCH_QUERY_LIMITS;
 const ageSchema = z.coerce.number().int().min(SEARCH_AGE_MIN_DAYS).max(SEARCH_AGE_MAX_DAYS);
 
+/** Media filter of search and the `search_photos` tool (step 12): `any` (default) is no filter. */
+export const SEARCH_MEDIA_FILTERS = ["photo", "video", "any"] as const;
+export const searchMediaFilterSchema = z.enum(SEARCH_MEDIA_FILTERS);
+export type SearchMediaFilter = z.infer<typeof searchMediaFilterSchema>;
+
 /**
  * `GET /babies/:id/search` query (strings from the query string; numbers coerced). Clients omit
  * empty values (an empty `q` is a 400, not "no query"). Dates are inclusive calendar dates;
  * `ageFrom`/`ageTo` are inclusive ages in days. `person` matches a people chip
  * case-insensitively; `place` the lower-cased coarse place; `tag` one lower-cased tag;
- * `milestoneId` a preset or one of the baby's custom milestones. At least one of `q` or a
- * filter; ranges must not be reversed. Without `q` the results are filtered only, newest first
- * (no model call).
+ * `milestoneId` a preset or one of the baby's custom milestones; `media` (step 12) keeps only
+ * photos or only videos (`any`, the default, is no filter). At least one of `q` or a filter;
+ * ranges must not be reversed. Without `q` the results are filtered only, newest first (no model
+ * call).
  */
 export const searchQuerySchema = z
   .object({
@@ -45,11 +51,12 @@ export const searchQuerySchema = z
     person: z.string().trim().min(1).max(L.person).optional(),
     place: z.string().trim().min(1).max(L.place).optional(),
     tag: z.string().trim().toLowerCase().min(1).max(L.tag).optional(),
+    media: searchMediaFilterSchema.default("any"),
     limit: z.coerce.number().int().min(1).max(SEARCH_PAGE_MAX).default(SEARCH_PAGE_DEFAULT),
   })
   .superRefine((v, ctx) => {
-    const { limit: _limit, ...rest } = v;
-    if (Object.values(rest).every((x) => x === undefined)) {
+    const { limit: _limit, media, ...rest } = v;
+    if (media === "any" && Object.values(rest).every((x) => x === undefined)) {
       ctx.addIssue({ code: "custom", path: ["q"], message: "Enter a search or pick a filter" });
     }
     if (v.dateFrom !== undefined && v.dateTo !== undefined && v.dateFrom > v.dateTo) {
@@ -71,11 +78,18 @@ export const searchDegradedSchema = z.enum(SEARCH_DEGRADED_REASONS);
 export type SearchDegraded = z.infer<typeof searchDegradedSchema>;
 
 /**
+ * One search result: a photo summary (step 12: it carries `mediaKind`, `durationMs` and
+ * `renditionStatus`, so a video result renders its badge). Named as in docs/plans/step-12.md 2.3.
+ */
+export const searchResultSchema = photoSummarySchema;
+export type SearchResult = z.infer<typeof searchResultSchema>;
+
+/**
  * Best match first (RRF over vector, full-text and tag/people legs; filtered-only queries newest
  * first). `tookMs` is database time (the embedding call is excluded).
  */
 export const searchResponseSchema = z.object({
-  photos: z.array(photoSummarySchema),
+  photos: z.array(searchResultSchema),
   tookMs: z.number().int().nonnegative(),
   degraded: searchDegradedSchema.nullable(),
 });

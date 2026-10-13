@@ -102,6 +102,21 @@ export const apiErrorCodeSchema = z.enum([
   "pending_limit",
   /** 403 on every request and at sign-in: an operator suspended the account (message names `SUPPORT_EMAIL`). */
   "account_suspended",
+  // Passkeys (docs/plans/step-13.md 2.3, 2.4, decision b). An unknown passkey id on rename/delete
+  // is the existing `not_found`.
+  /** 404: passkeys are off on this server (`AUTH_PASSKEYS_ENABLED=false`); the UI hides them. */
+  "passkey_disabled",
+  /**
+   * 401, deliberately generic: unknown credential, bad signature, expired or used challenge,
+   * missing user verification, unconfirmed email, banned user. A probe cannot tell them apart.
+   */
+  "passkey_failed",
+  /** 409: the account has the most passkeys allowed; `details: { max }` (`passkeyLimitDetailsSchema`). */
+  "passkey_limit",
+  /** 409: this authenticator credential is already registered. */
+  "passkey_exists",
+  /** 403: the store-review account cannot register passkeys (Q6). */
+  "passkey_unavailable_for_account",
   "internal",
 ]);
 export type ApiErrorCode = z.infer<typeof apiErrorCodeSchema>;
@@ -114,6 +129,15 @@ export const passcodeInvalidDetailsSchema = z.object({
   attemptsLeft: z.number().int().nonnegative(),
 });
 export type PasscodeInvalidDetails = z.infer<typeof passcodeInvalidDetailsSchema>;
+
+/** `details` of a 409 `passkey_limit`: the per-account maximum (`PASSKEY_MAX_PER_USER`). */
+export const passkeyLimitDetailsSchema = z.object({
+  max: z.number().int().min(1),
+});
+export type PasskeyLimitDetails = z.infer<typeof passkeyLimitDetailsSchema>;
+
+/** The single user-facing message of `passkey_failed` (the email code stays available). */
+export const PASSKEY_FAILED_MESSAGE = "That passkey didn't work. Use your email code instead.";
 
 /** `{ error, message, details? }`. Named `…Response` to leave `ApiError` free for the API/SPA classes. */
 export const apiErrorSchema = z.object({

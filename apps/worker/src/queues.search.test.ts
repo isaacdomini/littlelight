@@ -44,9 +44,18 @@ const pipeline = () => ({
   queueAge: vi.fn(),
 });
 
+const VIDEO = {
+  ffmpegPath: "ffmpeg",
+  ffprobePath: "ffprobe",
+  scratchPath: "/tmp/ll-scratch-test",
+  threads: 1,
+  timeoutSec: 60,
+  concurrency: 1,
+};
+
 describe("search queue definitions (step 7)", () => {
-  it("there are sixteen queues, all exclusive except push.notify (short)", () => {
-    expect(Object.keys(QUEUES)).toHaveLength(16);
+  it("there are seventeen queues, all exclusive except push.notify (short)", () => {
+    expect(Object.keys(QUEUES)).toHaveLength(17);
     for (const [name, q] of Object.entries(QUEUES))
       expect(q.policy).toBe(name === "push.notify" ? "short" : "exclusive");
   });
@@ -278,10 +287,11 @@ describe("startWorkers: the search handlers", () => {
       dataExport: {} as never,
       ai,
       indexer: ix as never,
+      video: VIDEO,
       log,
       ingestConcurrency: 1,
     });
-    expect(registered.size).toBe(15);
+    expect(registered.size).toBe(16);
     await registered.get(JOBS.searchReconcile)?.handler([job({}), job({ bad: 1 })]);
     expect(ix.reconcile).toHaveBeenCalledTimes(1);
     await registered.get(JOBS.searchBackfill)?.handler([job({ reason: "manual", babyId: BABY })]);

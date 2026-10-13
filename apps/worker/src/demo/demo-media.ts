@@ -17,7 +17,8 @@ import {
 // `pnpm demo:media` (docs/plans/step-9.md 2.11, task 9.12).
 //
 //   pnpm demo:media                     render the dev demo family's originals + derivatives (idempotent)
-//   pnpm demo:media --check             verify: 12/12 originals, 36/36 derivatives, rows, no metadata
+//   pnpm demo:media --check             verify: 13/13 originals (12 photos + the clip), 43/43
+//                                       derivatives, rows, no metadata / container tags
 //   pnpm demo:media --review-baby <id> [--confirm-production]
 //                                       put the 24 review JPEGs at the rows'
 //                                       `babies/<babyId>/originals/<id>.jpg` keys and enqueue ingest
@@ -146,6 +147,11 @@ async function main(argv: string[]): Promise<number> {
     bucket: env.S3_BUCKET,
     storage: createStorage(s3, env.S3_BUCKET),
     log,
+    video: {
+      ffmpegPath: process.env.FFMPEG_PATH?.trim() || "ffmpeg",
+      ffprobePath: process.env.FFPROBE_PATH?.trim() || "ffprobe",
+      threads: 2,
+    },
   };
   let boss: PgBoss | undefined;
   try {

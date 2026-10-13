@@ -5,6 +5,7 @@ import { accountRoutes } from "./account";
 import type { GoTrueClient } from "./gotrue";
 import { inviteRoutes } from "./invites";
 import { memberRoutes } from "./members";
+import { passkeyRoutes } from "./passkeys";
 import { registerAuthHook } from "./plugin";
 import type { ReviewAccount } from "./review";
 import { authRoutes } from "./routes";
@@ -37,12 +38,15 @@ export {
   type GeneratedMagicLink,
   type GoTrueClient,
   GoTrueError,
+  type GoTruePasskeys,
   type GoTrueReviewLinks,
   type GoTrueSession,
   type GoTrueUser,
+  hasPasskeys,
   hasReviewLinks,
   type IdTokenInput,
   type LogoutScope,
+  type PasskeyCeremonyInput,
   type PkceInput,
   type UpstreamHeaders,
   type VerifyInput,
@@ -68,6 +72,12 @@ export {
 } from "./session";
 export { createThrottle, type Throttle, type ThrottleResult } from "./throttle";
 export { createTurnstile, type Turnstile } from "./turnstile";
+export {
+  assertionHasUserVerification,
+  attestationHasUserVerification,
+  cborMapBytes,
+  mapPasskeyError,
+} from "./webauthn";
 
 export interface RegisterAuthDeps {
   gotrue: GoTrueClient;
@@ -95,4 +105,6 @@ export function registerAuth(app: FastifyInstance, deps: RegisterAuthDeps): void
   inviteRoutes(app, runtime);
   memberRoutes(app, runtime);
   accountRoutes(app, runtime);
+  // Step 13: `/me/passkeys*` (404 `passkey_disabled` unless AUTH_PASSKEYS_ENABLED).
+  passkeyRoutes(app, runtime);
 }

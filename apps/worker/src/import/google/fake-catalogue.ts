@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import exifr from "exifr";
 import sharp from "sharp";
 import { buildTiff, type ExifSpec, jpegWithExif, webpWithExif } from "../../testing/exif-writer";
+import { runProcess } from "../../video/ffmpeg";
 
 // Catalogue of the fake Google Picker server (docs/plans/step-10.md 2.9, task 10.7).
 //
@@ -11,7 +13,9 @@ import { buildTiff, type ExifSpec, jpegWithExif, webpWithExif } from "../../test
 // the same sharp build gives the same bytes), so tests can assert SHA-256 values:
 // - G-1 … G-8: JPEG photos, 640×480 (odd) / 480×640 (even);
 // - P-1: PNG, W-1: WebP (same EXIF as the JPEGs);
-// - V-1: a `type: VIDEO` item (a tiny MP4 `ftyp` box, never a playable video);
+// - V-1: a `type: VIDEO` item: a 1-second 160×120 H.264 MP4 rendered with ffmpeg (bit-exact
+//   flags, no tags) when `ffmpeg` is on PATH (the worker image; step 12 imports it like an
+//   upload), else a bare MP4 `ftyp` box that sniffs as `video/mp4` and fails probe;
 // - X-1: a JPEG whose download claims 200 MiB in `Content-Length` and is cut after 1 MiB (the
 //   worker's size guard);
 // - H-1: a committed HEIC fixture, only when `FAKE_GOOGLE_FIXTURES_DIR` holds it.
@@ -154,7 +158,7 @@ function sha256(buf: Buffer): string {
 }
 
 /** A minimal ISO-BMFF `ftyp` box + padding: sniffs as `video/mp4`, decodes as nothing. */
-function fakeMp4(): Buffer {
+export function bareMp4Box(): Buffer {
   const ftyp = Buffer.alloc(24);
   ftyp.writeUInt32BE(24, 0);
   ftyp.write("ftypisom", 4, "latin1");
@@ -164,6 +168,57 @@ function fakeMp4(): Buffer {
   free.writeUInt32BE(1000, 0);
   free.write("free", 4, "latin1");
   return Buffer.concat([ftyp, free]);
+}
+
+/**
+ * V-1's bytes (step 12): a real 1-second clip (`testsrc`, 160×120, 10 fps, H.264 yuv420p,
+ * faststart, bit-exact so the SHA-256 is stable per ffmpeg build, no tags) when ffmpeg is
+ * available, else `bareMp4Box()`. Rendered into a private temp dir that is removed afterwards.
+ */
+export async function fakeMp4(ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg"): Promise<Buffer> {
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), "ll-fake-google-"));
+    const out = path.join(dir, "v1.mp4");
+    await runProcess(
+      ffmpegPath,
+      [
+        "-v",
+        "error",
+        "-hide_banner",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=160x120:rate=10",
+        "-t",
+        "1",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-map_metadata",
+        "-1",
+        "-fflags",
+        "+bitexact",
+        "-flags:v",
+        "+bitexact",
+        "-movflags",
+        "+faststart",
+        "-y",
+        out,
+      ],
+      { timeoutMs: 60_000 },
+    );
+    return await readFile(out);
+  } catch {
+    return bareMp4Box();
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 /** EXIF tags of `buf` (TIFF block read through sharp, which also handles WebP), or `null`. */
@@ -293,14 +348,14 @@ export async function buildFakeCatalogue(
 
   {
     const t = captureTime(i);
-    const bytes = fakeMp4();
+    const bytes = await fakeMp4();
     items.push({
       id: "V-1",
       type: "VIDEO",
       mimeType: "video/mp4",
       filename: "FAKE_V-1.mp4",
-      width: 640,
-      height: 480,
+      width: 160,
+      height: 120,
       createTime: t.createTime,
       exifDateTimeOriginal: null,
       exifOffsetTimeOriginal: null,
@@ -364,8 +419,8 @@ export async function buildFakeCatalogue(
   }
 
   for (const item of items) {
-    // V-1 is a bare `ftyp` box built above (no metadata to read). X-1 is cut mid-file; its head
-    // still must not carry GPS.
+    // V-1 is rendered by ffmpeg with `-map_metadata -1` (or a bare `ftyp` box): no EXIF to read.
+    // X-1 is cut mid-file; its head still must not carry GPS.
     if (item.type === "VIDEO") continue;
     await assertFakeMediaClean(item.id, item.bytes, item.id !== "X-1");
   }

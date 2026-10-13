@@ -1179,11 +1179,18 @@ export async function startFakeGoogleServer(
         const fault = takeFault(route, { itemId });
         if (await applyFault(req, res, route, fault)) return;
         requireBearer(req);
-        if (mediaMatch[2] !== "=d") {
-          throw new HttpError(400, "INVALID_ARGUMENT", "the fake serves only the =d download");
-        }
         const item = byId.get(itemId);
         if (!item) throw new HttpError(404, "NOT_FOUND", "media item not found");
+        // `=d` downloads a photo's original, `=dv` a video's (step 12, `googleMediaDownloadUrl`);
+        // like Google, the fake answers only the form that matches the item's type.
+        const wanted = item.type === "VIDEO" ? "=dv" : "=d";
+        if (mediaMatch[2] !== wanted) {
+          throw new HttpError(
+            400,
+            "INVALID_ARGUMENT",
+            `the fake serves only the ${wanted} download for this item`,
+          );
+        }
         await serveMedia(req, res, item, fault);
         return;
       }

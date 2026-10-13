@@ -23,6 +23,8 @@ import { SharedPhotoViewer } from "./SharedPhotoViewer";
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const photo = (takenAt: string | null): ViewerPhoto => ({
   id: ID,
+  mediaKind: "photo",
+  durationMs: null,
   takenAt,
   takenAtEstimated: false,
   ageDays: 10,

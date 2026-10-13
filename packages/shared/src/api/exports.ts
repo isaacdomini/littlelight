@@ -15,6 +15,18 @@ import { isoDateTimeSchema } from "./common";
 // - Values of `exportStatusSchema` / `exportErrorSchema` match the migration CHECKs literally
 //   and in order.
 
+/**
+ * Columns step 12 appends to `photos.csv` (and keys to each `photos.json` element), after the
+ * existing metadata columns and before the optional `gps_lat`/`gps_lng`: `media_kind`
+ * (`photo`/`video`), `duration_ms` (videos), `video_codec` (`h264`/`hevc`, videos). The worker's
+ * `PHOTOS_CSV_COLUMNS` spreads this list; `originals/` includes videos (`.mov`/`.mp4`) as uploaded.
+ */
+export const EXPORT_PHOTOS_CSV_VIDEO_COLUMNS = [
+  "media_kind",
+  "duration_ms",
+  "video_codec",
+] as const;
+
 /** `data_exports.status`: `queued` → `running` → `ready` | `failed`; `ready` → `expired` (sweep). */
 export const EXPORT_STATUSES = ["queued", "running", "ready", "failed", "expired"] as const;
 export const exportStatusSchema = z.enum(EXPORT_STATUSES);

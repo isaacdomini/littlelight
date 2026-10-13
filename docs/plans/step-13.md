@@ -25,8 +25,8 @@ compose files — ships first-factor passkeys** (beta, announced 2026-05-28): ro
 default 10), `GET /passkeys`, `PATCH /passkeys/{id}` (`friendly_name` ≤ 120), `DELETE
 /passkeys/{id}`, admin list/delete under `/admin/users/{id}/passkeys`. Config:
 `GOTRUE_PASSKEY_ENABLED` (default false), `GOTRUE_WEBAUTHN_RP_ID` (bare domain),
-`GOTRUE_WEBAUTHN_RP_DISPLAY_NAME`, `GOTRUE_WEBAUTHN_RP_ORIGINS` (comma list, ≤ 5, https or
-loopback, or `android:apk-key-hash:<base64url sha256 of the signing cert>`),
+`GOTRUE_WEBAUTHN_RP_DISPLAY_NAME`, `GOTRUE_WEBAUTHN_RP_ORIGINS` (comma list, no hard cap in
+GoTrue, https or loopback, or `android:apk-key-hash:<base64url sha256 of the signing cert>`),
 `GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION` (5m). Challenges are single-use rows keyed by
 `challenge_id`; the verify response requires a confirmed email and refuses banned users; sign-in
 is recorded as a `PasskeyLogin` audit action. **Decision: GoTrue-native.** An API-side WebAuthn
@@ -46,22 +46,28 @@ issuer; it stays the fallback only if the beta API breaks (5.2).
 | Q6 | Store-review account | **Cannot register passkeys** |
 | Q7 | Email on add/remove | **Yes**, new-device-alert template family, no links |
 
-### 0.1 GoTrue facts to re-verify at build time (security-engineer, task 13.4)
+### 0.1 GoTrue facts — verified 2026-10-11 against `supabase/auth:v2.197.0` (security research; source `api.go:324-345`, `errorcode.go:121-130`, `configuration.go`, `migrations/20260302000000_add_passkeys.up.sql`, live dev stack)
 
-What this plan relies on and where it was read (2026-10-11), so the build can diff against the
-pinned image `supabase/auth:v2.197.0` and stop if anything moved:
+The design in 2.1/2.4 holds. Verdict per row; the corrections are folded into 2.2–2.4, 2.6–2.8,
+3 and 4 below.
 
-| Fact | Source | Confidence |
-| --- | --- | --- |
-| Passkey code exists at the tag: `internal/api/passkey_{authentication,registration,manage,admin,webauthn}.go` | GitHub tree at `v2.197.0` | confirmed at the tag |
-| Config: `GOTRUE_PASSKEY_ENABLED` (false), `GOTRUE_PASSKEY_MAX_PASSKEYS_PER_USER` (10), `GOTRUE_WEBAUTHN_RP_ID`, `GOTRUE_WEBAUTHN_RP_DISPLAY_NAME`, `GOTRUE_WEBAUTHN_RP_ORIGINS` (all three required when enabled; validation failures are **logged as warnings, not fatal**), `GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION` (5m), `GOTRUE_RATE_LIMIT_PASSKEY` (30) | `internal/conf/configuration.go` at `v2.197.0` | confirmed at the tag; `RP_ID`/`RP_DISPLAY_NAME`/`RP_ORIGINS` spelling confirmed by validation messages, the rest inferred from envconfig tags. **Not in the tag's `example.env`** (undocumented there; only the MFA `GOTRUE_MFA_WEB_AUTHN_*` flags are) |
-| Routes: `POST /passkeys/authentication/options` (rate-limited + GoTrue captcha), `POST /passkeys/authentication/verify`, `POST /passkeys/registration/{options,verify}` (auth, non-anonymous), `GET /passkeys`, `PATCH|DELETE /passkeys/{passkey_id}`, `GET|DELETE /admin/users/{user_id}/passkeys[/{passkey_id}]`; group middleware `requirePasskeyEnabled` | `internal/api/api.go` read on **`master`**, handler files at the tag | **re-read `api.go` at `v2.197.0`** before coding the client; paths may have differed before GA |
-| Shapes: options responses `{ challenge_id, options, expires_at }` (`options` is the raw W3C JSON, not wrapped in `publicKey`); verify requests `{ challenge_id, credential }`; authentication verify returns the standard `AccessTokenResponse`; registration verify returns `{ id, friendly_name?, created_at }`; passkey object adds `last_used_at`; `PATCH { friendly_name ≤ 120 }`; `DELETE` → 204 | handler files at the tag | confirmed at the tag |
-| Error codes seen in handlers: `too_many_passkeys`, `webauthn_challenge_not_found`, `webauthn_challenge_expired`, `webauthn_verification_failed`, `webauthn_credential_exists`, `validation_failed`, `bad_json`, `email_not_confirmed`, `user_banned`; `passkey_disabled` is documented by Supabase for the disabled middleware but was **not seen in the handler files** | handler files + Supabase docs | partly confirmed; map any unknown code to `passkey_failed` |
-| `requirePasskeyManagementAAL(user, session)` guards registration and delete | handler files | semantics **unverified** (assumed AAL1 passes with no MFA factors; test it) |
-| Discoverable login only (`BeginDiscoverableLogin`, user from `userHandle`); email must be confirmed; friendly name derived from AAGUID | handler files | confirmed at the tag |
-| Credential/challenge tables live in the `auth` schema and cascade on user delete | Supabase docs ("deleting a user's last passkey…"); schema not read | **unverified** — hand check in 13.2 |
-| Whole feature is **beta** ("experimental; may change without notice"), opt-in client flag on the hosted SDKs | Supabase changelog 2026-05-28, docs | documented; pin the tag, re-run the gate on any GoTrue upgrade |
+| Fact | Verdict |
+| --- | --- |
+| Routes (identical at the tag and on master), all under `requirePasskeyEnabled` (runs **before** auth; 404 `passkey_disabled`): `POST /passkeys/authentication/options`, `POST /passkeys/authentication/verify`, `POST /passkeys/registration/{options,verify}` (auth, non-anonymous), `GET /passkeys/`, `PATCH|DELETE /passkeys/{id}`, `GET /admin/users/{uid}/passkeys/`, `DELETE /admin/users/{uid}/passkeys/{id}` | **confirmed** |
+| `authentication/options`: GoTrue limiter 30 / 5 min / 1 h keyed on `GOTRUE_RATE_LIMIT_HEADER` (so the API must forward `upstreamClientHeaders`, decision d); `verifyCaptcha` is a no-op unless GoTrue captcha is enabled (it is not) | **confirmed** |
+| `authentication/verify`: **no GoTrue rate limit at all** → the API caps total verify attempts per IP (decision c) | **confirmed, correction** |
+| Options responses `{ challenge_id, options: <raw W3C options>, expires_at }` — `expires_at` is **Unix seconds (int64)**, not ISO; the API converts (decision a) | **confirmed, correction** |
+| `registration/options`: body ignored; `options.user.id` = **base64url of the 36-char UUID string**; `residentKey` required, `userVerification` **preferred** (not required → the API enforces UV itself, decision g), attestation none, `excludeCredentials` = existing | **confirmed, correction** |
+| `registration/verify` answers **200** `{ id, friendly_name?, created_at }` (API still returns 201); audit `passkey_created` | **confirmed, correction** |
+| `GET /passkeys/` returns a **bare JSON array** of `{ id, friendly_name?, created_at, last_used_at? }` | **confirmed, correction** |
+| `PATCH { friendly_name }` (required, ≤ 120) → 200 item; `DELETE` → 204; unknown id on PATCH/DELETE → **404 `validation_failed` "Passkey not found"** | **confirmed** |
+| Authentication verify → standard `AccessTokenResponse`, AMR `passkey`, audit `login { passkey_id }`; discoverable login only; email must be confirmed | **confirmed** |
+| `requirePasskeyManagementAAL`: 403 `insufficient_aal` **only when the user has a verified MFA factor** (never in Tinyglow); applies to registration + delete, not list/patch | **confirmed** (was unverified) |
+| Env: `GOTRUE_PASSKEY_ENABLED` (false), `GOTRUE_PASSKEY_MAX_PASSKEYS_PER_USER` (10 → 5), `GOTRUE_WEBAUTHN_RP_ID`, `GOTRUE_WEBAUTHN_RP_DISPLAY_NAME`, `GOTRUE_WEBAUTHN_RP_ORIGINS` (comma list, **no hard cap** in GoTrue; the "5" is the hosted dashboard), `GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION` (5m), `GOTRUE_RATE_LIMIT_PASSKEY` (30; dev 1000). Absent from `example.env`. RP validation failures only `Warn`: the container stays **healthy and answers 500 "Failed to initialize WebAuthn"** at request time → gate check (decision e). Dev `RP_ID=localhost`, `RP_ORIGINS=http://localhost:8080` (loopback http allowed) | **confirmed, correction (500 gate)** |
+| Error codes and statuses: `passkey_disabled` 404; `too_many_passkeys` 422; `webauthn_challenge_not_found` 400; `webauthn_challenge_expired` 400; `webauthn_verification_failed` 400 (also unknown credential); `webauthn_credential_exists` 422; `validation_failed` 400 (bad body) / 422 (SSO user) / 404 (unknown passkey id); `bad_json` 400; `email_not_confirmed` 403; `user_banned` 403; `insufficient_aal` 403 | **confirmed, exact map in 2.4 (decision b)** |
+| Tables: `auth.webauthn_credentials` (`user_id → auth.users ON DELETE CASCADE`, `credential_id` bytea unique, public key, aaguid, sign count, transports, backup flags, `friendly_name`) and `auth.webauthn_challenges` (`user_id` NULL for authentication, CASCADE, `challenge_type ∈ signup|registration|authentication`, `session_data`, `expires_at`); challenges consumed atomically (`DELETE … RETURNING`), expired ones purged by GoTrue; owner `supabase_auth_admin`, no app role can read them; present in the dev DB (0 rows) | **confirmed: cascade holds → `account.ts` unchanged; deletion preview count comes from the GoTrue list** (decision f) |
+| Live dev state: no passkey env set → in-network options 404 `passkey_disabled`; through nginx a bare 404 from the allow-list (`docker/nginx/default.conf:50-54`) → no nginx change | **confirmed** |
+| Feature is beta ("experimental; may change without notice") | **documented**; pin the tag, re-run the gate on any GoTrue upgrade |
 
 ## 1. Goal
 
@@ -103,20 +109,22 @@ returns GoTrue's JSON unchanged apart from camelCase wrappers). Native: in-house
 
 ### 2.2 Database (security-engineer): none planned
 
-GoTrue creates and owns its passkey tables under `auth` (its own migrations ran when v2.197.0
-first booted; 12.2-style hand check: `\dt auth.*` lists the passkey/challenge tables). Verify in
-2.2a (task 13.2): (a) the tables cascade on `auth.users` delete (account deletion already hard
-deletes the GoTrue user); (b) `supabase_auth_admin` needs no new grant; (c) nothing in `public`
-references them. If (a) fails, GoTrue's admin passkey delete is called before the user delete
-(`account.ts`), no app migration. The only possible app migration is an `audit_log` metadata
-shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL.
+GoTrue owns `auth.webauthn_credentials` and `auth.webauthn_challenges` (created by its migration
+`20260302000000_add_passkeys`, already present in the dev DB). Both have `user_id → auth.users ON
+DELETE CASCADE` (verified 2026-10-11, 0.1), so account deletion's existing GoTrue hard delete
+removes every credential and challenge: **`account.ts` is unchanged**, and the deletion preview's
+`passkeys: n` is read from GoTrue's list endpoint, never from SQL (no app role can read the
+tables; owner `supabase_auth_admin`). Task 13.2 re-proves this on the dev stack (3, "13.2") and
+greps `packages/db` for `webauthn` (nothing in `public` may reference them). No app migration:
+`auditMetadataSchema` gaining `passkey_id` is a JSONB shape change, no DDL.
 
 ### 2.3 Shared contracts (`@tinyglow/shared`; architect-defined here, backend-engineer writes in 13.1 with orchestrator approval)
 
 - `api/auth.ts`:
   - `passkeyOptionsResponseSchema = z.object({ challengeId: z.uuid(), options:
     z.record(z.string(), z.unknown()) /* PublicKeyCredentialRequestOptionsJSON, passed through */,
-    expiresAt: isoDateTimeSchema })`.
+    expiresAt: isoDateTimeSchema })` — GoTrue's `expires_at` is Unix **seconds**; `gotrue.ts`
+    converts it to ISO before the DTO (0.1, decision a).
   - `passkeyVerifyRequestSchema = z.object({ challengeId: z.uuid(), credential:
     publicKeyCredentialJsonSchema })` where `publicKeyCredentialJsonSchema = z.object({ id:
     base64url 1..1024, rawId: base64url, type: z.literal("public-key"), response: z.object({
@@ -130,20 +138,26 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
     `PublicKeyCredentialCreationOptionsJSON`), `passkeyRegisterRequestSchema = { challengeId,
     credential, name?: z.string().trim().min(1).max(60) }`.
   - `passkeySchema = z.object({ id: z.uuid(), name: z.string(), createdAt, lastUsedAt:
-    isoDateTimeSchema.nullable() })`; `passkeysListResponseSchema = { passkeys: array.max(10),
-    max: int }`; `passkeyRenameRequestSchema = { name }`.
+    isoDateTimeSchema.nullable() })` (GoTrue omits `friendly_name`/`last_used_at` when empty; the
+    API fills `name` with "Passkey" and `lastUsedAt` with null); `passkeysListResponseSchema = {
+    passkeys: array.max(10), max: int }` — built from GoTrue's **bare array** (`GET /passkeys/`
+    returns `[...]`, not an object; `gotrue.ts` parses `z.array(goTruePasskeySchema)`);
+    `passkeyRenameRequestSchema = { name }`.
   - `authConfigResponseSchema` += `passkeys: z.boolean()` (feature flag for the UI).
   - `sessionResponseSchema` unchanged.
 - `api/errors.ts` codes: `passkey_disabled` (404), `passkey_failed` (401, generic: unknown
-  credential, bad signature, expired/used challenge), `passkey_limit` (409, `details: { max }`),
-  `passkey_exists` (409), `passkey_not_found` (404), `passkey_unavailable_for_account` (403, the
-  review account).
+  credential, bad signature, expired/used challenge, missing user verification), `passkey_limit`
+  (409, `details: { max }`), `passkey_exists` (409), `passkey_unavailable_for_account` (403, the
+  review account). An unknown passkey id on rename/delete is the existing `not_found` (404), no
+  new code (decision b).
 - `auth.ts`: `AUDIT_EVENTS` += `auth.passkey_added`, `auth.passkey_removed`,
   `auth.passkey_renamed`; `auditMetadataSchema.method` enum += `"passkey"`; `+= passkey_id:
   z.uuid().optional()` (never a name typed by the user, never credential ids);
-  `PASSKEY_OPTIONS_PER_IP_PER_HOUR = 60`, `PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN = 10`,
-  `PASSKEY_MAX_PER_USER = 5` (Q3; mirror of the GoTrue env), `PASSKEY_NAME_MAX = 60`,
-  `PASSKEY_PROMPT_SNOOZE_DAYS = 30`.
+  `PASSKEY_OPTIONS_PER_IP_PER_HOUR = 60`, `PASSKEY_VERIFY_PER_IP_PER_HOUR = 60` (total verify
+  attempts, success or failure — GoTrue has **no** limiter on `/authentication/verify`, decision
+  c), `PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN = 10`, `PASSKEY_MAX_PER_USER = 5` (Q3; mirror
+  of the GoTrue env), `PASSKEY_NAME_MAX = 60`, `PASSKEY_PROMPT_SNOOZE_DAYS = 30`,
+  `WEBAUTHN_FLAG_UV = 0x04` (authenticator-data flags byte, offset 32; decision g).
 - `env.ts` `passkeyEnvSchema` (api): `AUTH_PASSKEYS_ENABLED` boolean default false (must equal
   `GOTRUE_PASSKEY_ENABLED`; both fed by one `.env` flag like the social providers).
 - `native.ts`: `PASSKEY_PROMPT_KEY = "ll.passkey.prompt.v1"` (secure store / localStorage marker:
@@ -157,40 +171,55 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
   credential }, upstream): Promise<GoTrueSession>`, `passkeyRegOptions(accessToken, upstream)`,
   `passkeyRegVerify(accessToken, { challengeId, credential }, upstream): Promise<GoTruePasskey>`,
   `passkeyList(accessToken)`, `passkeyRename(accessToken, id, name)`, `passkeyDelete(accessToken,
-  id)`. GoTrue error codes mapped: `passkey_disabled` → 404; `webauthn_verification_failed`,
-  `webauthn_challenge_not_found`, `webauthn_challenge_expired`, `validation_failed` (on verify) →
+  id)`. Wire-shape adaptations (0.1, decision a): `expires_at` Unix seconds → ISO `expiresAt`;
+  `GET /passkeys/` parsed as a bare array; registration verify is **200** upstream and the API
+  answers 201; `friendly_name`/`last_used_at` may be absent. **Exact error map by (status,
+  `error_code`)** (decision b): `passkey_disabled` → 404 `passkey_disabled`;
+  `webauthn_verification_failed`, `webauthn_challenge_not_found`, `webauthn_challenge_expired`,
+  `validation_failed` with status 400, `email_not_confirmed`, `user_banned`, `insufficient_aal` →
   401 `passkey_failed` (one generic code, so a probe cannot tell "unknown credential" from "wrong
-  signature"); `too_many_passkeys` → 409 `passkey_limit`; `webauthn_credential_exists` → 409
-  `passkey_exists`; `email_not_confirmed`/`user_banned` → 401 `passkey_failed`. Bodies are never
-  logged (existing rule: status + `error_code` only).
+  signature"); `too_many_passkeys` (422) → 409 `passkey_limit`; `webauthn_credential_exists` (422)
+  → 409 `passkey_exists`; `validation_failed` with status 404 on PATCH/DELETE → 404 `not_found`;
+  anything else → 401 `passkey_failed`. Bodies are never logged (existing rule: status +
+  `error_code` only).
 - `routes.ts`:
   - `POST /auth/passkey/options` (public): 404 `passkey_disabled` unless `AUTH_PASSKEYS_ENABLED`;
     throttle `PASSKEY_OPTIONS_PER_IP_PER_HOUR` on the client IP (same in-memory limiter as OTP);
     Turnstile required after 3 failed verifies from the IP in 15 min (reuse `captcha_required`);
-    forwards `upstreamClientHeaders` so GoTrue's own `GOTRUE_RATE_LIMIT_PASSKEY` sees the browser;
+    **forwards `upstreamClientHeaders`** so GoTrue's own limiter (30 / 5 min / 1 h on
+    `GOTRUE_RATE_LIMIT_HEADER`) keys on the browser IP, not the api container (decision d);
     returns `passkeyOptionsResponseSchema`. Log `{ outcome }` only.
-  - `POST /auth/passkey/verify` (public): validate body; GoTrue verify → `issueSession(request,
-    reply, session, { kind: "sign_in", method: "passkey" })` (profile upsert, suspended check,
-    `auth.sign_in` + `auth.new_device`, cookies or tokens — unchanged code path). Failure counter
-    per IP → `PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN` ⇒ 429 `rate_limited`. The review
-    account's `issueSession` path is untouched (it never has passkeys, Q6).
+  - `POST /auth/passkey/verify` (public): validate body; **two API-side limits because GoTrue has
+    none on this route** (decision c): total attempts per IP `PASSKEY_VERIFY_PER_IP_PER_HOUR` and
+    failures per IP `PASSKEY_VERIFY_FAILURES_PER_IP_PER_15_MIN`, each ⇒ 429 `rate_limited`;
+    **user-verification check before forwarding** (decision g): base64url-decode
+    `credential.response.authenticatorData`, require length ≥ 37 and `flags = bytes[32]` with bit
+    `0x04` (UV) set, else 401 `passkey_failed` without calling GoTrue (GoTrue requests UV only as
+    `preferred`; this check is what makes a passkey sign-in count as a fresh, user-verified sign-in,
+    Q5/D6). Then GoTrue verify → `issueSession(request, reply, session, { kind: "sign_in", method:
+    "passkey" })` (profile upsert, suspended check, `auth.sign_in` + `auth.new_device`, cookies or
+    tokens — unchanged code path). The review account's `issueSession` path is untouched (it never
+    has passkeys, Q6).
   - `GET /auth/config` += `passkeys`.
 - `passkeys.ts` (new; `requireAuth` + `requireConsent`; the caller's access token is the cookie
   `ll_access` or the bearer, already available to the handler):
   - `POST /me/passkeys/options` → 403 `passkey_unavailable_for_account` for the review account
     (`REVIEW_ACCOUNT_EMAIL`), else GoTrue registration options (GoTrue enforces the per-user max;
     the API also pre-checks `list().length >= PASSKEY_MAX_PER_USER` for a clean 409).
-  - `POST /me/passkeys` → GoTrue registration verify → optional rename → audit
-    `auth.passkey_added { passkey_id }` under claims → Q7 email "A passkey was added to your
-    Tinyglow account on {device label}" (no link) → 201 `passkeySchema`.
+  - `POST /me/passkeys` → the same UV check on `attestationObject`'s authenticator data (CBOR
+    `authData`; decode only the flags byte — no attestation parsing) → GoTrue registration verify
+    (200 upstream) → optional rename → audit `auth.passkey_added { passkey_id }` under claims →
+    Q7 email "A passkey was added to your Tinyglow account on {device label}" (no link) → **201**
+    `passkeySchema`.
   - `GET /me/passkeys` → `{ passkeys, max }`.
   - `PATCH /me/passkeys/:id` → rename (trimmed, `emailShape`-style control-character check) →
     audit `auth.passkey_renamed`.
   - `DELETE /me/passkeys/:id` → `requireFreshSignIn` (Q4) → GoTrue delete → audit
     `auth.passkey_removed { passkey_id }` → Q7 email → 204. Removing the last passkey is allowed
     (OTP remains).
-- `account.ts` (deletion): nothing new if 2.2 (a) holds; else delete passkeys via the admin route
-  before `adminDeleteUser`. Deletion preview lists `passkeys: n`.
+- `account.ts` (deletion): **unchanged** — `auth.webauthn_credentials`/`_challenges` cascade from
+  `auth.users` (0.1, decision f). The deletion preview lists `passkeys: n` from `passkeyList(accessToken)`
+  (best effort: 0 with a `warn` log when GoTrue is unreachable or passkeys are disabled).
 - `sessions.ts`: the devices list shows `signInMethod` (`otp` | `passkey` | `apple` | `google` |
   `review`) read from the session's `auth.sign_in` audit row (already written per session) — a
   SECURITY DEFINER read already exists for sessions (`auth_session_info`); extend its SELECT list
@@ -230,7 +259,12 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
   → { available }`, `create({ options }) → { credential }`, `get({ options, preferImmediatelyAvailable? })
   → { credential }`; input/output are the W3C JSON forms, so `lib/passkeys.ts` branches only on
   platform. Errors: `cancelled`, `not_available`, `failed` (no messages from the OS are
-  forwarded).
+  forwarded). Registration `options.user.id` is GoTrue's **base64url of the 36-char UUID string**
+  (0.1, decision h): both plugins decode it to bytes for the platform API and never interpret or
+  log it; the assertion's `userHandle` is returned verbatim (base64url) so GoTrue can match it.
+  Both plugins request user verification (`userVerificationPreference = .required` on iOS; the
+  `userVerification` field in the request JSON set to `required` on Android) so the API's UV check
+  (2.4, decision g) passes.
   - iOS (`TinyglowPasskeys.swift`, iOS 16+): `ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier:
     "tinyglow.app")`, `createCredentialRegistrationRequest(challenge:name:userID:)` /
     `createCredentialAssertionRequest(challenge:)` with `allowedCredentials` from the options;
@@ -246,7 +280,7 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
     services): `CreatePublicKeyCredentialRequest(requestJson)` / `GetCredentialRequest(GetPublicKeyCredentialOption(requestJson))`
     through `CredentialManager`; the response JSON is returned verbatim. The app's origin at GoTrue
     is `android:apk-key-hash:<base64url(sha256(signing cert))>` (one per signing key: debug,
-    upload, Play App Signing ⇒ ≤ 3 of the 5 origins).
+    upload, Play App Signing; GoTrue puts no hard cap on `GOTRUE_WEBAUTHN_RP_ORIGINS`).
 - Association files (`apps/mobile-web/public/.well-known/*`, copied into both native `public`
   folders by `cap sync`): AASA gains `"webcredentials": { "apps": ["<APPLE_TEAM_ID>.app.tinyglow"] }`
   (placeholder team id until Part B, like `applinks`); `assetlinks.json` gains a second statement
@@ -264,8 +298,13 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
   Tinyglow`, `GOTRUE_WEBAUTHN_RP_ORIGINS: ${WEBAUTHN_RP_ORIGINS:-https://tinyglow.app}`,
   `GOTRUE_WEBAUTHN_CHALLENGE_EXPIRY_DURATION: 5m`, `GOTRUE_PASSKEY_MAX_PASSKEYS_PER_USER:
   ${PASSKEY_MAX_PER_USER:-5}`, `GOTRUE_RATE_LIMIT_PASSKEY: "30"` (dev 1000, like the OTP limits
-  so the API's limits are what tests exercise). `api` gets `AUTH_PASSKEYS_ENABLED`. Dev defaults:
-  enabled, `localhost`, `http://localhost:8080`.
+  so the API's limits are what tests exercise). Names verified against `configuration.go` at the
+  tag (0.1, decision e); they are absent from GoTrue's `example.env`, so cite 0.1 in the compose
+  comment. `api` gets `AUTH_PASSKEYS_ENABLED`. Dev defaults: enabled, `localhost`,
+  `http://localhost:8080`. **Misconfiguration is silent**: a bad RP id/origins only logs a warning
+  and the container stays healthy, answering 500 "Failed to initialize WebAuthn" per request — the
+  smoke/gate check in section 4 POSTs options from inside the network and requires 200 +
+  `challenge_id`.
 - `.env.example` section "Passkeys (docs/plans/step-13.md; auth + api)": the flag, RP id, origins
   (how to add the Android origins), a warning that **changing the RP id invalidates every
   passkey**.
@@ -279,10 +318,13 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
 ### 2.8 Tests and gate (test-engineer)
 
 - api: options/verify happy path against a recording GoTrue stub (`testing/support.ts` gains the
-  seven methods), each GoTrue error → one generic `passkey_failed`, IP throttle + Turnstile after
-  3 failures, review account 403 on options, fresh-sign-in gate on delete, audit rows with
-  `passkey_id` and never a name/credential, Q7 emails sent (Mailpit in integration), deletion
-  preview count, `auth/config.passkeys`.
+  seven methods; stub answers use GoTrue's real shapes: Unix-seconds `expires_at`, bare list
+  array, 200 on registration verify), the exact (status, code) → API map of 2.4 including 404
+  `validation_failed` → `not_found`, **UV check**: an assertion whose flags byte lacks `0x04` → 401
+  `passkey_failed` and the stub records no call, IP throttles (options/hour, verify/hour, verify
+  failures/15 min) + Turnstile after 3 failures, review account 403 on options, fresh-sign-in gate
+  on delete, audit rows with `passkey_id` and never a name/credential, Q7 emails sent (Mailpit in
+  integration), deletion preview count from the list stub, `auth/config.passkeys`.
 - api integration against **real GoTrue** (dev stack, RP `localhost`): a WebAuthn ceremony needs
   an authenticator — use `@simplewebauthn/server`'s test helpers? No new server dependency:
   the integration test drives **Playwright's CDP virtual authenticator** (`WebAuthn.enable`,
@@ -290,15 +332,19 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
   hasUserVerification: true, isUserVerified: true }`) in `e2e/auth/passkeys.spec.ts`: OTP sign-in
   → enrol → sign out → sign in with the passkey → Settings shows last used → rename → remove
   (fresh gate) → OTP still works; `passkey_limit` after 5; account deletion removes the GoTrue
-  passkey rows (psql `select count(*) from auth.<passkey table> where user_id = …` = 0).
+  rows (psql `select count(*) from auth.webauthn_credentials where user_id = …` = 0, same for
+  `auth.webauthn_challenges`); a virtual authenticator with `isUserVerified: false` → sign-in
+  refused with `passkey_failed`.
 - web unit: `lib/passkeys.ts` branches (unsupported browser hides UI; conditional UI cancel on
   submit), enrol card snooze, Settings list states.
-- db hand check (13.2): tables, cascade, grants.
+- db hand check (13.2): tables, cascade, grants (procedure in task 13.2).
 - native: iOS gate adds "passkey button hidden when plugin `available=false`" (simulator has no
   passkeys for an unassociated RP); Android lint; **real-device ceremonies are Part B**.
 - gate `pnpm e2e:passkey-gate` (`e2e/auth/passkey-gate.ts`): the spec above plus the log tap
-  (no credential fields, challenge ids, or `Bearer`), 429 after 60 options calls from one IP,
-  `GET /auth/passkeys/authentication/options` through nginx → 404.
+  (no credential fields, challenge ids, or `Bearer`), 429 after 60 options calls and after 60
+  verify attempts from one IP, `POST /auth/passkeys/authentication/options` through nginx → 404,
+  in-network options → 200 with `challenge_id` (not 500 "Failed to initialize WebAuthn"), a
+  non-UV assertion → 401.
 
 ## 3. Tasks
 
@@ -309,11 +355,17 @@ shape change if `auditMetadataSchema` gains `passkey_id` — it is JSONB, no DDL
 Inputs: 2.3. Done when: schemas/codes/constants exist as specified; `publicKeyCredentialJsonSchema`
 rejects an 8 KiB+ `clientDataJSON`; shared tests green.
 
-**13.2 GoTrue tables hand check + deletion path** — security-engineer. Owns
-`packages/db/README.md` (a section "GoTrue passkey tables"), `apps/api/src/auth/account.ts` (only
-if cascade fails). Done when: the README lists the GoTrue passkey/challenge tables, their FK
-behaviour on `auth.users` delete (proven by a psql test on the dev stack), and states that no
-app role can read them.
+**13.2 GoTrue tables hand check** — security-engineer. Owns `packages/db/README.md` (a section
+"GoTrue passkey tables"). `account.ts` is **not** touched (cascade confirmed, 0.1 decision f).
+Procedure (dev stack, superuser psql): create a test GoTrue user through the API (OTP via
+Mailpit); insert one `auth.webauthn_credentials` row and one `registration` row in
+`auth.webauthn_challenges` for that `user_id` (fixed dummy bytes); call the API's account
+deletion (or `adminDeleteUser` from a one-off script); assert both tables have 0 rows for that
+user and that `auth.users` has none; `rg -n webauthn packages/db` returns nothing outside the
+README. Done when: the README lists `auth.webauthn_credentials` / `auth.webauthn_challenges`,
+their columns of interest, the `ON DELETE CASCADE` proof, and states that no app role can read
+them (owner `supabase_auth_admin`) and that the deletion preview counts passkeys via GoTrue, not
+SQL.
 
 **13.3 Compose, env, guide** — devops-engineer. Owns `docker-compose.yml`,
 `docker-compose.dev.yml`, `.env.example`, `.env.dev`, `docs/PRODUCTION.md`. Inputs: 2.7. Done
@@ -326,9 +378,14 @@ clean; guide updated.
 **13.4 Auth API** — security-engineer. Owns `apps/api/src/auth/**` (`passkeys.ts` new,
 `gotrue.ts`, `routes.ts`, `sessions.ts`, `account.ts`), `apps/api/src/app.ts` redact list (the
 one-line change is coordinated with backend-engineer; or backend adds it in 13.1b if preferred).
-Inputs: 2.4, 2.3, **0.1 (verify every row against `supabase/auth:v2.197.0` first: `api.go` route
-paths at the tag, config env names, error codes; record the result in the task summary and stop
-if a path or shape differs)**. Done when: every route in 2.4 behaves as specified against the dev GoTrue;
+Inputs: 2.4, 2.3, 0.1 (verified 2026-10-11; build against those shapes — Unix-seconds
+`expires_at`, bare list array, 200 on registration verify — and the exact error map). Done when:
+every route in 2.4 behaves as specified against the dev GoTrue; `POST /auth/passkey/options`
+forwards `upstreamClientHeaders`; `POST /auth/passkey/verify` refuses an assertion without the
+UV flag (`authenticatorData[32] & 0x04 === 0`) with 401 `passkey_failed` **before** any GoTrue
+call, and `POST /me/passkeys` does the same on the attestation's authenticator data; the two
+verify throttles (total per hour, failures per 15 min) return 429; a 404 `validation_failed` from
+PATCH/DELETE maps to `not_found`; the deletion preview's `passkeys` comes from the GoTrue list;
 `rg -n "log\." apps/api/src/auth/passkeys.ts` shows only `{ outcome }` lines; the review account
 gets 403 on options.
 
@@ -339,8 +396,10 @@ rename, remove (fresh gate) work; screenshots reviewed.
 
 **13.6 Native plugin, entitlements, association files, store copy** — mobile-engineer. Owns
 `apps/mobile-web/ios/**`, `apps/mobile-web/android/**`, `apps/mobile-web/public/.well-known/**`,
-`capacitor.config.ts`, `apps/mobile-web/NATIVE.md`, `apps/mobile-web/store/**`. Inputs: 2.6. Done
-when: iOS simulator build succeeds with the entitlement and the plugin reports
+`capacitor.config.ts`, `apps/mobile-web/NATIVE.md`, `apps/mobile-web/store/**`. Inputs: 2.6
+(incl. decision h: `options.user.id` is base64url of the UUID string, passed through opaquely;
+both plugins request UV `required`). Done when: iOS simulator build succeeds with the entitlement
+and the plugin reports
 `available=false` without an associated RP (no crash); Android debug build + lint pass with the
 Credential Manager dependency; AASA has `webcredentials`, assetlinks has `get_login_creds`
 (placeholders); `check-ios-plists.ts` passes.
@@ -375,7 +434,11 @@ bash .github/scripts/passkey-hygiene.sh && bash .github/scripts/native-hygiene.s
 pnpm test && pnpm test:integration
 # GoTrue reachable only through the api:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/auth/passkeys/authentication/options   # 404
-docker compose -f docker-compose.dev.yml exec -T api node -e "fetch('http://auth:9999/passkeys/authentication/options',{method:'POST'}).then(r=>r.json()).then(j=>console.log(Object.keys(j)))"  # challenge_id options expires_at
+# In-network options must be 200 with a challenge_id. A 500 "Failed to initialize WebAuthn" means the RP id/origins
+# are misconfigured (GoTrue only warns at boot and stays healthy); 404 passkey_disabled means the flag is off.
+docker compose -f docker-compose.dev.yml exec -T api node -e "fetch('http://auth:9999/passkeys/authentication/options',{method:'POST'}).then(async r=>{const j=await r.json();console.log(r.status, Object.keys(j), typeof j.expires_at)})"  # 200 [ 'challenge_id', 'options', 'expires_at' ] number
+# UV enforced by the api: an assertion whose authenticatorData flags byte lacks 0x04 → 401 passkey_failed (no GoTrue call; see 13.4 tests)
+# verify throttle: 61st POST /api/auth/passkey/verify from one IP within an hour → 429 rate_limited
 # API:
 curl -s -H 'x-tinyglow-client: web' -X POST http://localhost:8080/api/auth/passkey/options | jq 'keys'       # challengeId expiresAt options
 curl -s http://localhost:8080/api/auth/config | jq .passkeys                                                  # true (dev)
@@ -407,10 +470,13 @@ the 0.1 verification results, Part B list) → `git commit -m "step 13: passkey 
 - **D4 OTP stays primary**; passkeys never become the only way in; removing the last passkey is
   allowed; lost-device recovery is the email code (PRD "Lost access").
 - **D5 Max 5 passkeys**; Q3.
-- **D6 Passkey sign-in = fresh sign-in**; Q5. GoTrue's `requirePasskeyManagementAAL` exists on
-  registration/delete — with no MFA factors enrolled it is AAL1 and passes; if it ever demands
-  AAL2 the API surfaces 403 `passkey_failed` and the fallback is OTP re-sign-in (test asserts the
-  current behaviour).
+- **D6 Passkey sign-in = fresh sign-in**; Q5. The basis is the API's own user-verification check
+  (2.4, decision g): GoTrue asks for UV only as `preferred`, so the API refuses any assertion or
+  attestation whose authenticator-data flags lack `0x04` before forwarding; every passkey session
+  is therefore biometric/PIN-verified, like an OTP sign-in. GoTrue's `requirePasskeyManagementAAL`
+  (registration + delete) returns 403 `insufficient_aal` only for users with a verified MFA factor,
+  which Tinyglow never enrols (verified, 0.1); the API maps it to `passkey_failed` anyway and the
+  fallback is OTP re-sign-in.
 
 ### 5.2 Risks
 
@@ -421,8 +487,13 @@ the 0.1 verification results, Part B list) → `git commit -m "step 13: passkey 
   on 2026-10-10; confirm the domain decision is closed).
 - **WebView**: WebAuthn inside Capacitor's WebView does not work for RP `tinyglow.app` (origin
   mismatch), hence the native plugin; the web path is never offered on native.
-- **Android origins**: each signing key is one origin and GoTrue allows 5; debug + upload + Play
-  App Signing fit, but a key rotation needs an env change.
+- **Android origins**: each signing key is one origin (debug, upload, Play App Signing); GoTrue
+  has no hard cap on the list, but a key rotation needs an env change and an `auth` restart.
+- **Silent misconfiguration**: a wrong RP id/origins only warns at boot; the gate's in-network
+  options check (200 + `challenge_id`, not 500) is the guard, and the production guide repeats it
+  as a post-deploy step.
+- **No upstream limiter on verify**: the API's two throttles are the only brake on assertion
+  brute force; they are in-memory and per instance like the OTP limits.
 - **Conditional UI** needs `autocomplete="username webauthn"` on a text input and an in-flight
   `get` — the sign-in form must cancel it (AbortController) before starting the OTP flow, or
   Safari shows two prompts.

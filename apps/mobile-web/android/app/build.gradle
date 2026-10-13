@@ -60,7 +60,13 @@ dependencies {
     implementation project(':capacitor-android')
     implementation "androidx.work:work-runtime:$androidxWorkVersion"
     implementation "androidx.concurrent:concurrent-futures:1.2.0"
+    // Passkeys (TinyglowPasskeys plugin, docs/plans/step-13.md 2.6): Credential Manager + the Play
+    // services bridge that serves Android 9-13 (Android 14+ has it in the framework).
+    implementation "androidx.credentials:credentials:$androidxCredentialsVersion"
+    implementation "androidx.credentials:credentials-play-services-auth:$androidxCredentialsVersion"
     testImplementation "junit:junit:$junitVersion"
+    // Real org.json for JVM unit tests (android.jar ships stubs); PasskeyJsonTest.
+    testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

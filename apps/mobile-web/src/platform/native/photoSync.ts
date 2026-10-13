@@ -5,11 +5,14 @@ import {
   importSourceResponseSchema,
   importSourcesListResponseSchema,
   meResponseSchema,
+  type Plan,
   SYNC_BACKGROUND_BATCH,
   SYNC_CONFIG_KEY,
   SYNC_FOREGROUND_BATCH,
   SYNC_MIN_INTERVAL_SEC,
   type SyncTrigger,
+  type VideoLimits,
+  videoLimitsFor,
 } from "@tinyglow/shared";
 import { useEffect, useSyncExternalStore } from "react";
 import { apiFetch, isApiError } from "../../lib/api";
@@ -34,14 +37,26 @@ import { setSyncFlag, syncMayBeOn } from "./syncFlag";
 
 export type AuthStatus = "notDetermined" | "restricted" | "denied" | "authorized" | "limited";
 export type ThermalState = "nominal" | "fair" | "serious" | "critical";
-type AssetOutcome = "done" | "duplicate" | "failed" | "skipped";
+/** `too_large` / `too_long` (step 12): over the plan's video limits, skipped before export. */
+type AssetOutcome = "done" | "duplicate" | "failed" | "skipped" | "too_large" | "too_long";
 
 export interface PhotoSyncPlugin {
   authorizationStatus(): Promise<{ status: AuthStatus }>;
   requestAuthorization(): Promise<{ status: AuthStatus }>;
   listAlbums(): Promise<{ albums: { id: string; title: string; count: number }[] }>;
-  listPendingAssets(o: { albumId: string; limit: number }): Promise<{
-    assets: { id: string; createdAt: string | null }[];
+  /**
+   * Step 12: items carry `kind`, `durationMs` and `size` (null for an iCloud-only asset); assets
+   * recorded `too_large` / `too_long` are excluded unless `includeLimitSkipped` (passed once after
+   * a plan upgrade).
+   */
+  listPendingAssets(o: { albumId: string; limit: number; includeLimitSkipped?: boolean }): Promise<{
+    assets: {
+      id: string;
+      createdAt: string | null;
+      kind?: "photo" | "video";
+      durationMs?: number | null;
+      size?: number | null;
+    }[];
     remaining: number;
     albumExists: boolean;
   }>;
@@ -54,6 +69,8 @@ export interface PhotoSyncPlugin {
       size: number;
       sha256: string;
       takenAt: string | null;
+      kind?: "photo" | "video";
+      durationMs?: number | null;
     }[];
     failed: { id: string; reason: "unavailable" | "icloud" | "write" | "unsupported" }[];
   }>;
@@ -91,6 +108,11 @@ export interface SyncConfig {
   albumTitle: string;
   wifiOnly: boolean;
   paused: boolean;
+  /**
+   * The baby's plan as last seen (step 12): lets the one-time `includeLimitSkipped` pass after a
+   * free -> plus upgrade survive a restart between the two runs.
+   */
+  plan?: Plan;
 }
 
 /**
@@ -149,6 +171,8 @@ export interface PhotoSyncDeps {
    * `unknown` (offline, endpoint missing) lets the run continue.
    */
   checkSource: (cfg: SyncConfig) => Promise<"ok" | "gone" | "unknown">;
+  /** The baby's plan (video limits, step 12); `undefined` when unknown (offline): no pre-check. */
+  plan?: (babyId: string) => Promise<Plan | undefined>;
 }
 
 const COOLDOWN_FREE_LIMIT_MS = 6 * 3_600_000;
@@ -172,7 +196,8 @@ function isConfig(v: unknown): v is SyncConfig {
     typeof c.albumId === "string" &&
     typeof c.albumTitle === "string" &&
     typeof c.wifiOnly === "boolean" &&
-    typeof c.paused === "boolean"
+    typeof c.paused === "boolean" &&
+    (c.plan === undefined || c.plan === "free" || c.plan === "plus")
   );
 }
 
@@ -192,6 +217,23 @@ export class PhotoSyncManager {
   private initialized = false;
   private expiredTask: string | null = null;
   private waitAbort: AbortController | null = null;
+  /** The baby's plan as of the current run (video limits); `undefined` when unknown. */
+  private lastPlan: Plan | undefined;
+  /** True once after a free -> plus upgrade: the next listing includes limit-skipped videos. */
+  private upgradePass = false;
+
+  private async planFor(babyId: string): Promise<Plan | undefined> {
+    const plan = this.deps.plan ? await this.deps.plan(babyId) : undefined;
+    if (plan && this.lastPlan === "free" && plan !== "free") this.upgradePass = true;
+    if (plan) {
+      this.lastPlan = plan;
+      // Persist it so the upgrade is still noticed after the app restarts.
+      const cfg = this.status.config;
+      if (cfg && cfg.babyId === babyId && cfg.plan !== plan)
+        await this.saveConfig({ ...cfg, plan });
+    }
+    return this.lastPlan;
+  }
 
   constructor(private readonly deps: PhotoSyncDeps) {}
 
@@ -227,6 +269,7 @@ export class PhotoSyncManager {
       } catch {
         // corrupt entry: treated as not set up
       }
+      if (config?.plan) this.lastPlan = config.plan;
       this.set({
         loaded: true,
         config,
@@ -558,7 +601,15 @@ export class PhotoSyncManager {
           return true;
         }
       }
-      const list = await plugin().listPendingAssets({ albumId: cfg.albumId, limit });
+      const plan = batch === 0 ? await this.planFor(cfg.babyId) : this.lastPlan;
+      // One `includeLimitSkipped` pass after a free -> plus upgrade re-offers the skipped videos.
+      const includeLimitSkipped = this.upgradePass;
+      this.upgradePass = false;
+      const list = await plugin().listPendingAssets({
+        albumId: cfg.albumId,
+        limit,
+        ...(includeLimitSkipped ? { includeLimitSkipped: true } : {}),
+      });
       if (!list.albumExists) {
         await this.stopWith(cfg, "album_missing", true);
         return true;
@@ -567,13 +618,45 @@ export class PhotoSyncManager {
       this.set({
         progress: { done: processed, total: processed + list.assets.length + list.remaining },
       });
+      // Plan limits apply before export (no download of a clip that can't be added); the lane
+      // exports one video per batch so a long clip never delays the photos around it.
+      const limits = plan ? videoLimitsFor(plan) : null;
+      const limitOutcomes: { id: string; outcome: AssetOutcome }[] = [];
+      const ids: string[] = [];
+      let videoTaken = false;
+      for (const a of list.assets) {
+        if (a.kind !== "video") {
+          ids.push(a.id);
+          continue;
+        }
+        // Rounded whole seconds, like the server and `validateDuration`.
+        if (
+          limits &&
+          typeof a.durationMs === "number" &&
+          Math.round(a.durationMs / 1000) > limits.maxSeconds
+        ) {
+          limitOutcomes.push({ id: a.id, outcome: "too_long" });
+        } else if (limits && typeof a.size === "number" && a.size > limits.maxBytes) {
+          limitOutcomes.push({ id: a.id, outcome: "too_large" });
+        } else if (!videoTaken) {
+          videoTaken = true;
+          ids.push(a.id);
+        }
+      }
+      if (limitOutcomes.length > 0) {
+        await plugin().recordOutcomes({ albumId: cfg.albumId, outcomes: limitOutcomes });
+        await this.patch(cfg, { skippedDelta: limitOutcomes.length });
+        processed += limitOutcomes.length;
+      }
+      if (ids.length === 0) continue;
       const r = await this.processBatch(
         cfg,
-        list.assets.map((a) => a.id),
+        ids,
         processed,
         list.assets.length + list.remaining,
         trigger,
         hadError,
+        limits,
       );
       processed += r.handled;
       hadError = false;
@@ -609,6 +692,7 @@ export class PhotoSyncManager {
     total: number,
     trigger: SyncTrigger,
     clearsError: boolean,
+    limits: VideoLimits | null = null,
   ): Promise<{ handled: number; stop: ImportSourceError | null }> {
     const { plugin, uploads } = this.deps;
     const outcomes: { id: string; outcome: AssetOutcome }[] = [];
@@ -616,7 +700,14 @@ export class PhotoSyncManager {
     for (const f of exported.failed) {
       outcomes.push({ id: f.id, outcome: f.reason === "unsupported" ? "skipped" : "failed" });
     }
-    const files = exported.files;
+    // An iCloud-only video's size was unknown before export: re-check the exported file.
+    const files = exported.files.filter((f) => {
+      if (f.kind === "video" && limits && f.size > limits.maxBytes) {
+        outcomes.push({ id: f.id, outcome: "too_large" });
+        return false;
+      }
+      return true;
+    });
     const refs: NativeFileRef[] = files.map((f) => ({
       path: f.path,
       name: f.name,
@@ -624,10 +715,18 @@ export class PhotoSyncManager {
       size: f.size,
       sha256: f.sha256.toLowerCase(),
       ...(f.takenAt ? { takenAt: f.takenAt } : {}),
+      ...(f.kind === "video" && typeof f.durationMs === "number" && f.durationMs > 0
+        ? { durationMs: f.durationMs }
+        : {}),
     }));
+    // Videos stay Wi-Fi only on the sync lane (NATIVE.md "Album sync"), whatever the setting.
     const clientIds =
       refs.length > 0
-        ? uploads.addNative(cfg.babyId, refs, undefined, { lane: "sync", wifiOnly: cfg.wifiOnly })
+        ? uploads.addNative(cfg.babyId, refs, undefined, {
+            lane: "sync",
+            wifiOnly: cfg.wifiOnly || refs.some((r) => r.mime.startsWith("video/")),
+            ...(this.lastPlan ? { plan: this.lastPlan } : {}),
+          })
         : [];
 
     const abort = new AbortController();
@@ -666,6 +765,8 @@ export class PhotoSyncManager {
         } else if (code === "pending_limit") {
           // Guest's pending queue is full: leave it pending, no attempt used; retry after approvals.
           stop ??= "pending_limit";
+        } else if (code === "video_too_long") {
+          outcomes.push({ id: f.id, outcome: "too_long" });
         } else if (code && UNSUPPORTED_CODES.has(code)) {
           outcomes.push({ id: f.id, outcome: "skipped" });
         } else {
@@ -699,7 +800,7 @@ export class PhotoSyncManager {
       importedDelta: count("done"),
       duplicateDelta: count("duplicate"),
       failedDelta: count("failed"),
-      skippedDelta: count("skipped"),
+      skippedDelta: count("skipped") + count("too_large") + count("too_long"),
       ...(stop ? { lastError: stop } : clearsError ? { lastError: null } : {}),
     });
     return { handled: outcomes.length, stop };
@@ -751,9 +852,20 @@ export function createPhotoSyncManager(over: Partial<PhotoSyncDeps> = {}): Photo
     hasSession: async () => (await getTokenStore().get()) !== null,
     installId: () => getInstallId(),
     checkSource: checkSourceOnServer,
+    plan: planOnServer,
     deviceLabel: () => (/iPad/.test(navigator.userAgent) ? "iPad" : "iPhone"),
     ...over,
   });
+}
+
+/** The baby's plan from `/me` (cached by the caller per run); `undefined` offline. */
+async function planOnServer(babyId: string): Promise<Plan | undefined> {
+  try {
+    const me = await apiFetch("/me", { schema: meResponseSchema });
+    return me.babies.find((b) => b.id === babyId)?.plan;
+  } catch {
+    return undefined;
+  }
 }
 
 async function checkSourceOnServer(cfg: SyncConfig): Promise<"ok" | "gone" | "unknown"> {

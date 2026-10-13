@@ -5,8 +5,9 @@ import {
   aiDescriptionV1Schema,
   looksLikeCoordinates,
 } from "./ai-description";
-import { type MeasurementKind, measurementKindSchema } from "./db-enums";
+import { type MeasurementKind, measurementKindSchema, mediaKindSchema } from "./db-enums";
 import { roundTo } from "./units";
+import { describeDuration, VIDEO_MAX_DURATION_MS } from "./video";
 
 // The search document (PRD "Search document (what gets embedded)", FR-6.3, FR-6.4;
 // docs/plans/step-7.md 2.4). One short natural-language string per photo, embedded with
@@ -78,6 +79,14 @@ export const searchDocumentInputSchema = z.strictObject({
   ai: aiDescriptionV1Schema.nullable(),
   /** `photos.is_sensitive`. */
   isSensitive: z.boolean(),
+  /**
+   * `photos.media_kind` (step 12). Omitted or `photo` ⇒ the document is byte-identical to the
+   * pre-video template (no `SEARCH_DOC_VERSION` bump, no re-embedding); `video` appends one
+   * sentence (`Video clip, 42 seconds.`).
+   */
+  mediaKind: mediaKindSchema.optional(),
+  /** `photos.duration_ms` (videos; omitted/null ⇒ "Video clip." without a duration). */
+  durationMs: z.number().int().positive().max(VIDEO_MAX_DURATION_MS).nullable().optional(),
 });
 export type SearchDocumentInput = z.input<typeof searchDocumentInputSchema>;
 
@@ -217,10 +226,12 @@ function formatDocMeasurement(kind: MeasurementKind, valueMetric: number): strin
  * `<caption> <detailed description>` `Wearing <clothing>.` `Doing: <activities>.`
  * `Seen: <objects>.` `<Indoor/outdoor>, <place type>, <weather>.` `Mood: <mood>.`
  * `Occasion: <occasion>.` `Tags: <search tags>.` `Text in photo: "<text>".`
- * `<Weight 7.2 kg; Height 68 cm>.` `Note from parent: "<note>".`
+ * `<Weight 7.2 kg; Height 68 cm>.` `Note from parent: "<note>".` `Video clip, <duration>.`
  *
  * An estimated capture time renders "around <date>" with no weekday and no clock-derived time of
  * day. The time of day is the model's `setting.time_of_day`, else derived from the local hour.
+ * The video sentence appears only for `mediaKind: "video"` (step 12): photo documents are
+ * byte-identical to before.
  */
 export function buildSearchDocument(rawInput: SearchDocumentInput): SearchDocument {
   const input = searchDocumentInputSchema.parse(rawInput);
@@ -319,6 +330,12 @@ export function buildSearchDocument(rawInput: SearchDocumentInput): SearchDocume
       warnings.push({ code: "truncated", field: "note" });
     }
     parts.push(`Note from parent: "${note}"${/[.!?…]$/.test(note) ? "" : "."}`);
+  }
+
+  // 6. Videos only (step 12): a fixed sentence so "video" / "clip" queries match; photos add nothing.
+  if (input.mediaKind === "video") {
+    const d = input.durationMs ?? null;
+    parts.push(d === null ? "Video clip." : `Video clip, ${describeDuration(d)}.`);
   }
 
   let text = parts.join(" ");

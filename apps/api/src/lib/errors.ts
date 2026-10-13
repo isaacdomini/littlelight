@@ -3,6 +3,7 @@ import {
   type ApiErrorResponse,
   CHAT_MESSAGES,
   EXPORTS_PER_BABY_PER_DAY,
+  FREE_TIER_VIDEO_LIMIT,
   IMPORT_BATCHES_PER_BABY_PER_DAY,
   IMPORT_SOURCES_PER_BABY_MAX,
   type InboxHasFamilyDetails,
@@ -277,6 +278,9 @@ const CHECK_VIOLATIONS: ReadonlyArray<readonly [string, () => ApiError]> = [
   // per family and approved-only from step 11 (`photos_free_tier_cap`, migration 21): raised by
   // admin uploads, approve, restore and import booking alike.
   ["free tier photo limit reached", () => freeTierLimit()],
+  // Step 12 (Q3; packages/db/migrations/1792500000100_video.sql `photos_free_tier_video_cap`):
+  // the family's free albums already hold the most videos allowed.
+  ["free tier video limit reached", () => freeTierLimit("video")],
   // Step 11 (docs/plans/step-11.md 2.2 A–C, 2.5; packages/db/migrations/1792400000100_free-tier-abuse.sql).
   // `baby_members_one_family`: accepting an admin invite or a promotion while a parent elsewhere.
   ["user is already a parent in another family", () => alreadyParentElsewhere()],
@@ -575,14 +579,23 @@ const UNIQUE_VIOLATIONS: ReadonlyMap<string, () => ApiError> = new Map([
 /**
  * 409 `free_tier_limit` (DB trigger `photos_free_tier_cap` and the API pre-checks). From step 11
  * (docs/plans/step-11.md 2.2 B, 2.9) the 1,000 photos are a per-family pool of approved photos
- * shared by every free, live album of the family (pending photos never count).
+ * shared by every free, live album of the family (pending photos never count). Step 12 (Q3,
+ * docs/plans/step-12.md 2.4, 2.11): `kind = "video"` is the per-family video count
+ * (`photos_free_tier_video_cap`, `free_tier_video_limit()`), reported as `details.kind`.
  */
-export const freeTierLimit = () =>
-  new ApiError(
-    409,
-    "free_tier_limit",
-    "Your family's free albums are full: free albums hold 1,000 photos per family. Upgrade to Plus or delete photos to add more.",
-  );
+export const freeTierLimit = (kind: "photo" | "video" = "photo") =>
+  kind === "video"
+    ? new ApiError(
+        409,
+        "free_tier_limit",
+        `Your family's free albums already hold ${FREE_TIER_VIDEO_LIMIT} videos. Upgrade to Plus or delete videos to add more.`,
+        { kind: "video" },
+      )
+    : new ApiError(
+        409,
+        "free_tier_limit",
+        "Your family's free albums are full: free albums hold 1,000 photos per family. Upgrade to Plus or delete photos to add more.",
+      );
 
 // Step 11 (docs/plans/step-11.md 2.4, 2.5, 2.9, D-B, D-J): family-start refusals, the
 // one-family-per-parent rule, the guest pending cap and suspension. Messages name no address

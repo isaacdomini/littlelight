@@ -31,6 +31,8 @@ SELECT p.id AS photo_id,
        p.taken_at_estimated,
        p.sort_at,
        p.is_sensitive,
+       p.media_kind,
+       p.duration_ms,
        e.taken_at AS exif_taken_at,
        e.tz_offset_minutes,
        e.place_label,
@@ -70,6 +72,10 @@ export interface SearchDocRow {
   taken_at_estimated: boolean;
   sort_at: Date | null;
   is_sensitive: boolean;
+  /** `photos.media_kind` (step 12; absent in rows built before it ⇒ photo). */
+  media_kind?: "photo" | "video" | null;
+  /** `photos.duration_ms` (videos). */
+  duration_ms?: number | null;
   exif_taken_at: Date | null;
   tz_offset_minutes: number | null;
   place_label: string | null;
@@ -129,7 +135,11 @@ export function mergedDescription(
   return applyAiOverrides(parsed.data, row.overrides ?? undefined);
 }
 
-/** `buildSearchDocument` input for one row (no name, no coordinates: none are read). */
+/**
+ * `buildSearchDocument` input for one row (no name, no coordinates: none are read). A video row
+ * (step 12) adds `mediaKind: "video"` and `durationMs` so the document ends with "Video clip, N
+ * seconds."; a photo row sets neither, so its document (and hash) is unchanged.
+ */
 export function toDocumentInput(row: SearchDocRow): SearchDocumentInput {
   const time = documentTime(row);
   const measurements = (row.measurements ?? [])
@@ -156,6 +166,17 @@ export function toDocumentInput(row: SearchDocRow): SearchDocumentInput {
     measurements,
     ai: mergedDescription(row),
     isSensitive: row.is_sensitive === true,
+    ...(row.media_kind === "video"
+      ? {
+          mediaKind: "video" as const,
+          durationMs:
+            typeof row.duration_ms === "number" &&
+            Number.isFinite(row.duration_ms) &&
+            row.duration_ms > 0
+              ? Math.round(row.duration_ms)
+              : null,
+        }
+      : {}),
   };
 }
 

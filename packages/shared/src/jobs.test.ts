@@ -40,8 +40,10 @@ describe("JOBS", () => {
       dataExport: "data.export",
       importGoogle: "import.google",
       importSweep: "import.sweep",
+      // step 12: per-video `web` rendition + keyframes after ingest wrote the poster
+      videoTranscode: "video.transcode",
     });
-    expect(new Set(Object.values(JOBS)).size).toBe(16);
+    expect(new Set(Object.values(JOBS)).size).toBe(17);
   });
 });
 

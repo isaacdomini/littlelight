@@ -39,6 +39,14 @@ export function DevicesPage() {
               </p>
               <p className="text-sm text-muted">
                 {t("devices.lastActive", { date: new Date(s.lastActiveAt).toLocaleString() })}
+                {s.signInMethod ? (
+                  <>
+                    {" · "}
+                    <span data-testid="devices-method">
+                      {t(`devices.method.${s.signInMethod}`)}
+                    </span>
+                  </>
+                ) : null}
               </p>
             </div>
             <Button

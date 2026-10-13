@@ -30,6 +30,9 @@ import {
   searchReconcileJobSchema,
   shareApplyJobSchema,
   shareReconcileJobSchema,
+  type VideoTranscodeJob,
+  videoTranscodeJobSchema,
+  videoTranscodeSingletonKey,
 } from "@tinyglow/shared";
 import type { Job, JobWithMetadata, PgBoss, Queue, SendOptions } from "pg-boss";
 import type { AiPipeline, FlushResult, PollResult } from "./ai";
@@ -42,7 +45,7 @@ import {
   type ImportSweepResult,
   sweepImports,
 } from "./import";
-import { type IngestDeps, ingestPhoto, markIngestFailed } from "./ingest";
+import { type IngestDeps, ingestPhoto, markIngestFailed, type VideoIngestDeps } from "./ingest";
 import type { WorkerLog } from "./log-types";
 import { type PurgeDeps, purgeTrash } from "./purge";
 import {
@@ -57,6 +60,13 @@ import { handleReindexJobs, type ReconcileResult, type SearchIndexer } from "./r
 import { type AutoShareResult, type AutoSharer, createAutoSharer } from "./sharing/autoshare";
 import { wrapHandler } from "./telemetry";
 import { type SweepDeps, sweepUploads } from "./uploads-sweep";
+import {
+  isDeferrableTranscodeError,
+  markTranscodeFailed,
+  type TranscodeDeps,
+  type TranscodeResult,
+  transcodeVideo,
+} from "./video/transcode";
 
 // pg-boss queues, schedules and handlers (docs/plans/step-4.md 2.5, R1). The worker owns queue
 // creation (`createQueue` is INSERT … ON CONFLICT DO NOTHING, so every replica may call it) and
@@ -104,8 +114,14 @@ import { type SweepDeps, sweepUploads } from "./uploads-sweep";
 // `retryDelay 60` (storage/network trouble only), 2-hour expiry; one batch at a time per process
 // (`batchSize 1`, `localConcurrency 1`; the handler itself downloads `IMPORT_CONCURRENCY` items
 // at a time). `import.sweep` is an hourly cron singleton (`37 * * * *`, no retry: the next tick
-// is the retry). Sixteen queues in total. Every handler is wrapped by `wrapHandler` (Sentry
-// capture with tags `{service: "worker", queue}`, then rethrow: pg-boss semantics unchanged).
+// is the retry). Every handler is wrapped by `wrapHandler` (Sentry capture with tags
+// `{service: "worker", queue}`, then rethrow: pg-boss semantics unchanged).
+//
+// Step 12 (docs/plans/step-12.md 2.3, 2.6): `video.transcode` is sent by the video ingest (and
+// re-sent by `ingest.reconcile` for `rendition_status = 'pending'` rows older than 15 minutes),
+// `singletonKey = photoId`, `retryLimit 2`, `retryDelay 120` (a scratch-space deferral or a
+// storage hiccup), 2-hour expiry (ffmpeg on a 5-minute 4K clip on a small box); `VIDEO_CONCURRENCY`
+// handlers per process, each one whole ffmpeg process. Seventeen queues in total.
 
 export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.freeze({
   [JOBS.ingest]: {
@@ -169,6 +185,12 @@ export const QUEUES: Readonly<Record<JobName, Omit<Queue, "name">>> = Object.fre
     expireInSeconds: 7200,
   },
   [JOBS.importSweep]: { policy: "exclusive", retryLimit: 0, expireInSeconds: 3000 },
+  [JOBS.videoTranscode]: {
+    policy: "exclusive",
+    retryLimit: 2,
+    retryDelay: 120,
+    expireInSeconds: 7200,
+  },
 });
 
 /** Handlers per worker process for `photo.reindex` (docs/plans/step-7.md 2.7). */
@@ -411,6 +433,40 @@ export const IMPORT_SWEEP_SEND_OPTIONS: SendOptions = Object.freeze({
   expireInSeconds: 3000,
 });
 
+/** `video.transcode` send options: the queue's, keyed by the photo id (one queued/active job per video). */
+export function videoTranscodeSendOptions(job: VideoTranscodeJob): SendOptions {
+  return {
+    singletonKey: videoTranscodeSingletonKey(job),
+    retryLimit: 2,
+    retryDelay: 120,
+    expireInSeconds: 7200,
+  };
+}
+
+/** Validate and enqueue one `video.transcode`. Resolves null when one is already queued for the video. */
+export async function sendVideoTranscode(
+  boss: Pick<PgBoss, "send">,
+  job: VideoTranscodeJob,
+): Promise<string | null> {
+  const data = videoTranscodeJobSchema.parse(job);
+  return boss.send(JOBS.videoTranscode, data, videoTranscodeSendOptions(data));
+}
+
+/**
+ * Video settings of the worker (`videoEnvSchema`, docs/plans/step-12.md 2.6): ffmpeg/ffprobe,
+ * the scratch folder, threads and the transcode timeout. Shared by the ingest's video path and
+ * the `video.transcode` handler; `sendVideoTranscode` is wired to this boss in `startWorkers`.
+ */
+export interface VideoQueueDeps {
+  ffmpegPath: string;
+  ffprobePath: string;
+  scratchPath: string;
+  threads: number;
+  timeoutSec: number;
+  /** `VIDEO_CONCURRENCY`. */
+  concurrency: number;
+}
+
 /** Push settings of the worker (`pushEnvSchema`): the sender, the gap and the photos debounce. */
 export interface PushQueueDeps {
   sender: PushSender;
@@ -455,8 +511,79 @@ export interface QueueDeps {
    * the pool and storage of `sweep`).
    */
   importGoogle?: Omit<ImportGoogleDeps, "sendIngest">;
+  /**
+   * Video (docs/plans/step-12.md 2.6). `main.ts` always passes it; when omitted (unit tests
+   * written before step 12) the `video.transcode` queue gets no handler, and a video upload fails
+   * `unsupported_media_type` in ingest.
+   */
+  video?: VideoQueueDeps;
   log: WorkerLog;
   ingestConcurrency: number;
+}
+
+/** The ingest deps with the video settings and a `video.transcode` sender bound to `boss`. */
+export function ingestDepsWithVideo(
+  ingest: IngestDeps,
+  video: VideoQueueDeps | undefined,
+  boss: Pick<PgBoss, "send">,
+): IngestDeps {
+  if (!video) return ingest;
+  const videoDeps: VideoIngestDeps = {
+    ffmpegPath: video.ffmpegPath,
+    ffprobePath: video.ffprobePath,
+    scratchPath: video.scratchPath,
+    threads: video.threads,
+    sendVideoTranscode: (job) => sendVideoTranscode(boss, job),
+  };
+  return { ...ingest, video: videoDeps };
+}
+
+/**
+ * The `video.transcode` handler for one job (exported for run-job and tests). Last-attempt rule
+ * (`isDeferrableTranscodeError`): only a genuine failure (bad source / failed verification, or an
+ * ffmpeg timeout) marks `rendition_status = 'failed'`; a deferral (scratch low, storage, database,
+ * ffmpeg missing, shutdown, anything unknown) leaves the row `pending` so `ingest.reconcile`
+ * re-sends the job after `VIDEO_TRANSCODE_STUCK_MINUTES` (a send from inside the handler would be
+ * dropped by the exclusive policy while this job is still active). Either way the error is
+ * rethrown so pg-boss records the attempt.
+ */
+export async function handleVideoTranscodeJob(
+  deps: TranscodeDeps,
+  job: Pick<JobWithMetadata<unknown>, "id" | "data" | "retryCount" | "retryLimit">,
+): Promise<TranscodeResult | null> {
+  const parsed = videoTranscodeJobSchema.safeParse(job.data);
+  if (!parsed.success) {
+    deps.log.warn({ jobId: job.id }, "video.transcode: invalid job payload, dropped");
+    return null;
+  }
+  const payload = parsed.data;
+  try {
+    return await transcodeVideo(deps, payload);
+  } catch (err) {
+    const lastAttempt = job.retryCount >= job.retryLimit;
+    const deferrable = isDeferrableTranscodeError(err);
+    deps.log.warn(
+      {
+        photoId: payload.photoId,
+        attempt: job.retryCount + 1,
+        err: errorCategory(err),
+        deferrable,
+        giveUp: lastAttempt && !deferrable,
+        reconcile: lastAttempt && deferrable,
+      },
+      "video.transcode: attempt failed",
+    );
+    if (lastAttempt && !deferrable) {
+      // The row stays live: poster, original download and export still work.
+      await markTranscodeFailed(deps.pool, payload.photoId).catch((e: unknown) =>
+        deps.log.error(
+          { photoId: payload.photoId, err: errorCategory(e) },
+          "video.transcode: could not mark failed",
+        ),
+      );
+    }
+    throw err;
+  }
 }
 
 /** Create every queue (idempotent) and warn when an existing queue has a different policy. */
@@ -762,6 +889,7 @@ export async function startWorkers(
   const autoSharer = autoSharerOf(deps);
   const shareDeps: ShareHandlerDeps = { autoSharer, log: deps.log };
   const push = pushDepsOf(deps);
+  const ingestDeps = ingestDepsWithVideo(deps.ingest, deps.video, boss);
   await boss.work(
     JOBS.ingest,
     {
@@ -776,7 +904,7 @@ export async function startWorkers(
       notifyPollingIntervalSeconds: 0.5,
     },
     wrapHandler(JOBS.ingest, async (jobs: JobWithMetadata<unknown>[]) => {
-      for (const job of jobs) await handleIngestJob(deps.ingest, job);
+      for (const job of jobs) await handleIngestJob(ingestDeps, job);
     }),
   );
   await boss.work(
@@ -787,9 +915,37 @@ export async function startWorkers(
         pool: deps.ingest.pool,
         log: deps.log,
         send: (job) => sendIngest(boss, job),
+        sendTranscode: (job) => sendVideoTranscode(boss, job),
       });
     }),
   );
+  // Step 12 (docs/plans/step-12.md 2.6): one whole ffmpeg per handler, `VIDEO_CONCURRENCY` of
+  // them per process; the exclusive policy keeps one queued/active job per video.
+  const video = deps.video;
+  if (video) {
+    const transcodeDeps: TranscodeDeps = {
+      pool: deps.ingest.pool,
+      storage: deps.ingest.storage as TranscodeDeps["storage"],
+      log: deps.log,
+      ffmpegPath: video.ffmpegPath,
+      ffprobePath: video.ffprobePath,
+      scratchPath: video.scratchPath,
+      threads: video.threads,
+      timeoutSec: video.timeoutSec,
+    };
+    await boss.work(
+      JOBS.videoTranscode,
+      {
+        localConcurrency: video.concurrency,
+        batchSize: 1,
+        includeMetadata: true,
+        pollingIntervalSeconds: 2,
+      },
+      wrapHandler(JOBS.videoTranscode, async (jobs: JobWithMetadata<unknown>[]) => {
+        for (const job of jobs) await handleVideoTranscodeJob(transcodeDeps, job);
+      }),
+    );
+  }
   await boss.work(
     JOBS.purgeTrash,
     { pollingIntervalSeconds: 10 },
@@ -801,7 +957,15 @@ export async function startWorkers(
     JOBS.uploadsSweep,
     { pollingIntervalSeconds: 10 },
     wrapHandler(JOBS.uploadsSweep, async () => {
-      await sweepUploads(deps.sweep);
+      await sweepUploads(
+        deps.video
+          ? {
+              ...deps.sweep,
+              scratchPath: deps.sweep.scratchPath ?? deps.video.scratchPath,
+              scratchActiveSec: deps.sweep.scratchActiveSec ?? deps.video.timeoutSec,
+            }
+          : deps.sweep,
+      );
     }),
   );
   // Step 7 (plan 2.7): one indexer run per pg-boss batch of up to 25 jobs, so a burst of edits

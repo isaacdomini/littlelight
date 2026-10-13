@@ -1,6 +1,6 @@
 import { IonIcon } from "@ionic/react";
-import type { BabySummary, PhotoSummary } from "@tinyglow/shared";
-import { eyeOffOutline, flag } from "ionicons/icons";
+import { type BabySummary, formatDuration, type PhotoSummary } from "@tinyglow/shared";
+import { eyeOffOutline, flag, play } from "ionicons/icons";
 import { memo } from "react";
 import { t } from "../../i18n";
 import { PhotoImage } from "../PhotoImage";
@@ -19,6 +19,24 @@ export interface ThumbProps {
   onToggle: (photo: PhotoSummary) => void;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
+}
+
+/** Bottom-right video badge: play glyph + `formatDuration` (docs/plans/step-12.md 2.8). */
+export function DurationBadge({ id, durationMs }: { id: string; durationMs: number | null }) {
+  const text = durationMs === null ? null : formatDuration(durationMs);
+  return (
+    <span
+      data-testid={`photo-video-${id}`}
+      role="img"
+      aria-label={
+        text ? t("timeline.videoBadge", { duration: text }) : t("timeline.videoBadgeNoDuration")
+      }
+      className="flex h-6 items-center gap-0.5 rounded-full bg-black/60 px-1.5 text-xs font-semibold text-white tabular-nums"
+    >
+      <IonIcon icon={play} aria-hidden className="h-3 w-3" />
+      {text}
+    </span>
+  );
 }
 
 /** One grid cell: a fixed-aspect (square) button with badges, plus approve/reject when pending. */
@@ -80,14 +98,19 @@ export const Thumb = memo(function Thumb({
             className="absolute right-1.5 top-1.5 h-2.5 w-2.5 animate-pulse rounded-full bg-accent ring-2 ring-black/40"
           />
         ) : null}
-        {p.isSensitive ? (
-          <span
-            data-testid={`photo-sensitive-${p.id}`}
-            role="img"
-            aria-label={t("timeline.sensitiveBadge")}
-            className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white"
-          >
-            <IonIcon icon={eyeOffOutline} aria-hidden className="h-4 w-4" />
+        {p.isSensitive || p.mediaKind === "video" ? (
+          <span className="absolute bottom-1.5 right-1.5 flex items-center gap-1">
+            {p.isSensitive ? (
+              <span
+                data-testid={`photo-sensitive-${p.id}`}
+                role="img"
+                aria-label={t("timeline.sensitiveBadge")}
+                className="flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white"
+              >
+                <IonIcon icon={eyeOffOutline} aria-hidden className="h-4 w-4" />
+              </span>
+            ) : null}
+            {p.mediaKind === "video" ? <DurationBadge id={p.id} durationMs={p.durationMs} /> : null}
           </span>
         ) : null}
         {selectMode ? (

@@ -10,6 +10,11 @@ Needs from the user, in order. Tick as done.
 - [ ] U6 SHA-256 fingerprints (Play signing + upload) into `assetlinks.json`; Team ID into the AASA file
 - [ ] U7 Firebase project, `google-services.json` in `android/app/` (git-ignored), FCM service account, build with `VITE_PUSH_ANDROID=1`
 - [ ] U8 Apple / Google sign-in client IDs (before public launch; not in this build)
+- [ ] P1 (step 13) Team ID into the AASA `webcredentials.apps` entry; `webcredentials:tinyglow.app` entitlement signed with it
+- [ ] P2 (step 13) `assetlinks.json` `get_login_creds` fingerprints; `GOTRUE_WEBAUTHN_RP_ORIGINS` += `android:apk-key-hash:…` per signing key (`NATIVE.md` > Passkeys); restart `auth`
+- [ ] P3 (step 13) serve the updated `/.well-known/*`; `AUTH_PASSKEYS_ENABLED=true` on `auth` and `api`
+- [ ] P4 (step 13) device verification on an iPhone (iOS 16+) and an Android phone with Play services (`NATIVE.md` > Passkeys > Device verification); record in PROGRESS
+- [ ] P5 (step 13) only after P4: add the passkey line to the listing (`store/README.md`)
 - [ ] U9 Payments decision (billing is a later step; native hides purchase prompts and the listings do not mention purchase)
 - [ ] U10 Production deploy approval so `/.well-known/*` serves the real files
 - [ ] U11 Listing review: name/trademark check, subtitle and description, support URL and email, real Privacy Policy and Terms text, age-rating answers, privacy label, Data Safety, screenshots

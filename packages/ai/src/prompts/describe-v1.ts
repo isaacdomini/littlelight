@@ -9,6 +9,10 @@
  *
  * `buildUserText` renders the per-photo context. It never contains the baby's name (the
  * pipeline cannot read it), GPS or coordinates, and is never logged (it may hold a parent note).
+ * For a video item (step 12, docs/plans/step-12.md 2.7) the first sentence says that the
+ * attached images are `frameCount` frames sampled from one `durationSeconds`-second clip; this is
+ * per-item text, so the cached system prompt (and `DESCRIBE_PROMPT_V1_SHA256`) is unchanged and
+ * photo items render byte-for-byte as before.
  */
 
 import { createHash } from "node:crypto";
@@ -58,8 +62,22 @@ function truncate(text: string, max: number): string {
 }
 
 /**
+ * Opening sentence of a video item's text: how many frames, from how long a clip. Exported so
+ * tests and the fake dump can recognise it.
+ */
+export function videoFramesSentence(media: {
+  durationSeconds: number;
+  frameCount: number;
+}): string {
+  const n = Math.max(1, Math.round(media.frameCount));
+  const d = Math.max(1, Math.round(media.durationSeconds));
+  return `These ${n} ${n === 1 ? "frame is" : "frames are"} sampled from one ${d}-second video clip; describe the clip.`;
+}
+
+/**
  * Per-photo user text (FR-5.4). Absent fields are omitted, never written as "unknown". The
- * capture time is the photo's local wall-clock time (as written in `takenAt`).
+ * capture time is the photo's local wall-clock time (as written in `takenAt`). Video items
+ * (`context.media`) open with `videoFramesSentence` instead of "Describe this photo."
  */
 export function buildUserText(context: VisionContext): string {
   const facts: string[] = [];
@@ -87,8 +105,10 @@ export function buildUserText(context: VisionContext): string {
   if (context.parentNotes?.trim()) {
     facts.push(`Parent note: "${truncate(context.parentNotes, AI_VISION_CONTEXT_LIMITS.note)}"`);
   }
+  const lead =
+    context.media?.kind === "video" ? videoFramesSentence(context.media) : "Describe this photo.";
   if (!facts.length) {
-    return "Describe this photo. The family supplied no details for it.";
+    return `${lead} The family supplied no details for it.`;
   }
-  return `Describe this photo. Details from the family (true; do not contradict them):\n${facts.join("\n")}`;
+  return `${lead} Details from the family (true; do not contradict them):\n${facts.join("\n")}`;
 }

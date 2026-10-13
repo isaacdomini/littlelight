@@ -12,11 +12,16 @@ import UniformTypeIdentifiers
 //   authorizationStatus()                      -> { status }
 //   requestAuthorization()                     -> { status }   the only call that shows the prompt
 //   listAlbums()                               -> { albums: [{ id, title, count }] }   user albums
-//   listPendingAssets({ albumId, limit })      -> { assets: [{ id, createdAt }], remaining, albumExists }
-//   exportAssets({ ids })                      -> { files: [...], failed: [{ id, reason }] }
+//   listPendingAssets({ albumId, limit, includeLimitSkipped? })
+//                                              -> { assets: [{ id, createdAt, kind, durationMs, size }], remaining, albumExists }
+//                                                 kind "photo" | "video"; durationMs and size (bytes, a hint)
+//                                                 for videos, null for photos. includeLimitSkipped re-offers
+//                                                 assets once skipped as too_large/too_long (plan upgrade).
+//   exportAssets({ ids })                      -> { files: [{ id, path, name, mime, size, sha256, takenAt, kind, durationMs }],
+//                                                   failed: [{ id, reason }] }
 //   discardFiles({ paths })                    -> {}           deletes exported files (Caches/ll-sync-export only)
-//   recordOutcomes({ albumId, outcomes })      -> {}
-//   ledgerSummary({ albumId })                 -> { done, duplicate, failed, skipped }
+//   recordOutcomes({ albumId, outcomes })      -> {}           outcome: done | duplicate | failed | skipped | too_large | too_long
+//   ledgerSummary({ albumId })                 -> { done, duplicate, failed, skipped }   (too_large/too_long count as skipped)
 //   resetLedger({ albumId? })                  -> {}           no albumId: every ledger and every exported copy
 //   conditions()                               -> { wifi, expensive, lowPowerMode, thermalState }
 //   scheduleBackgroundRefresh()                -> {}
@@ -86,6 +91,9 @@ final class LLSyncLedger {
                 case "done": file.entries[id] = Entry(o: "d", n: file.entries[id]?.n ?? 0)
                 case "duplicate": file.entries[id] = Entry(o: "u", n: file.entries[id]?.n ?? 0)
                 case "skipped": file.entries[id] = Entry(o: "s", n: file.entries[id]?.n ?? 0)
+                // Videos over the plan's limits (step 12): skipped, but re-offerable after an upgrade.
+                case "too_large": file.entries[id] = Entry(o: "l", n: file.entries[id]?.n ?? 0)
+                case "too_long": file.entries[id] = Entry(o: "t", n: file.entries[id]?.n ?? 0)
                 case "failed":
                     let n = (file.entries[id]?.n ?? 0) + 1
                     file.entries[id] = Entry(o: n >= 3 ? "s" : "f", n: n)
@@ -102,7 +110,7 @@ final class LLSyncLedger {
             "done": e.filter { $0.o == "d" }.count,
             "duplicate": e.filter { $0.o == "u" }.count,
             "failed": e.filter { $0.o == "f" }.count,
-            "skipped": e.filter { $0.o == "s" }.count,
+            "skipped": e.filter { $0.o == "s" || $0.o == "l" || $0.o == "t" }.count,
         ]
     }
 
@@ -276,11 +284,22 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: albums
 
-    private static func imageOptions(newestFirst: Bool = false) -> PHFetchOptions {
+    /// Photos and videos (step 12); audio and unknown asset types are never offered.
+    private static func mediaOptions(newestFirst: Bool = false) -> PHFetchOptions {
         let o = PHFetchOptions()
-        o.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        o.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d",
+                                  PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
         if newestFirst { o.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)] }
         return o
+    }
+
+    /// Byte size of an asset's original resource when PhotoKit exposes it (`fileSize` is a documented
+    /// KVC key of PHAssetResource since iOS 13, guarded anyway); nil when unknown or not yet local.
+    private static func originalSize(_ asset: PHAsset) -> Int64? {
+        let type: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
+        guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == type }),
+              resource.responds(to: NSSelectorFromString("fileSize")) else { return nil }
+        return (resource.value(forKey: "fileSize") as? NSNumber)?.int64Value
     }
 
     @objc func listAlbums(_ call: CAPPluginCall) {
@@ -294,7 +313,7 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
             let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil)
             var albums: [(String, String, Int)] = []
             result.enumerateObjects { c, _, _ in
-                let count = PHAsset.fetchAssets(in: c, options: Self.imageOptions()).count
+                let count = PHAsset.fetchAssets(in: c, options: Self.mediaOptions()).count
                 albums.append((c.localIdentifier, c.localizedTitle ?? "", count))
             }
             albums.sort { $0.1.localizedStandardCompare($1.1) == .orderedAscending }
@@ -305,6 +324,7 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func listPendingAssets(_ call: CAPPluginCall) {
         guard let albumId = call.getString("albumId"), !albumId.isEmpty else { call.reject("bad-args"); return }
         let limit = max(1, min(500, call.getInt("limit") ?? 50))
+        let includeLimitSkipped = call.getBool("includeLimitSkipped") ?? false
         Self.work.async {
             let collections = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil)
             guard let collection = collections.firstObject else {
@@ -312,15 +332,24 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             let ledger = LLSyncLedger.shared.entries(albumId)
-            let assets = PHAsset.fetchAssets(in: collection, options: Self.imageOptions(newestFirst: true))
+            let assets = PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(newestFirst: true))
             var picked: [[String: Any]] = []
             var remaining = 0
             assets.enumerateObjects { asset, _, _ in
                 if let e = ledger[asset.localIdentifier] {
                     if e.o == "d" || e.o == "u" || e.o == "s" || e.n >= 3 { return }
+                    if (e.o == "l" || e.o == "t") && !includeLimitSkipped { return }
                 }
                 if picked.count < limit {
-                    picked.append(["id": asset.localIdentifier, "createdAt": Self.iso(asset.creationDate)])
+                    let video = asset.mediaType == .video
+                    picked.append([
+                        "id": asset.localIdentifier,
+                        "createdAt": Self.iso(asset.creationDate),
+                        "kind": video ? "video" : "photo",
+                        // Duration and size let the JS lane apply the plan's limits before exporting.
+                        "durationMs": video ? Int((asset.duration * 1000).rounded()) : NSNull(),
+                        "size": video ? (Self.originalSize(asset).map { NSNumber(value: $0) } ?? NSNull()) : NSNull(),
+                    ])
                 } else {
                     remaining += 1
                 }
@@ -343,6 +372,10 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
         case "public.jpeg": return ("image/jpeg", "jpg")
         case "public.png": return ("image/png", "png")
         case "org.webmproject.webp": return ("image/webp", "webp")
+        // Videos (step 12): the original container as shot, no transcoding on the device.
+        case "com.apple.quicktime-movie": return ("video/quicktime", "mov")
+        case "public.mpeg-4": return ("video/mp4", "mp4")
+        case "com.apple.m4v-video": return ("video/mp4", "m4v")
         default: return nil
         }
     }
@@ -351,10 +384,17 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// Streams the original resource to disk, hashing as it goes. Blocks the calling (work) queue.
     private static func export(_ asset: PHAsset, into dir: URL) -> Result<[String: Any], ExportError> {
-        guard asset.mediaType == .image else { return .failure(.unsupported) }
+        let video: Bool
+        switch asset.mediaType {
+        case .image: video = false
+        case .video: video = true
+        default: return .failure(.unsupported)
+        }
         let resources = PHAssetResource.assetResources(for: asset)
-        // The unedited capture (D12), never the edited rendition.
-        guard let resource = resources.first(where: { $0.type == .photo }) else { return .failure(.unavailable) }
+        // The unedited capture (D12), never the edited rendition: `.photo` for stills (a Live Photo
+        // exports its HEIC only, Q5: the paired video is not uploaded), `.video` for videos (the
+        // original container, HEVC kept; `.fullSizeVideo` would be the edited rendition).
+        guard let resource = resources.first(where: { $0.type == (video ? .video : .photo) }) else { return .failure(.unavailable) }
         guard let (mime, ext) = mimeAndExtension(resource.uniformTypeIdentifier) else { return .failure(.unsupported) }
 
         let fm = FileManager.default
@@ -403,6 +443,8 @@ public class TinyglowPhotoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
             "size": size,
             "sha256": sha,
             "takenAt": iso(asset.creationDate),
+            "kind": video ? "video" : "photo",
+            "durationMs": video ? Int((asset.duration * 1000).rounded()) : NSNull(),
         ])
     }
 

@@ -1,9 +1,12 @@
 import { IonModal } from "@ionic/react";
+import { PASSKEY_FAILED_MESSAGE } from "@tinyglow/shared";
 import { createContext, type ReactNode, useCallback, useContext, useRef, useState } from "react";
 import { CodeEntry } from "../components/CodeEntry";
-import { Button } from "../components/ui";
+import { Button, Message } from "../components/ui";
 import { t } from "../i18n";
-import { isApiError } from "../lib/api";
+import { errorMessage, isApiError } from "../lib/api";
+import { passkeySignIn, usePasskeySupport, usePasskeys } from "../lib/passkeys";
+import { isPasskeyError } from "../platform/passkeys";
 import { useAuth } from "./AuthProvider";
 
 type WithFresh = <T>(action: () => Promise<T>) => Promise<T>;
@@ -42,6 +45,33 @@ export function FreshSignInProvider({ children }: { children: ReactNode }) {
 
   const email = me?.user.email ?? null;
 
+  // Step 13 (Q5): a passkey sign-in is user-verified and counts as fresh, so the gate offers it
+  // next to the email code when the account has one and this device can use it.
+  const support = usePasskeySupport();
+  const passkeys = usePasskeys(open && support.enabled === true);
+  const passkeyOption = support.enabled === true && (passkeys.data?.passkeys.length ?? 0) > 0;
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [passkeyError, setPasskeyError] = useState<string | null>(null);
+
+  async function viaPasskey() {
+    setPasskeyBusy(true);
+    setPasskeyError(null);
+    try {
+      await passkeySignIn();
+      await refetchMe();
+      close(true);
+    } catch (e) {
+      if (isPasskeyError(e, "cancelled")) return;
+      setPasskeyError(
+        isPasskeyError(e) || isApiError(e, "passkey_failed")
+          ? PASSKEY_FAILED_MESSAGE
+          : errorMessage(e),
+      );
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
   return (
     <GateContext.Provider value={withFresh}>
       {children}
@@ -63,11 +93,22 @@ export function FreshSignInProvider({ children }: { children: ReactNode }) {
                 close(true);
               }}
             />
-            <Button
-              variant="secondary"
-              data-testid="fresh-gate-cancel"
-              onClick={() => close(false)}
-            >
+            {passkeyOption ? (
+              <>
+                {passkeyError ? (
+                  <Message data-testid="fresh-gate-passkey-error">{passkeyError}</Message>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  data-testid="fresh-gate-passkey"
+                  disabled={passkeyBusy}
+                  onClick={() => void viaPasskey()}
+                >
+                  {t("gate.passkey")}
+                </Button>
+              </>
+            ) : null}
+            <Button variant="link" data-testid="fresh-gate-cancel" onClick={() => close(false)}>
               {t("gate.cancel")}
             </Button>
           </div>

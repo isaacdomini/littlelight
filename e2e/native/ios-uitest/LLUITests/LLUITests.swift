@@ -315,6 +315,17 @@ final class LLUITests: XCTestCase {
     }
 
     /// Tap the first element whose label contains LL_TAP; then (optionally) wait for LL_EXPECT.
+    /// Tap a point of the app by normalized offset (LL_X, LL_Y in 0...1): for controls that have
+    /// no accessible label (e.g. the video viewer's play overlay).
+    func testTapAt() throws {
+        let x = Double(env("LL_X") ?? "0.5") ?? 0.5
+        let y = Double(env("LL_Y") ?? "0.5") ?? 0.5
+        app.activate()
+        app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+        sleep(UInt32(env("LL_SLEEP") ?? "2") ?? 2)
+        dump("tap-at")
+    }
+
     func testTapText() throws {
         let tap = try XCTUnwrap(env("LL_TAP"), "LL_TAP not set")
         app.activate()
@@ -367,5 +378,64 @@ final class LLUITests: XCTestCase {
         let expect = env("LL_EXPECT") ?? "imported"
         XCTAssertTrue(element(containing: expect).waitForExistence(timeout: Double(env("LL_TIMEOUT") ?? "120") ?? 120), "sync did not show \(expect)")
         dump("sync-started")
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Video upload live check (step 12, NATIVE.md "Video upload live check")
+    // ------------------------------------------------------------------------------------------
+
+    /// After `testSignIn`: Upload tab → "Choose photos" → newest video cell of the PHPicker → Add
+    /// → progress bar → Home for 60 s → back → the tile. The picker is an out-of-process remote
+    /// view; XCUITest merges it into the app's tree (iOS 16+), with a coordinate tap on the first
+    /// cell as the fallback. LL_VIDEO_WAIT (seconds in the background, default 60).
+    func testPickVideoAndBackground() throws {
+        app.activate()
+        let upload = app.webViews.buttons["Upload"].exists ? app.webViews.buttons["Upload"] : app.webViews.links["Upload"]
+        if upload.waitForExistence(timeout: 10) { upload.tap() }
+        let choose = app.webViews.buttons["Choose photos"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 20), "no Choose photos button")
+        choose.tap()
+        // The PHPicker (iOS 26: grid cells are Images labelled "Video, forty seconds, <date>" /
+        // "Photo, <date>", the confirm button is labelled "Done"; older: an "Add" button).
+        let grid = app.images.matching(identifier: "PXGGridLayout-Info")
+        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 15), "the picker grid did not appear")
+        dump("video-1-picker")
+        let video = app.images.matching(NSPredicate(format: "label BEGINSWITH[c] 'Video'")).firstMatch
+        if video.waitForExistence(timeout: 5) {
+            video.tap()
+        } else {
+            // No video label: a Videos filter (older pickers) and the first cell, else a coordinate.
+            let videos = app.buttons["Videos"]
+            if videos.waitForExistence(timeout: 3) { videos.tap() }
+            if grid.firstMatch.waitForExistence(timeout: 5) {
+                grid.firstMatch.tap()
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.17, dy: 0.28)).tap()
+            }
+        }
+        let add = app.buttons["Add"].exists ? app.buttons["Add"] : app.buttons["Done"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no Add/Done button in the picker")
+        XCTAssertTrue(add.isEnabled, "the picker's Add/Done button stayed disabled (nothing selected)")
+        add.tap()
+        // Background the app while the ranged parts are in flight; the background session goes on.
+        // On the simulator a 55 MiB clip reaches the local stack in ~2 s, so press Home as soon as
+        // the item is listed (LL_VIDEO_HOME_DELAY seconds after Add, default 1) rather than waiting
+        // for a progress bar that may already be gone. The api log (register/parts/complete
+        // timestamps vs. this press) is the evidence of what was in flight.
+        let homeDelay = UInt32(env("LL_VIDEO_HOME_DELAY") ?? "1") ?? 1
+        _ = element(containing: "clip-").waitForExistence(timeout: 10)
+        dump("video-2-picked")
+        sleep(homeDelay)
+        XCUIDevice.shared.press(.home)
+        let wait = UInt32(env("LL_VIDEO_WAIT") ?? "60") ?? 60
+        sleep(wait)
+        app.activate()
+        dump("video-3-resumed")
+        let done = element(containing: "uploaded")
+        XCTAssertTrue(done.waitForExistence(timeout: 180), "the upload did not finish after backgrounding")
+        let tile = app.webViews.buttons["View in timeline"]
+        if tile.waitForExistence(timeout: 10) { tile.tap() }
+        XCTAssertTrue(app.webViews.images.firstMatch.waitForExistence(timeout: 30), "no tile after the upload")
+        dump("video-4-tile")
     }
 }

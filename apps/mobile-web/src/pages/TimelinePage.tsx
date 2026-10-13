@@ -1,6 +1,6 @@
 import { IonAlert, IonContent, IonPage } from "@ionic/react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { PhotoGroup, PhotoSummary, PhotosView } from "@tinyglow/shared";
+import type { MediaFilter, PhotoGroup, PhotoSummary, PhotosView } from "@tinyglow/shared";
 import { imagesOutline } from "ionicons/icons";
 import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -76,14 +76,17 @@ export function TimelinePage() {
   );
 
   const [view, setView] = useState<PhotosView>("album");
+  // Step 12: All / Photos / Videos chips; the summary follows so groups match the stream.
+  const [media, setMedia] = useState<MediaFilter | undefined>(undefined);
   const [jump, setJump] = useState<{ cursor?: string; nonce: number }>({ nonce: 0 });
   const effectiveView: PhotosView = isAdmin ? view : "album";
   const timeline = useTimeline(babyId, {
     view: effectiveView,
     milestoneId,
+    media,
     startCursor: jump.cursor,
   });
-  const summary = useTimelineSummary(babyId, effectiveView);
+  const summary = useTimelineSummary(babyId, effectiveView, media);
   const milestones = useMilestones(babyId);
 
   const photos = useMemo(() => flattenTimeline(timeline.data), [timeline.data]);
@@ -136,6 +139,12 @@ export function TimelinePage() {
   const resetStream = () => setJump((j) => ({ nonce: j.nonce + 1 }));
   const changeView = (v: PhotosView) => {
     setView(v);
+    setSelected(new Set());
+    setVisibleGroup(null);
+    resetStream();
+  };
+  const changeMedia = (m: MediaFilter | undefined) => {
+    setMedia(m);
     setSelected(new Set());
     setVisibleGroup(null);
     resetStream();
@@ -207,7 +216,7 @@ export function TimelinePage() {
     const files = [...e.dataTransfer.files];
     if (files.length === 0) return;
     e.preventDefault();
-    uploadManager.add(babyId, files);
+    uploadManager.add(babyId, files, undefined, { plan: baby?.plan });
     navigate("/upload");
   };
 
@@ -227,7 +236,9 @@ export function TimelinePage() {
       <div className="flex flex-col gap-3 px-4 pb-2 pt-3">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm text-muted" data-testid="timeline-total" aria-live="polite">
-            {baby ? tn("timeline.photoCount", total) : ""}
+            {baby
+              ? tn(media === "video" ? "timeline.videoCount" : "timeline.photoCount", total)
+              : ""}
           </p>
           {photos.length > 0 && !searching ? (
             <Button
@@ -296,6 +307,33 @@ export function TimelinePage() {
               {t("timeline.trash")}
             </button>
           </Segmented>
+        ) : null}
+
+        {baby && !searching ? (
+          <fieldset className="m-0 border-0 p-0" data-testid="media-filter">
+            <legend className="sr-only">{t("timeline.mediaFilter")}</legend>
+            <ul className="ll-chips">
+              {(["all", "photo", "video"] as const).map((m) => {
+                const value = m === "all" ? undefined : m;
+                const on = media === value;
+                return (
+                  <li key={m}>
+                    <button
+                      type="button"
+                      className="ll-chip"
+                      data-testid={`media-chip-${m}`}
+                      aria-pressed={on}
+                      onClick={() => {
+                        if (!on) changeMedia(value);
+                      }}
+                    >
+                      {t(`timeline.media.${m}`)}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </fieldset>
         ) : null}
 
         {filtered ? (
@@ -374,7 +412,7 @@ export function TimelinePage() {
         <div className="flex min-h-0 flex-1">
           <div className="min-h-0 min-w-0 flex-1">
             <TimelineGrid
-              key={`${effectiveView}-${milestoneId ?? ""}-${jump.nonce}`}
+              key={`${effectiveView}-${milestoneId ?? ""}-${media ?? ""}-${jump.nonce}`}
               photos={photos}
               groupCounts={groupCounts}
               baby={baby ?? null}

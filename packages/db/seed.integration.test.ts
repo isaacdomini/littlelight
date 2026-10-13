@@ -56,9 +56,9 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
     }
   });
 
-  it("seeds the documented family: 12 photos, 3 members, 4 hand-shared photos", async () => {
+  it("seeds the documented family: 13 items (12 photos + the demo clip), 3 members, 4 hand-shared photos", async () => {
     expect(first.counts).toMatchObject({
-      photos: 12,
+      photos: 13,
       baby_members: 3,
       shared_photos: 4,
       share_links: 1,
@@ -219,13 +219,19 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
     }
   });
 
-  it("every demo original is a JPEG at babies/<baby>/originals/<photo>.jpg (step 9: real illustrations)", async () => {
+  it("every demo original is a JPEG at babies/<baby>/originals/<photo>.jpg (step 9: real illustrations); the one clip (step 12) is video/mp4 at .mp4", async () => {
     const r = await db.admin.query(
-      "SELECT id, mime, storage_key_original AS key FROM public.photos WHERE baby_id = $1 ORDER BY id",
+      "SELECT id, mime, media_kind, storage_key_original AS key FROM public.photos WHERE baby_id = $1 ORDER BY id",
       [DEMO.baby],
     );
-    expect(r.rows).toHaveLength(12);
+    expect(r.rows).toHaveLength(13);
+    expect(r.rows.filter((row) => row.media_kind === "video")).toHaveLength(1);
     for (const row of r.rows) {
+      if (row.media_kind === "video") {
+        expect(row.mime, row.id).toBe("video/mp4");
+        expect(row.key, row.id).toBe(`babies/${DEMO.baby}/originals/${row.id}.mp4`);
+        continue;
+      }
       expect(row.mime, row.id).toBe("image/jpeg");
       expect(row.key, row.id).toBe(`babies/${DEMO.baby}/originals/${row.id}.jpg`);
     }
@@ -277,15 +283,15 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
 
   // --- the seeded world under RLS (the manual spot checks of plan section 4) ---------------------
   describe("seeded family under RLS", () => {
-    it("mom and dad (admins) see all 12 photos; the nanny sees live approved + her own pending", async () => {
+    it("mom and dad (admins) see all 13 items; the nanny sees live approved + her own pending", async () => {
       await db.asUser(DEMO.users.mom, async (c) => {
-        expect((await c.query("SELECT count(*)::int n FROM photos")).rows[0].n).toBe(12);
+        expect((await c.query("SELECT count(*)::int n FROM photos")).rows[0].n).toBe(13);
         expect(
           (await c.query("SELECT count(*)::int n FROM photo_search")).rows[0].n,
         ).toBeGreaterThanOrEqual(8);
       });
       await db.asUser(DEMO.users.dad, async (c) => {
-        expect((await c.query("SELECT count(*)::int n FROM photos")).rows[0].n).toBe(12);
+        expect((await c.query("SELECT count(*)::int n FROM photos")).rows[0].n).toBe(13);
       });
       await db.asUser(DEMO.users.nanny, async (c) => {
         const r = await c.query(
@@ -293,7 +299,8 @@ describe.skipIf(!databaseUrl)("demo seed", () => {
         );
         expect(r.rows[0].pending).toBe(2);
         expect(r.rows[0].trashed).toBe(0);
-        expect(r.rows[0].total).toBe(11);
+        // live approved (incl. the demo clip) + her own pending
+        expect(r.rows[0].total).toBe(12);
         await expect(c.query("DELETE FROM photos")).rejects.toThrow(/permission denied/);
       });
     });

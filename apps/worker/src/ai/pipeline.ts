@@ -31,19 +31,24 @@ import { errorCategory } from "../clients";
 import { type PipelinePool, runAsPipeline } from "../db";
 import type { WorkerLog } from "../log-types";
 import type { ObjectStorage } from "../storage";
-import { buildVisionContext, type PendingRow } from "./context";
+import { buildVisionContext, keyframeKeys, type PendingRow } from "./context";
 import * as SQL from "./sql";
 
 // AI batch pipeline (docs/plans/step-6.md 2.6; PRD FR-5.2/5.3/5.7/5.8, "AI pipeline" stages 2-4,
-// "Cost controls", "Reliability and operations").
+// "Cost controls", "Reliability and operations"; step 12 videos: docs/plans/step-12.md 2.7).
 //
 // Invariants:
 // - Every app-table query runs through `runAsPipeline(pool, {}, …)`: as `pipeline`, never with
 //   the data key (no GPS is needed or selected).
-// - Only the `analysis` derivative is read from storage; `plan: "paid"` is set on a request only
-//   after the per-photo re-check right before `describeBatch`. The DB triggers
-//   (`photos_status_guard`, `ai_batch_items_guard`, `photo_ai_paid_tier_tripwire`) re-check the
-//   paid gate on every write regardless.
+// - Only the `analysis` derivative (a video's poster) and, for videos, the `keyframe1..3`
+//   derivatives are read from storage: never an original, never the `web` rendition. One video
+//   is one `ai_batch_items` row whose request carries up to `AI_VIDEO_MAX_FRAMES` images; the
+//   adapters check every frame (768 px, ≤ 400 KB) and the byte-cap packing counts them all.
+//   `plan: "paid"` is set on a request only after the per-photo re-check right before
+//   `describeBatch`. The DB triggers (`photos_status_guard`, `ai_batch_items_guard`,
+//   `photo_ai_paid_tier_tripwire`) re-check the paid gate on every write regardless; a free
+//   album's videos (like its photos) are never returned by `ai_eligible_photos`, which also
+//   holds a video back until `rendition_status = 'ready'` (its keyframes exist only then).
 // - `photos.status` is never set to `failed` by AI (D4); a photo without a result goes back to
 //   `ingested` (or `ready` when it keeps an older-version description).
 // - Logs carry ids, counts, bytes, token counts, cost, durations and error categories only:
@@ -159,6 +164,18 @@ export const POLL_LIMIT = 50;
 export const MAX_FORCED_ROUNDS = 100;
 const LOAD_CONCURRENCY = 8;
 
+/**
+ * Budget weight of a video item relative to a photo (step 12, docs/plans/step-12.md 2.7).
+ * gpt-6-luna Batch, pinned price table: a photo is ~600 image + ~100 context uncached input,
+ * ~700 cached prompt/schema, ~400 output ≈ $0.0001385; a video sends up to 4 frames, so
+ * ~2,500 uncached input ($0.000125) + ~700 cached ($0.0000035) + ~400 output ($0.0001) ≈
+ * **$0.00023 per video**, about 2.3× a photo (step-7 real runs billed ~$0.0001 per photo, so
+ * expect $0.00015–0.00025). `AI_COST_PER_PHOTO_ESTIMATE_USD × AI_VIDEO_COST_FACTOR` is what the
+ * per-baby monthly budget (`AI_BABY_MONTHLY_BUDGET_USD`, unchanged) reserves for a claimed video.
+ * A Plus family with 50 clips a month adds about $0.01.
+ */
+export const AI_VIDEO_COST_FACTOR = 2.3;
+
 type ItemState = "succeeded" | "failed" | "dropped";
 type FailureKind = "refusal" | "invalid_output" | "expired" | "rate_limited" | "provider_error";
 
@@ -181,7 +198,10 @@ interface BatchRow {
 interface Prepared {
   photoId: string;
   babyId: string;
+  /** The analysis copy (a video's poster). */
   image: VisionRequest["image"];
+  /** A video's loaded keyframes (empty for photos). */
+  frames: VisionRequest["image"][];
   context: VisionContext;
 }
 
@@ -302,10 +322,17 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
     budgetSkipped: Set<string>;
   }
 
-  /** Per-baby monthly budget: keep as many photos per baby as the remaining budget allows. */
+  /** Estimated cost of one claimed item: a video weighs `AI_VIDEO_COST_FACTOR` photos. */
+  const estimateFor = (row: { media_kind?: string | null }): number =>
+    row.media_kind === "video" ? estimate * AI_VIDEO_COST_FACTOR : estimate;
+
+  /**
+   * Per-baby monthly budget: keep as many items per baby (oldest first) as the remaining budget
+   * allows, each item reserving its own estimate (photo, or video × `AI_VIDEO_COST_FACTOR`).
+   */
   async function applyBudget(
     c: pg.PoolClient,
-    rows: { id: string; baby_id: string; failed_attempts: number }[],
+    rows: { id: string; baby_id: string; media_kind?: string | null; failed_attempts: number }[],
   ): Promise<{ kept: typeof rows; skipped: number; skippedIds: string[] }> {
     const budget = cfg.AI_BABY_MONTHLY_BUDGET_USD;
     const { month, firstDay } = utcMonth();
@@ -323,16 +350,27 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
         babyId,
         firstDay,
         estimate,
+        estimate * AI_VIDEO_COST_FACTOR,
       ]);
       const spent = Number(res.rows[0]?.spent ?? 0);
-      const allowed =
-        estimate > 0 ? Math.max(0, Math.floor((budget - spent) / estimate + 1e-9)) : list.length;
-      kept.push(...list.slice(0, allowed));
-      const over = list.length - Math.min(allowed, list.length);
+      let reserved = 0;
+      const keptHere: typeof rows = [];
+      const overHere: typeof rows = [];
+      for (const r of list) {
+        const cost = estimateFor(r);
+        if (estimate <= 0 || spent + reserved + cost <= budget + 1e-9) {
+          keptHere.push(r);
+          reserved += cost;
+        } else {
+          overHere.push(r);
+        }
+      }
+      kept.push(...keptHere);
+      const over = overHere.length;
       const key = `${babyId}:${month}`;
       if (over > 0) {
         skipped += over;
-        skippedIds.push(...list.slice(Math.min(allowed, list.length)).map((r) => r.id));
+        skippedIds.push(...overHere.map((r) => r.id));
         // The in-process set only short-circuits repeat calls; the DB function is the dedupe.
         if (!budgetAudited.has(key)) {
           budgetAudited.add(key);
@@ -349,7 +387,7 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
         }
         continue;
       }
-      const projected = spent + Math.min(allowed, list.length) * estimate;
+      const projected = spent + reserved;
       if (projected >= (budget * cfg.AI_BUDGET_ALERT_PCT) / 100 && !budgetAlerted.has(key)) {
         budgetAlerted.add(key);
         log.warn(
@@ -410,10 +448,12 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
         ]);
         const ids = eligible.rows.map((r) => r.id);
         if (ids.length) {
-          const info = await c.query<{ id: string; baby_id: string; failed_attempts: number }>(
-            SQL.CLAIM_INFO_SQL,
-            [ids, promptVersion, schemaVersion],
-          );
+          const info = await c.query<{
+            id: string;
+            baby_id: string;
+            media_kind?: string | null;
+            failed_attempts: number;
+          }>(SQL.CLAIM_INFO_SQL, [ids, promptVersion, schemaVersion]);
           const { kept, skipped, skippedIds } = await applyBudget(c, info.rows);
           budgetSkipped = skipped;
           for (const id of skippedIds) {
@@ -469,30 +509,60 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
   // Submit
   // -------------------------------------------------------------------------------------------
 
-  async function prepare(
-    row: PendingRow,
-  ): Promise<{ ok: true; p: Prepared } | { ok: false; photoId: string; reason: string }> {
-    if (!row.storage_key) return { ok: false, photoId: row.photo_id, reason: "no_analysis" };
+  /** One derivative as an `AnalysisImage` (header-read; the adapters re-check it). */
+  async function loadImage(
+    key: string,
+  ): Promise<{ ok: true; image: VisionRequest["image"] } | { ok: false; reason: string }> {
     let bytes: Buffer;
     try {
-      bytes = await storage.getObject(row.storage_key);
+      bytes = await storage.getObject(key);
     } catch (err) {
-      return { ok: false, photoId: row.photo_id, reason: `storage_${errorCategory(err)}` };
+      return { ok: false, reason: `storage_${errorCategory(err)}` };
     }
     const info = readImageInfo(bytes);
-    if (!info) return { ok: false, photoId: row.photo_id, reason: "image_unreadable" };
+    if (!info) return { ok: false, reason: "image_unreadable" };
     return {
       ok: true,
+      image: {
+        bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+        mimeType: info.type,
+        width: info.width,
+        height: info.height,
+      },
+    };
+  }
+
+  /**
+   * Loads the analysis copy (required) and, for a video, every available keyframe (a keyframe
+   * that cannot be loaded or read is left out and counted in `frameReasons`; the poster alone
+   * still describes the clip). Oversized frames are not filtered here: `assembleVisionRequest`
+   * refuses the whole item (a counted, failed attempt), so a bad derivative is never sent.
+   */
+  async function prepare(
+    row: PendingRow,
+  ): Promise<
+    | { ok: true; p: Prepared; frameReasons: string[] }
+    | { ok: false; photoId: string; reason: string }
+  > {
+    if (!row.storage_key) return { ok: false, photoId: row.photo_id, reason: "no_analysis" };
+    const poster = await loadImage(row.storage_key);
+    if (!poster.ok) return { ok: false, photoId: row.photo_id, reason: poster.reason };
+    const frames: VisionRequest["image"][] = [];
+    const frameReasons: string[] = [];
+    for (const key of keyframeKeys(row)) {
+      const frame = await loadImage(key);
+      if (frame.ok) frames.push(frame.image);
+      else frameReasons.push(`keyframe_${frame.reason}`);
+    }
+    return {
+      ok: true,
+      frameReasons,
       p: {
         photoId: row.photo_id,
         babyId: row.baby_id,
-        image: {
-          bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-          mimeType: info.type,
-          width: info.width,
-          height: info.height,
-        },
-        context: buildVisionContext(row),
+        image: poster.image,
+        frames,
+        context: buildVisionContext(row, 1 + frames.length),
       },
     };
   }
@@ -514,17 +584,28 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
       return result;
     }
 
-    // 1. Build: analysis copy + context (no plan yet).
+    // 1. Build: analysis copy (+ a video's keyframes) + context (no plan yet).
     const prepared = await mapLimit(rows, LOAD_CONCURRENCY, prepare);
     const unbuildable: string[] = [];
     const reasons = new Map<string, number>();
+    const frameReasons = new Map<string, number>();
     const ready: Prepared[] = [];
+    let videos = 0;
     for (const p of prepared) {
-      if (p.ok) ready.push(p.p);
-      else {
+      if (p.ok) {
+        ready.push(p.p);
+        if (p.p.context.media) videos++;
+        for (const r of p.frameReasons) frameReasons.set(r, (frameReasons.get(r) ?? 0) + 1);
+      } else {
         unbuildable.push(p.photoId);
         reasons.set(p.reason, (reasons.get(p.reason) ?? 0) + 1);
       }
+    }
+    if (frameReasons.size) {
+      log.warn(
+        { batchId, reasons: Object.fromEntries(frameReasons) },
+        "ai video keyframes could not be loaded: sent without them",
+      );
     }
 
     // 2. Re-check right before submission: still approved, live and paid.
@@ -548,6 +629,7 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
           photoId: p.photoId,
           plan: "paid",
           image: p.image,
+          frames: p.frames,
           context: p.context,
           promptVersion,
           schemaVersion,
@@ -669,6 +751,8 @@ export function createAiPipeline(deps: AiPipelineDeps): AiPipeline {
         provider: handle.provider,
         providerBatchId: handle.batchId,
         count: ids.length,
+        videos,
+        images: requests.reduce((n, r) => n + 1 + (r.frames?.length ?? 0), 0),
         bytes,
         ms: Date.now() - started,
       },

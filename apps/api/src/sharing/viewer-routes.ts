@@ -2,6 +2,7 @@ import {
   idParamsSchema,
   SHARE_DOWNLOAD_URL_TTL_SEC,
   SHARE_PATH,
+  SHARE_VIDEO_URL_TTL_SEC,
   shareAlbumSchema,
   shareManifestQuerySchema,
   viewerDownloadResponseSchema,
@@ -34,11 +35,16 @@ import { requireViewer, type ViewerSession, withViewer } from "./viewer-auth";
 //
 // - Every route but the manifest: `requireViewer` (verified `ll_viewer` JWT) + `withViewer`
 //   (role `viewer`, `viewer_session_check(jti)` first: any dead link or session is 410).
-// - Media: presigned GETs of `thumb`/`display` derivatives only, keys read through viewer RLS
-//   (a hidden sensitive photo's key is unreadable, so it is never signed), TTL =
-//   `min(SHARE_MEDIA_URL_TTL_SEC, link expiry)` with `Cache-Control: private` from the signer.
-//   Downloads are the 1600 px `display` derivative (never the original, D9), only when the link
-//   allows downloads, valid `SHARE_DOWNLOAD_URL_TTL_SEC`.
+// - Media: presigned GETs of `thumb`/`display` derivatives (a video's poster frame) and, for
+//   video rows only, the `web` rendition (step 12, Q9), keys read through viewer RLS (a hidden
+//   sensitive item's key is unreadable, so it is never signed; `web` of a photo row is never
+//   readable). TTL = `min(SHARE_MEDIA_URL_TTL_SEC, link expiry)` for images and
+//   `min(SHARE_VIDEO_URL_TTL_SEC, link expiry)` for `web` (a 5-minute URL would die mid-playback),
+//   `Content-Type: video/mp4`, no attachment disposition (the player streams it with range
+//   requests), `Cache-Control: private` from the signer.
+//   Downloads are the 1600 px `display` derivative of a photo or the `web` rendition of a video
+//   (never the original, D9/Q9), only when the link allows downloads, valid
+//   `SHARE_DOWNLOAD_URL_TTL_SEC`.
 // - Every response is parsed with its strict shared schema before it is sent (fail closed).
 // - Never logged: URLs, tokens, names.
 
@@ -57,15 +63,29 @@ export function downloadStem(name: string): string {
   return ascii || "photo";
 }
 
-/** `attachment; filename="<baby>-<YYYY-MM-DD>.jpg"` (ASCII, no quotes or separators inside). */
-export function downloadDisposition(babyName: string, day: string): string {
+/**
+ * `attachment; filename="<baby>-<YYYY-MM-DD>.jpg"` (ASCII, no quotes or separators inside);
+ * `.mp4` for a video's rendition.
+ */
+export function downloadDisposition(
+  babyName: string,
+  day: string,
+  mediaKind: "photo" | "video" = "photo",
+): string {
   const safeDay = /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "photo";
-  return `attachment; filename="${downloadStem(babyName)}-${safeDay}.jpg"`;
+  const ext = mediaKind === "video" ? "mp4" : "jpg";
+  return `attachment; filename="${downloadStem(babyName)}-${safeDay}.${ext}"`;
 }
 
-/** Viewer media URL lifetime for this link (≤ setting, ≤ the link's expiry). */
-function mediaTtl(app: FastifyInstance, session: ViewerSession): number {
-  return shareMediaTtlSec(shareSettings(app.config).SHARE_MEDIA_URL_TTL_SEC, session.expiresAt);
+/** Viewer media URL lifetime for this link (≤ setting, ≤ the link's expiry); longer for `web`. */
+function mediaTtl(
+  app: FastifyInstance,
+  session: ViewerSession,
+  kind: "thumb" | "display" | "web" = "thumb",
+): number {
+  const max =
+    kind === "web" ? SHARE_VIDEO_URL_TTL_SEC : shareSettings(app.config).SHARE_MEDIA_URL_TTL_SEC;
+  return shareMediaTtlSec(max, session.expiresAt);
 }
 
 /** The per-link PWA manifest (D11): the installed app opens exactly this link. */
@@ -142,7 +162,7 @@ export function viewerRoutes(app: FastifyInstance): void {
       const { session, result: keys } = await withViewer(request, reply, (client) =>
         viewerDerivativeKeys(client, ids, kind),
       );
-      const ttl = mediaTtl(app, session);
+      const ttl = mediaTtl(app, session, kind);
       const urls = await Promise.all(
         keys.map(async (k) => {
           const signed = await signViewerKey(app.signer, k.storage_key, k.photo_id, kind, ttl);
@@ -165,15 +185,19 @@ export function viewerRoutes(app: FastifyInstance): void {
       );
       if (!session.allowDownload) throw downloadsOff();
       if (!row) throw photoNotShared();
+      // A photo's display copy or a video's web rendition (Q9): never the original.
       const signed = await signViewerKey(
         app.signer,
         row.storage_key,
         id,
-        "display",
+        row.kind,
         shareMediaTtlSec(SHARE_DOWNLOAD_URL_TTL_SEC, session.expiresAt),
-        downloadDisposition(session.babyName, row.day),
+        downloadDisposition(session.babyName, row.day, row.media_kind),
       );
-      request.log.info({ shareLinkId: session.shareLinkId, photoId: id }, "viewer download");
+      request.log.info(
+        { shareLinkId: session.shareLinkId, photoId: id, mediaKind: row.media_kind },
+        "viewer download",
+      );
       return strictViewerBody(
         viewerDownloadResponseSchema,
         { url: signed.url, expiresAt: signed.expiresAt.toISOString() },

@@ -5,10 +5,11 @@ import {
 } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { passkeysEnabled } from "../config";
 import { revokeGoogleConnection } from "../imports/google/connection";
 import { ApiError, safeErrorLog } from "../lib/errors";
 import { audit, requireFreshSignIn, type Tx, withClaims, withServiceRole } from "./context";
-import { GoTrueError } from "./gotrue";
+import { GoTrueError, hasPasskeys } from "./gotrue";
 import { requireAuth } from "./plugin";
 import type { AuthRuntime } from "./runtime";
 import { clearSessionCookies } from "./session";
@@ -37,6 +38,28 @@ import { clearSessionCookies } from "./session";
 // revoke never blocks deletion, and only `{ revoked }` is logged (never the token or Google's
 // answer). If GoTrue then fails, the connection stays removed: the user reconnects if they keep the
 // account, which is the safe direction for a credential.
+//
+// Passkeys (docs/plans/step-13.md 2.2, 2.4; 0.1 decision f): `auth.webauthn_credentials` and
+// `auth.webauthn_challenges` reference `auth.users ON DELETE CASCADE`, so GoTrue's hard delete
+// removes every credential with the user and the deletion itself is unchanged. The preview's
+// `passkeys` count comes from GoTrue's list route (no app role can read those tables), best
+// effort: 0 with a warning when GoTrue is unreachable, and 0 silently when passkeys are off.
+
+/** `passkeys: n` for the deletion preview (GoTrue list, best effort). */
+async function passkeyCount(request: FastifyRequest, runtime: AuthRuntime): Promise<number> {
+  const auth = request.auth;
+  if (!auth || !passkeysEnabled(runtime.config) || !hasPasskeys(runtime.gotrue)) return 0;
+  try {
+    return (await runtime.gotrue.passkeyList(auth.token)).length;
+  } catch (err) {
+    if (err instanceof GoTrueError) {
+      request.log.warn({ status: err.status, code: err.code }, "passkey count unavailable");
+    } else {
+      request.log.warn({ err: safeErrorLog(err) }, "passkey count unavailable");
+    }
+    return 0;
+  }
+}
 
 interface BabyRef {
   id: string;
@@ -145,13 +168,16 @@ export function accountRoutes(app: FastifyInstance, runtime: AuthRuntime): void 
     url: "/me/deletion-preview",
     schema: { response: { 200: deletionPreviewResponseSchema } },
     preHandler: requireAuth,
-    handler: async (request): Promise<DeletionPreviewResponse> =>
-      withClaims(request, async (client, ctx) => ({
+    handler: async (request): Promise<DeletionPreviewResponse> => {
+      const preview = await withClaims(request, async (client, ctx) => ({
         blockingBabies: await blockingBabies(client, ctx.uid),
         babiesKept: await keptBabies(client, ctx.uid),
         freshSignIn: ctx.isFresh,
         googlePhotosConnected: await googlePhotosConnected(client, ctx.uid),
-      })),
+      }));
+      // Outside the transaction: a network call must not hold a database connection.
+      return { ...preview, passkeys: await passkeyCount(request, runtime) };
+    },
   });
 
   r.route({

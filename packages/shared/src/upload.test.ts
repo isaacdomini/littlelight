@@ -123,16 +123,19 @@ describe("enums match the migration CHECK constraints (value and order)", () => 
   it("upload_files.state", () => {
     expect(uploadFileStateSchema.options).toEqual(checkValues("state"));
   });
-  it("upload_files.error (migration 21 extends the CHECK with pending_limit)", () => {
-    // The original CHECK (this migration) is superseded by migration 21; compare with the last one.
+  it("upload_files.error (migration 21 added pending_limit; migration 22 adds video_too_long, transcode_failed)", () => {
+    // The original CHECK (this migration) was superseded by migration 21 and again by migration 22
+    // (`1792500000100_video.sql`); compare with the latest one (its up section only).
     const latest = readFileSync(
-      new URL("../../db/migrations/1792400000100_free-tier-abuse.sql", import.meta.url),
+      new URL("../../db/migrations/1792500000100_video.sql", import.meta.url),
       "utf8",
     ).split("-- Down Migration")[0] as string;
     const m = /upload_files_error_check\s+CHECK \(error IN \(([^)]*)\)/s.exec(latest);
     const values = [...(m?.[1] ?? "").matchAll(/'([^']+)'/g)].map((x) => x[1] as string);
     expect(uploadFileErrorSchema.options).toEqual(values);
     expect(values).toContain("pending_limit");
+    expect(values).toContain("video_too_long");
+    expect(values).toContain("transcode_failed");
     // the original values are a prefix: nothing was reordered or dropped
     expect(values.slice(0, checkValues("error").length)).toEqual(checkValues("error"));
   });

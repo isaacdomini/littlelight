@@ -1,5 +1,6 @@
 import type {
   BabyRole,
+  MediaKind,
   ShareAlbum,
   SharedPhotoAddedBy,
   ShareLink,
@@ -25,8 +26,11 @@ import type { ViewerSession } from "./viewer-auth";
 // Viewer side: every statement runs as the `viewer` role after `viewer_session_check`, so RLS
 // limits rows to the viewer's active link (`viewer_photo_ids()`) and derivative storage keys to
 // photos that are not hidden (`viewer_media_photo_ids()`): a hidden sensitive photo's key cannot
-// even be read, so it cannot be signed. Columns are always named (the viewer role has column
-// grants only). Nothing here logs a token, URL, name or tag.
+// even be read, so it cannot be signed. Videos (step 12, docs/plans/step-12.md 2.5; Q9) are rows
+// of `photos` with `media_kind = 'video'`: their `thumb`/`display` are the poster frame and the
+// only extra key a viewer may read is the `web` rendition (`viewer_web_photo_ids()` in the
+// derivatives policy; never the original, never a keyframe). Columns are always named (the viewer
+// role has column grants only). Nothing here logs a token, URL, name or tag.
 
 export type Tx = pg.PoolClient;
 
@@ -268,6 +272,10 @@ export async function loadViewerAlbum(client: Tx, session: ViewerSession): Promi
 
 export interface ViewerPhotoRow {
   id: string;
+  /** `photo` | `video` (step 12): the tile's duration badge and the player. */
+  media_kind: MediaKind;
+  /** Video duration; NULL for photos. */
+  duration_ms: number | null;
   /** UTC calendar date `YYYY-MM-DD` (review-fixes D19): viewers get no time of day. */
   taken_at: string | null;
   taken_at_estimated: boolean;
@@ -295,7 +303,8 @@ export async function listViewerPhotoRows(
 ): Promise<ViewerPhotoRow[]> {
   const keyset = keysetClause(cursor, 4);
   const { rows } = await client.query<ViewerPhotoRow>(
-    `SELECT p.id, to_char(p.taken_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS taken_at,
+    `SELECT p.id, p.media_kind, p.duration_ms,
+            to_char(p.taken_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS taken_at,
             p.taken_at_estimated, p.age_days, p.width, p.height,
             ${SHARE_SORT_KEY_SQL} AS sort_key,
             (${HIDDEN_SQL}) AS hidden,
@@ -315,7 +324,11 @@ export async function listViewerPhotoRows(
   return rows;
 }
 
-/** Storage keys of one derivative kind for visible (not hidden) photos; others simply absent. */
+/**
+ * Storage keys of one derivative kind for visible (not hidden) photos; others simply absent. For
+ * `web` the derivatives policy already admits video rows only (`viewer_web_photo_ids()`); the
+ * join repeats that in the statement so a photo never gets a `web` entry even if a key existed.
+ */
 export async function viewerDerivativeKeys(
   client: Tx,
   ids: readonly string[],
@@ -325,22 +338,37 @@ export async function viewerDerivativeKeys(
   const { rows } = await client.query<{ photo_id: string; storage_key: string }>(
     `SELECT d.photo_id, d.storage_key
        FROM public.photo_derivatives d
-      WHERE d.photo_id = ANY($1::uuid[]) AND d.kind = $2`,
+       JOIN public.photos p ON p.id = d.photo_id
+      WHERE d.photo_id = ANY($1::uuid[]) AND d.kind = $2
+        AND ($2 <> 'web' OR p.media_kind = 'video')`,
     [ids, kind],
   );
   return rows;
 }
 
-/** The `display` key and date of one visible photo, for a download; null when hidden/unknown. */
+export interface ViewerDownloadRow {
+  storage_key: string;
+  day: string;
+  media_kind: MediaKind;
+  /** The derivative to hand out: `display` for a photo, the `web` rendition for a video (Q9). */
+  kind: Extract<ViewerMediaKind, "display" | "web">;
+}
+
+/**
+ * The downloadable derivative of one visible item: the 1600 px `display` copy of a photo or the
+ * `web` rendition of a video (never an original); null when hidden, unknown or not yet rendered.
+ */
 export async function viewerDownloadRow(
   client: Tx,
   photoId: string,
-): Promise<{ storage_key: string; day: string } | null> {
-  const { rows } = await client.query<{ storage_key: string; day: string }>(
-    `SELECT d.storage_key, to_char(p.sort_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
-       FROM public.photo_derivatives d
-       JOIN public.photos p ON p.id = d.photo_id
-      WHERE d.photo_id = $1 AND d.kind = 'display'`,
+): Promise<ViewerDownloadRow | null> {
+  const { rows } = await client.query<ViewerDownloadRow>(
+    `SELECT d.storage_key, to_char(p.sort_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+            p.media_kind, d.kind
+       FROM public.photos p
+       JOIN public.photo_derivatives d ON d.photo_id = p.id
+        AND d.kind = CASE WHEN p.media_kind = 'video' THEN 'web' ELSE 'display' END
+      WHERE p.id = $1`,
     [photoId],
   );
   return rows[0] ?? null;
@@ -348,11 +376,16 @@ export async function viewerDownloadRow(
 
 /**
  * Object key shape of a viewer-servable derivative. Belt and braces on top of RLS: a key that is
- * not `…/derivatives/<uuid>/(thumb|display).jpg` is never signed.
+ * not `…/derivatives/<uuid>/(thumb|display).jpg` or `…/derivatives/<uuid>/web.mp4` is never signed.
  */
-const VIEWER_KEY_RE = /^babies\/[0-9a-f-]{36}\/derivatives\/([0-9a-f-]{36})\/(thumb|display)\.jpg$/;
+const VIEWER_KEY_RE =
+  /^babies\/[0-9a-f-]{36}\/derivatives\/([0-9a-f-]{36})\/(?:(thumb|display)\.jpg|(web)\.mp4)$/;
 
-/** Sign a derivative key for a viewer; throws (500) for anything but this photo's thumb/display. */
+/**
+ * Sign a derivative key for a viewer; throws (500) for anything but this photo's thumb/display
+ * (JPEG) or web rendition (served as `video/mp4` so `<video>` plays it with range requests; the
+ * signer adds `Cache-Control: private`).
+ */
 export function signViewerKey(
   signer: UrlSigner,
   key: string,
@@ -362,9 +395,10 @@ export function signViewerKey(
   contentDisposition?: string,
 ): Promise<SignedUrl> {
   const m = VIEWER_KEY_RE.exec(key);
-  if (!m || m[1] !== photoId || m[2] !== kind) throw internalError();
+  if (!m || m[1] !== photoId || (m[2] ?? m[3]) !== kind) throw internalError();
   return signer.signGet(key, {
     ttlSec,
+    ...(kind === "web" ? { contentType: "video/mp4" } : {}),
     ...(contentDisposition ? { contentDisposition } : {}),
   });
 }
@@ -381,6 +415,8 @@ export async function toViewerPhoto(
       : null;
   return {
     id: r.id,
+    mediaKind: r.media_kind,
+    durationMs: r.media_kind === "video" ? r.duration_ms : null,
     takenAt: r.taken_at,
     takenAtEstimated: r.taken_at_estimated,
     ageDays: r.age_days,

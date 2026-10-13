@@ -854,3 +854,182 @@ describe("reads", () => {
     expect(g.plugin.requestAuthorization).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---- step 12 leftovers (docs/plans/step-12.md 2.5): the plan travels with the stored config and
+// the one-time `includeLimitSkipped` pass after an upgrade ---------------------------------------
+
+describe("plan persistence and the upgrade pass", () => {
+  const withPlan = (h: Harness, plans: (string | undefined)[]) => {
+    const queue = [...plans];
+    return new PhotoSyncManager({
+      ...h.deps,
+      plan: async () => (queue.length > 1 ? queue.shift() : queue[0]) as never,
+    });
+  };
+
+  it("the plan seen on a run is persisted into the stored config (survives a restart)", async () => {
+    const h = make({ pending: [[asset(1)], []] });
+    const m = withPlan(h, ["free"]);
+    await m.load();
+    await m.runSync("manual");
+    const stored = JSON.parse(h.kv.data.get(SYNC_CONFIG_KEY) ?? "{}") as { plan?: string };
+    expect(stored.plan).toBe("free");
+    // no includeLimitSkipped on an ordinary run
+    expect(h.plugin.listPendingAssets).toHaveBeenNthCalledWith(1, {
+      albumId: ALBUM,
+      limit: SYNC_FOREGROUND_BATCH,
+    });
+  });
+
+  it("free -> plus: exactly one listing passes includeLimitSkipped, then never again", async () => {
+    const h = make({ pending: [[asset(1)], [], [asset(2)], [], [asset(3)], []] });
+    const m = withPlan(h, ["free", "plus", "plus"]);
+    await m.load();
+    h.clock.t += 120_000;
+    await m.runSync("manual"); // sees "free"
+    h.clock.t += 120_000;
+    await m.runSync("manual"); // sees "plus": the upgrade pass
+    h.clock.t += 120_000;
+    await m.runSync("manual"); // "plus" again: ordinary
+    const firstCalls = h.plugin.listPendingAssets.mock.calls.map(
+      (c) => (c[0] as { includeLimitSkipped?: boolean }).includeLimitSkipped === true,
+    );
+    expect(firstCalls.filter(Boolean)).toHaveLength(1);
+    const stored = JSON.parse(h.kv.data.get(SYNC_CONFIG_KEY) ?? "{}") as { plan?: string };
+    expect(stored.plan).toBe("plus");
+  });
+
+  it("the stored plan seeds the comparison after a restart: a new manager that now sees plus runs the upgrade pass once", async () => {
+    const h = make({ cfg: { ...CFG, plan: "free" }, pending: [[asset(1)], [], [asset(2)], []] });
+    const m = withPlan(h, ["plus"]);
+    await m.load();
+    await m.runSync("manual");
+    h.clock.t += 120_000;
+    await m.runSync("manual");
+    const flagged = h.plugin.listPendingAssets.mock.calls.filter(
+      (c) => (c[0] as { includeLimitSkipped?: boolean }).includeLimitSkipped === true,
+    );
+    expect(flagged).toHaveLength(1);
+  });
+
+  it("an unknown plan (offline) persists nothing and never triggers the pass", async () => {
+    const h = make({ pending: [[asset(1)], []] });
+    const m = withPlan(h, [undefined]);
+    await m.load();
+    await m.runSync("manual");
+    const stored = JSON.parse(h.kv.data.get(SYNC_CONFIG_KEY) ?? "{}") as { plan?: string };
+    expect(stored.plan).toBeUndefined();
+    expect(
+      h.plugin.listPendingAssets.mock.calls.some(
+        (c) => (c[0] as { includeLimitSkipped?: boolean }).includeLimitSkipped,
+      ),
+    ).toBe(false);
+  });
+});
+
+// ---- step 12: videos on the sync lane (docs/plans/step-12.md 2.9) ------------------------------
+
+describe("videos on the sync lane", () => {
+  const vid = (n: number, over: Record<string, unknown> = {}) => ({
+    ...asset(n),
+    kind: "video" as const,
+    durationMs: 10_000,
+    size: 20_000_000,
+    ...over,
+  });
+  const vfile = (n: number, over: Record<string, unknown> = {}) =>
+    file(n, {
+      kind: "video",
+      mime: "video/quicktime",
+      name: `IMG_${n}.MOV`,
+      durationMs: 10_000,
+      ...over,
+    });
+  const withPlan = (h: Harness, plan: "free" | "plus") =>
+    new PhotoSyncManager({ ...h.deps, plan: async () => plan });
+
+  it("free: a clip over 60 s or 250 MB is skipped BEFORE export (too_long / too_large), counted as skipped; the short one is exported", async () => {
+    const h = make({
+      pending: [
+        [vid(1, { durationMs: 61_000 }), vid(2, { size: 251 * 1024 * 1024 }), vid(3), asset(4)],
+        [],
+      ],
+      files: [vfile(3), file(4)],
+    });
+    const m = withPlan(h, "free");
+    await m.load();
+    await m.runSync("manual");
+    const exported = h.plugin.exportAssets.mock.calls.map((c) => (c[0] as { ids: string[] }).ids);
+    expect(exported.flat().sort()).toEqual(["ASSET-3/L0/001", "ASSET-4/L0/001"]);
+    const limitCall = h.plugin.recordOutcomes.mock.calls.find((c) =>
+      (c[0] as { outcomes: { outcome: string }[] }).outcomes.some((o) => o.outcome === "too_long"),
+    );
+    expect((limitCall?.[0] as { outcomes: unknown[] } | undefined)?.outcomes).toEqual([
+      { id: "ASSET-1/L0/001", outcome: "too_long" },
+      { id: "ASSET-2/L0/001", outcome: "too_large" },
+    ]);
+    const bodies = patchBodies(h);
+    expect(bodies.some((b) => b.skippedDelta === 2)).toBe(true);
+    // the upload refs carry durationMs for the video, nothing else about the asset
+    const refs = (h.uploads.addNative as ReturnType<typeof vi.fn>).mock.calls.flatMap(
+      (c) => c[1] as { durationMs?: number; name: string }[],
+    );
+    expect(refs.find((r) => r.name === "IMG_3.MOV")?.durationMs).toBe(10_000);
+    expect(JSON.stringify(h.api.mock.calls)).not.toMatch(/ASSET-|IMG_3|\/private\/var/);
+  });
+
+  it("plus: the same clips are exported (5 min / 2 GB limits)", async () => {
+    const h = make({
+      pending: [[vid(1, { durationMs: 61_000 }), vid(2, { size: 251 * 1024 * 1024 })], []],
+      files: [vfile(1, { durationMs: 61_000 }), vfile(2, { size: 251 * 1024 * 1024 })],
+    });
+    const m = withPlan(h, "plus");
+    await m.load();
+    await m.runSync("manual");
+    expect(
+      h.plugin.recordOutcomes.mock.calls.some((c) =>
+        (c[0] as { outcomes: { outcome: string }[] }).outcomes.some((o) => /too_/.test(o.outcome)),
+      ),
+    ).toBe(false);
+    expect(h.plugin.exportAssets).toHaveBeenCalled();
+  });
+
+  it("one video per batch: the second video waits for the next batch while photos go along", async () => {
+    const h = make({ pending: [[vid(1), vid(2), asset(3)], []], files: [vfile(1), file(3)] });
+    const m = withPlan(h, "plus");
+    await m.load();
+    await m.runSync("manual");
+    const firstIds = (h.plugin.exportAssets.mock.calls[0]?.[0] as { ids: string[] } | undefined)
+      ?.ids;
+    expect(firstIds).toEqual(["ASSET-1/L0/001", "ASSET-3/L0/001"]);
+  });
+
+  it("an iCloud-only video whose size was unknown is dropped after export when it exceeds the plan cap", async () => {
+    const h = make({
+      pending: [[vid(1, { size: null })], []],
+      files: [vfile(1, { size: 300 * 1024 * 1024 })],
+    });
+    const m = withPlan(h, "free");
+    await m.load();
+    await m.runSync("manual");
+    expect(h.uploads.addNative).not.toHaveBeenCalled();
+    expect(recorded(h)).toEqual([{ id: "ASSET-1/L0/001", outcome: "too_large" }]);
+  });
+
+  it("videos stay Wi-Fi only on the sync lane whatever the album setting", async () => {
+    const h = make({
+      cfg: { ...CFG, wifiOnly: false },
+      pending: [[vid(1)], []],
+      files: [vfile(1)],
+    });
+    const m = withPlan(h, "plus");
+    await m.load();
+    await m.runSync("manual");
+    const opts = (h.uploads.addNative as ReturnType<typeof vi.fn>).mock.calls[0]?.[3] as {
+      wifiOnly?: boolean;
+      lane: string;
+    };
+    expect(opts.lane).toBe("sync");
+    expect(opts.wifiOnly).toBe(true);
+  });
+});

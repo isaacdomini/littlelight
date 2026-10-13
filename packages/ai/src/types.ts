@@ -6,7 +6,9 @@
  *
  * Privacy rules encoded here (PRD "AI pipeline", "Privacy and child safety"):
  * - Requests carry the compressed 768 px **analysis copy** only. Never the original, never a
- *   display/thumbnail derivative, never EXIF (the analysis copy is EXIF-stripped).
+ *   display/thumbnail derivative, never EXIF (the analysis copy is EXIF-stripped). A video item
+ *   (step 12) carries its poster (`analysis`) plus up to three 768 px keyframes, each held to
+ *   the same rule; never the original clip, never the `web` rendition.
  * - Requests never carry GPS or coordinates. Place is a human-readable, coarse label at most.
  * - Requests are only built for paid-tier babies; the enqueue step checks `babies.plan`
  *   server-side, and `plan: "paid"` below makes a free-tier request a type error.
@@ -77,6 +79,22 @@ export interface VisionContext {
   milestone: string | null;
   /** Free-text parent notes. Sensitive: never log. */
   parentNotes: string | null;
+  /**
+   * Video items only (step 12; `aiVisionMediaSchema` in `@tinyglow/shared`): the per-item text
+   * tells the model that the attached images are `frameCount` frames sampled from one
+   * `durationSeconds`-second clip. `frameCount` must equal `1 + frames.length` of the request.
+   * Absent for photos.
+   */
+  media?: VisionMedia;
+}
+
+/** Mirrors `aiVisionMediaSchema` (`@tinyglow/shared`). */
+export interface VisionMedia {
+  kind: "video";
+  /** Whole seconds, ≥ 1. */
+  durationSeconds: number;
+  /** Images in the request (poster + keyframes), 1..`AI_VIDEO_MAX_FRAMES`. */
+  frameCount: number;
 }
 
 export interface VisionRequest {
@@ -87,7 +105,14 @@ export interface VisionRequest {
    * enqueue time. Typed as the literal `"paid"` so a free-tier request cannot be constructed.
    */
   plan: "paid";
+  /** The analysis copy; for a video, its poster frame (the `analysis` derivative). */
   image: AnalysisImage;
+  /**
+   * Video items only (step 12): the `keyframe1..3` derivatives (768 px, ≤ 400 KB each), sent
+   * after `image` as further images of the same request. Every frame passes
+   * `assertAnalysisImage`; at most `AI_VIDEO_MAX_FRAMES - 1` entries. Requires `context.media`.
+   */
+  frames?: AnalysisImage[];
   context: VisionContext;
   /** Prompt version recorded on `photo_ai` so FR-5.7 backfills can target old versions. */
   promptVersion: string;

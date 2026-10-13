@@ -102,6 +102,8 @@ describe("signViewerKey", () => {
 describe("toViewerPhoto", () => {
   const row = (over: Partial<ViewerPhotoRow> = {}): ViewerPhotoRow => ({
     id: P1,
+    media_kind: "photo",
+    duration_ms: null,
     taken_at: "2026-06-14",
     taken_at_estimated: false,
     age_days: 105,
@@ -122,9 +124,11 @@ describe("toViewerPhoto", () => {
     expect(Object.keys(out).sort()).toEqual(
       [
         "ageDays",
+        "durationMs",
         "height",
         "hidden",
         "id",
+        "mediaKind",
         "milestone",
         "takenAt",
         "takenAtEstimated",
@@ -169,6 +173,8 @@ describe("strictViewerBody", () => {
   const log = () => ({ error: vi.fn() }) as never;
   const photo = {
     id: P1,
+    mediaKind: "photo",
+    durationMs: null,
     takenAt: null,
     takenAtEstimated: false,
     ageDays: null,

@@ -4,8 +4,8 @@ import { ApiError } from "../api";
 import { type UploadItem, UploadManager } from "./manager";
 
 // UploadManager with native file references (docs/plans/step-9.md 2.6, 2.15): single-part files
-// go to the background uploader straight from disk (`putFile`), multi-part files fall back to
-// `putPart` with blobs, rejected files never reach the API, working copies are released.
+// go to the background uploader straight from disk (`putFile`), multi-part files are one ranged
+// `putFile` per part (step 12), rejected files never reach the API, working copies are released.
 
 // The manager imports this module lazily, once per released copy, without awaiting. The test
 // runner only applies the mock to the FIRST of several such overlapping imports, so tests that
@@ -13,6 +13,9 @@ import { type UploadItem, UploadManager } from "./manager";
 const files = vi.hoisted(() => ({
   fileFromRef: vi.fn(),
   deleteNativeCopy: vi.fn(),
+  // Native videos are never read into the WebView: the duration comes from the ref or from a
+  // metadata-only <video> on the file URL (undefined here: no browser demuxer in jsdom).
+  nativeVideoDuration: vi.fn(async (): Promise<number | undefined> => undefined),
 }));
 vi.mock("../../platform/native/files", () => files);
 vi.mock("./hash", () => ({ sha256Hex: vi.fn(async () => "a".repeat(64)) }));
@@ -167,7 +170,7 @@ describe("UploadManager.addNative", () => {
     await vi.waitFor(() => expect(files.deleteNativeCopy).toHaveBeenCalled());
   });
 
-  it("a multi-part photo (larger than the part size) falls back to putPart with blob slices", async () => {
+  it("a multi-part file (larger than the part size) goes through putFile once per part with a byte range", async () => {
     scriptApi({ partSize: 100 });
     const up = fakeUploader();
     files.fileFromRef.mockImplementation(
@@ -177,11 +180,18 @@ describe("UploadManager.addNative", () => {
     const m = new UploadManager({ uploader: () => up });
     m.addNative(BABY, [ref({ size: 250 })]);
     await settle(m, (i) => i[0]?.state === "ingested");
-    expect(up.putFile).not.toHaveBeenCalled();
-    expect(up.putPart).toHaveBeenCalledTimes(3);
-    expect(up.putPart.mock.calls.map((c) => (c[1] as Blob).size)).toEqual([100, 100, 50]);
-    // bytes read for the hash and again for the foreground PUT
-    expect(files.fileFromRef.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(up.putPart).not.toHaveBeenCalled();
+    expect(up.putFile).toHaveBeenCalledTimes(3);
+    expect(
+      up.putFile.mock.calls.map((c) => {
+        const o = c[2] as { offset?: number; length?: number };
+        return [o.offset, o.length];
+      }),
+    ).toEqual([
+      [0, 100],
+      [100, 100],
+      [200, 50],
+    ]);
   });
 
   it("falls back to putPart when the uploader has no putFile (web uploader in a native shell)", async () => {
@@ -318,5 +328,199 @@ describe("UploadManager.addNative", () => {
     m.addNative(BABY, [ref()]);
     await settle(m, (i) => i[0]?.state === "failed");
     for (const s of spies) expect(JSON.stringify(s.mock.calls)).not.toMatch(/sig=|ll-uploads/);
+  });
+});
+
+// ---- step 12 leftovers (docs/plans/step-12.md 2.5, Q6): native uploader refusals and the
+// persisted cellular preference ------------------------------------------------------------------
+
+describe("UploadManager.addNative: local refusals and the large-video Wi-Fi default", () => {
+  it("a `bad-range` on the first part of a multi-part video fails the whole item promptly (no part retries)", async () => {
+    scriptApi();
+    const up = fakeUploader();
+    up.putFile.mockImplementation(async () => {
+      throw new PartUploadError(0, "bad-range");
+    });
+    const m = new UploadManager({ uploader: () => up });
+    m.addNative(BABY, [ref({ size: 40 * 1024 * 1024, mime: "video/mp4", name: "clip.mp4" })]);
+    await vi.waitFor(() => expect(m.getSnapshot()[0]?.state).toBe("failed"), { timeout: 20_000 });
+    expect(m.getSnapshot()[0]).toMatchObject({ error: "bad_range", retryable: false });
+    expect(up.putFile).toHaveBeenCalledTimes(1);
+  }, 25_000);
+
+  it("a `no-space` refusal from the uploader fails the item as no_space, NOT retryable, and releases the copy", async () => {
+    scriptApi();
+    const up = fakeUploader();
+    up.putFile.mockImplementation(async () => {
+      throw new PartUploadError(0, "no-space");
+    });
+    const m = new UploadManager({ uploader: () => up });
+    const r = ref();
+    m.addNative(BABY, [r]);
+    await settle(m, (i) => i[0]?.state === "failed");
+    expect(m.getSnapshot()[0]).toMatchObject({ error: "no_space", retryable: false });
+    await vi.waitFor(() => expect(files.deleteNativeCopy).toHaveBeenCalledWith(r));
+  });
+
+  it("a `bad-range` refusal (file changed under us) fails the item as bad_range, not retryable", async () => {
+    scriptApi();
+    const up = fakeUploader();
+    up.putFile.mockImplementation(async () => {
+      throw new PartUploadError(0, "bad-range");
+    });
+    const m = new UploadManager({ uploader: () => up });
+    m.addNative(BABY, [ref({ name: "range.jpg" })]);
+    await settle(m, (i) => i[0]?.state === "failed");
+    expect(m.getSnapshot()[0]).toMatchObject({ error: "bad_range", retryable: false });
+    // the refusal is final: putFile was tried once, never retried with a backoff
+    expect(up.putFile).toHaveBeenCalledTimes(1);
+    // Retry is a no-op for a non-retryable failure
+    const id = m.getSnapshot()[0]?.clientId as string;
+    m.retry(id);
+    expect(m.getSnapshot()[0]?.state).toBe("failed");
+  });
+
+  it("a large video defaults to Wi-Fi only, unless the Settings preference allows cellular or the item says otherwise", async () => {
+    const { setCellularForLargeVideos } = await import("./prefs");
+    scriptApi();
+    const big = ref({ size: 60 * 1024 * 1024, mime: "video/mp4", name: "big.mp4" });
+    const small = ref({ size: 1_000_000, name: "small.jpg" });
+
+    const m1 = new UploadManager({ uploader: () => fakeUploader() });
+    m1.addNative(BABY, [big, small]);
+    expect(m1.getSnapshot().map((i) => i.wifiOnly)).toEqual([true, false]);
+
+    setCellularForLargeVideos(true);
+    const m2 = new UploadManager({ uploader: () => fakeUploader() });
+    m2.addNative(BABY, [big]);
+    expect(m2.getSnapshot()[0]?.wifiOnly).toBe(false);
+
+    setCellularForLargeVideos(false);
+    const m3 = new UploadManager({ uploader: () => fakeUploader() });
+    m3.addNative(BABY, [big], undefined, { wifiOnly: false });
+    expect(m3.getSnapshot()[0]?.wifiOnly).toBe(false);
+    const m4 = new UploadManager({ uploader: () => fakeUploader() });
+    m4.addNative(BABY, [small], undefined, { wifiOnly: true });
+    expect(m4.getSnapshot()[0]?.wifiOnly).toBe(true);
+  });
+});
+
+describe("UploadManager.addNative: native videos are never read into the WebView (iOS fix)", () => {
+  /** The register body for `m`'s first item (a previous test's manager may still be registering). */
+  const regBody = (m: UploadManager) => {
+    const clientId = m.getSnapshot()[0]?.clientId;
+    for (const c of api.calls) {
+      if (c.path !== `/uploads/${SESSION}/files`) continue;
+      const f = (c.body as { files?: Record<string, unknown>[] }).files?.find(
+        (x) => x.clientId === clientId,
+      );
+      if (f) return f;
+    }
+    return undefined;
+  };
+  const clip = (over: Partial<{ durationMs: number; mime: string; size: number }> = {}) => ({
+    ...ref({
+      path: "file:///cache/ll-uploads/x.mov",
+      name: "clip.mov",
+      mime: "video/quicktime",
+      size: 5_000_000,
+    }),
+    ...over,
+  });
+
+  beforeEach(() => {
+    files.nativeVideoDuration.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("(1) a video ref with a picker duration: fileFromRef is never called; registered as kind video with durationMs and the ref's size, no clientSha256", async () => {
+    scriptApi();
+    const up = fakeUploader();
+    const m = new UploadManager({ uploader: () => up });
+    const r = clip({ durationMs: 12_000 });
+    m.addNative(BABY, [r], undefined, { plan: "plus" });
+    await settle(m, (i) => i[0]?.state === "ingested");
+    expect(files.fileFromRef).not.toHaveBeenCalled();
+    expect(files.nativeVideoDuration).not.toHaveBeenCalled();
+    const sent = regBody(m);
+    expect(sent).toMatchObject({ kind: "video", durationMs: 12_000, bytes: 5_000_000 });
+    expect(sent).not.toHaveProperty("clientSha256");
+    expect(m.getSnapshot()[0]).toMatchObject({ kind: "video", durationMs: 12_000 });
+    expect(up.putFile.mock.calls[0]?.[1]).toBe(r);
+  });
+
+  it("(2) without a picker duration the metadata-only reader runs once; its result lands in the item and the register body; undefined registers without durationMs", async () => {
+    scriptApi();
+    files.nativeVideoDuration.mockResolvedValueOnce(7_250);
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    const r = clip();
+    m.addNative(BABY, [r], undefined, { plan: "plus" });
+    await settle(m, (i) => i[0]?.state === "ingested");
+    expect(files.nativeVideoDuration).toHaveBeenCalledTimes(1);
+    expect(files.nativeVideoDuration).toHaveBeenCalledWith(r);
+    expect(files.fileFromRef).not.toHaveBeenCalled();
+    expect(m.getSnapshot()[0]).toMatchObject({ durationMs: 7_250 });
+    expect(regBody(m)).toMatchObject({ kind: "video", durationMs: 7_250 });
+
+    const m2 = new UploadManager({ uploader: () => fakeUploader() });
+    m2.addNative(BABY, [clip({ size: 4_000_000 })], undefined, { plan: "plus" });
+    await settle(m2, (i) => i[0]?.state === "ingested");
+    expect(files.nativeVideoDuration).toHaveBeenCalledTimes(2);
+    const sent = regBody(m2);
+    expect(sent).toMatchObject({ kind: "video", bytes: 4_000_000 });
+    expect(sent).not.toHaveProperty("durationMs");
+    expect(sent).not.toHaveProperty("clientSha256");
+    expect(m2.getSnapshot()[0]).not.toHaveProperty("durationMs");
+  });
+
+  it("(3) a rejecting duration reader still registers the clip (the worker's ffprobe is the truth)", async () => {
+    scriptApi();
+    files.nativeVideoDuration.mockRejectedValueOnce(new Error("no demuxer file:///cache/x.mov"));
+    const up = fakeUploader();
+    const m = new UploadManager({ uploader: () => up });
+    m.addNative(BABY, [clip()], undefined, { plan: "free" });
+    await settle(m, (i) => i[0]?.state === "ingested");
+    expect(regBody(m)).toMatchObject({ kind: "video" });
+    expect(regBody(m)).not.toHaveProperty("durationMs");
+    expect(up.putFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("(4) a free-plan video ref of 61 s fails video_too_long before any API call and releases the copy", async () => {
+    scriptApi();
+    const up = fakeUploader();
+    const m = new UploadManager({ uploader: () => up });
+    const r = clip({ durationMs: 61_000 });
+    m.addNative(BABY, [r], undefined, { plan: "free" });
+    expect(m.getSnapshot()[0]).toMatchObject({
+      state: "failed",
+      error: "video_too_long",
+      retryable: false,
+      kind: "video",
+    });
+    expect(regBody(m)).toBeUndefined();
+    expect(up.putFile).not.toHaveBeenCalled();
+    expect(files.fileFromRef).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(files.deleteNativeCopy).toHaveBeenCalledWith(r));
+  });
+
+  it("(4b) the same 61 s learnt from the metadata reader fails video_too_long after queueing, still with no API call", async () => {
+    scriptApi();
+    files.nativeVideoDuration.mockResolvedValueOnce(61_000);
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    const r = clip();
+    m.addNative(BABY, [r], undefined, { plan: "free" });
+    await settle(m, (i) => i[0]?.state === "failed");
+    expect(m.getSnapshot()[0]).toMatchObject({ error: "video_too_long", durationMs: 61_000 });
+    expect(regBody(m)).toBeUndefined();
+    await vi.waitFor(() => expect(files.deleteNativeCopy).toHaveBeenCalledWith(r));
+  });
+
+  it("(5) a photo ref still goes through fileFromRef (hash + EXIF) and registers with a clientSha256", async () => {
+    scriptApi();
+    const m = new UploadManager({ uploader: () => fakeUploader() });
+    m.addNative(BABY, [ref({ size: 2222 })]);
+    await settle(m, (i) => i[0]?.state === "ingested");
+    expect(files.fileFromRef).toHaveBeenCalledTimes(1);
+    expect(files.nativeVideoDuration).not.toHaveBeenCalled();
+    expect(regBody(m)).toMatchObject({ kind: "photo", bytes: 2222, clientSha256: "a".repeat(64) });
   });
 });

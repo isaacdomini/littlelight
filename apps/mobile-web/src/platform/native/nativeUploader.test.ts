@@ -214,7 +214,7 @@ describe("nativeUploader.putFile", () => {
 });
 
 describe("nativeUploader.putPart", () => {
-  it("multi-part files still use the web XHR uploader", async () => {
+  it("blob parts (no file reference) still use the web XHR uploader", async () => {
     const up = await load();
     expect(typeof up.putPart).toBe("function");
     expect(typeof up.putFile).toBe("function");
@@ -241,5 +241,60 @@ describe("nativeUploader with a Capacitor-style Proxy plugin", () => {
     await Promise.resolve();
     emit("done", { id: "px", status: 200 });
     await expect(p).resolves.toBeUndefined();
+  });
+});
+
+describe("nativeUploader.putFile: ranged parts (step 12)", () => {
+  it("passes offset/length (and wifiOnly) through to the plugin for one part of a multi-part file", async () => {
+    const up = await load();
+    plugin.upload.mockResolvedValue({ id: "u1" });
+    const p = up.putFile?.(URL_, file, {
+      offset: 16 * 1024 * 1024,
+      length: 16 * 1024 * 1024,
+      wifiOnly: true,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    emit("done", { id: "u1", status: 200 });
+    await p;
+    expect(plugin.upload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: URL_,
+        path: file.path,
+        offset: 16 * 1024 * 1024,
+        length: 16 * 1024 * 1024,
+        wifiOnly: true,
+      }),
+    );
+  });
+
+  it("a single-part file sends no range and no wifiOnly key", async () => {
+    const up = await load();
+    plugin.upload.mockResolvedValue({ id: "u2" });
+    const p = up.putFile?.(URL_, file, {});
+    await new Promise((r) => setTimeout(r, 0));
+    emit("done", { id: "u2", status: 200 });
+    await p;
+    const arg = plugin.upload.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("offset" in arg).toBe(false);
+    expect("length" in arg).toBe(false);
+    expect("wifiOnly" in arg).toBe(false);
+  });
+
+  it("a local refusal (no-space / bad-range) comes back from upload() itself as a PartUploadError with the reason, never a message", async () => {
+    const up = await load();
+    const { PartUploadError } = await import("../uploader");
+    for (const reason of ["no-space", "bad-range"] as const) {
+      plugin.upload.mockReset().mockRejectedValue({
+        code: reason,
+        message: "/private/var/secret/path X-Amz-Signature=abc",
+      });
+      const putFile = up.putFile as NonNullable<typeof up.putFile>;
+      const err = await putFile(URL_, file, { offset: 0, length: 10 }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(PartUploadError);
+      expect((err as InstanceType<typeof PartUploadError>).reason).toBe(reason);
+      expect((err as InstanceType<typeof PartUploadError>).status).toBe(0);
+      expect((err as Error).message).not.toContain("X-Amz-Signature");
+      expect((err as Error).message).not.toContain("/private/var");
+    }
   });
 });

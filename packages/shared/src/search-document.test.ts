@@ -319,3 +319,41 @@ describe("buildSearchDocument: limits and determinism", () => {
     expect(doc.text).not.toMatch(/[\u0000-\u0008]/);
   });
 });
+
+describe("buildSearchDocument: videos (step 12) leave photo documents byte-identical", () => {
+  it("a photo input renders the same text whether mediaKind is omitted or 'photo'", () => {
+    const before = buildSearchDocument(input());
+    const explicit = buildSearchDocument(input({ mediaKind: "photo", durationMs: null }));
+    expect(explicit).toEqual(before);
+    expect(before.text).not.toContain("Video clip");
+    expect(before.docVersion).toBe(SEARCH_DOC_VERSION);
+  });
+
+  it("a video appends exactly one fixed sentence with its duration, after the note", () => {
+    const photo = buildSearchDocument(input());
+    const video = buildSearchDocument(input({ mediaKind: "video", durationMs: 42_000 }));
+    expect(video.text).toBe(`${photo.text} Video clip, 42 seconds.`);
+    expect(video.tags).toEqual(photo.tags);
+    expect(video.warnings).toEqual([]);
+    expect(buildSearchDocument(input({ mediaKind: "video", durationMs: 125_000 })).text).toMatch(
+      / Video clip, 2 minutes 5 seconds\.$/,
+    );
+    expect(buildSearchDocument(input({ mediaKind: "video", durationMs: 60_000 })).text).toMatch(
+      / Video clip, 1 minute\.$/,
+    );
+    expect(buildSearchDocument(input({ mediaKind: "video", durationMs: 1_000 })).text).toMatch(
+      / Video clip, 1 second\.$/,
+    );
+    expect(buildSearchDocument(input({ mediaKind: "video" })).text).toMatch(/ Video clip\.$/);
+  });
+
+  it("rejects an unknown media kind and a non-positive duration", () => {
+    expect(searchDocumentInputSchema.safeParse({ ...input(), mediaKind: "gif" }).success).toBe(
+      false,
+    );
+    expect(
+      searchDocumentInputSchema.safeParse({ ...input(), mediaKind: "video", durationMs: 0 })
+        .success,
+    ).toBe(false);
+  });
+});

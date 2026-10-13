@@ -1,1 +1,1 @@
-baby,photos,album,milestones,newborn,parenting,family,private,memories,search,grandparents
+baby,photos,videos,album,milestones,newborn,parenting,family,private,memories,search

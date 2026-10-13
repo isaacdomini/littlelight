@@ -519,6 +519,17 @@ export const reviewAccountEnvSchema = z
   });
 export type ReviewAccountEnv = z.infer<typeof reviewAccountEnvSchema>;
 
+/**
+ * Passkeys (docs/plans/step-13.md 2.3, 2.7), api only. `AUTH_PASSKEYS_ENABLED` must equal
+ * GoTrue's `GOTRUE_PASSKEY_ENABLED` (both compose files feed them from the one `.env` flag, like
+ * the social providers); when false every `/auth/passkey/*` and `/me/passkeys*` route answers
+ * 404 `passkey_disabled` and `GET /auth/config` reports `passkeys: false`.
+ */
+export const passkeyEnvSchema = z.object({
+  AUTH_PASSKEYS_ENABLED: z.preprocess(emptyAsUndefined, z.stringbool().default(false)),
+});
+export type PasskeyEnv = z.infer<typeof passkeyEnvSchema>;
+
 /** True when the store-review sign-in is configured (both review vars set). */
 export function reviewAccountEnabled(
   env: ReviewAccountEnv,
@@ -544,6 +555,73 @@ export const exportEnvSchema = z.object({
   ),
 });
 export type ExportEnv = z.infer<typeof exportEnvSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Video (docs/plans/step-12.md 2.3, 2.6, 2.10, Q8). Worker only; the api needs nothing new.
+// ---------------------------------------------------------------------------------------------
+
+/** Defaults of `videoEnvSchema`. */
+export const VIDEO_DEFAULTS = {
+  /** `video.transcode` jobs in flight (each one is a whole ffmpeg process). */
+  VIDEO_CONCURRENCY: 1,
+  /**
+   * Disk-backed folder where originals are staged and renditions written (Q8): the 1 GiB `/tmp`
+   * tmpfs cannot hold a 2 GB clip plus its rendition. Production mounts `WORKER_SCRATCH_PATH`
+   * (e.g. `/mnt/data/tinyglow/scratch`) at `/scratch`; dev uses a named volume at the same path;
+   * tests may point it at `/tmp/ll-scratch`.
+   */
+  WORKER_SCRATCH_PATH: "/scratch",
+  FFMPEG_PATH: "ffmpeg",
+  FFPROBE_PATH: "ffprobe",
+  /** `-threads` of libx264 (a 2-vCPU box keeps one for ingest). */
+  VIDEO_FFMPEG_THREADS: 2,
+  /** One ffmpeg run is killed after this long (then retried; the last attempt marks `transcode_failed`). */
+  VIDEO_TRANSCODE_TIMEOUT_SEC: 3600,
+} as const;
+
+const V = VIDEO_DEFAULTS;
+
+/** An absolute path with no whitespace or quotes (it is passed to ffmpeg as an argument). */
+const scratchPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(/^\/[^\s"'`$]*$/, "must be an absolute path")
+  .transform((p) => (p.length > 1 ? p.replace(/\/+$/, "") : p));
+
+/** An executable name or absolute path (no whitespace, quotes or shell characters). */
+const binaryPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(/^[A-Za-z0-9._/-]+$/, "must be a program name or path");
+
+/**
+ * Worker video settings. Every value is passed to `child_process.spawn` as a discrete argument
+ * (never a shell string), and ffmpeg never receives a URL: sources and outputs are files under
+ * `WORKER_SCRATCH_PATH`. Nothing here is a secret; errors still name the field only.
+ */
+export const videoEnvSchema = z.object({
+  VIDEO_CONCURRENCY: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(2).default(V.VIDEO_CONCURRENCY),
+  ),
+  WORKER_SCRATCH_PATH: z.preprocess(
+    emptyAsUndefined,
+    scratchPathSchema.default(V.WORKER_SCRATCH_PATH),
+  ),
+  FFMPEG_PATH: z.preprocess(emptyAsUndefined, binaryPathSchema.default(V.FFMPEG_PATH)),
+  FFPROBE_PATH: z.preprocess(emptyAsUndefined, binaryPathSchema.default(V.FFPROBE_PATH)),
+  VIDEO_FFMPEG_THREADS: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(1).max(8).default(V.VIDEO_FFMPEG_THREADS),
+  ),
+  VIDEO_TRANSCODE_TIMEOUT_SEC: z.preprocess(
+    emptyAsUndefined,
+    z.coerce.number().int().min(60).max(86_400).default(V.VIDEO_TRANSCODE_TIMEOUT_SEC),
+  ),
+});
+export type VideoEnv = z.output<typeof videoEnvSchema>;
 
 // ---------------------------------------------------------------------------------------------
 // Sentry (docs/plans/review-fixes.md 2.6, D8; PRD "Observability", "Environment variables":

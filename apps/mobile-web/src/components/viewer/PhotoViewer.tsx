@@ -1,6 +1,6 @@
 import { IonAlert, IonIcon, IonModal } from "@ionic/react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { PhotoSummary } from "@tinyglow/shared";
+import type { Photo, PhotoSummary } from "@tinyglow/shared";
 import {
   arrowUndoOutline,
   closeOutline,
@@ -31,6 +31,7 @@ import {
   photoKey,
   useDeletePhoto,
   usePhoto,
+  useRefreshUrls,
   useRestorePhoto,
 } from "../../lib/queries/photos";
 import { useProfileTimeZone } from "../../lib/units";
@@ -118,22 +119,197 @@ function ActionButton({
 /** Controls fade this long after the last interaction (docs/DESIGN.md: 2 s). */
 const CHROME_HIDE_MS = 2000;
 
+/**
+ * A video slide (docs/plans/step-12.md 2.8): the poster (display derivative) under a native
+ * `<video controls playsinline preload="metadata">` once the `web` rendition is ready; "Preparing
+ * video…" over the poster while `pending` (the detail query polls every 10 s); a failure line
+ * when `failed` (parents can still download the original from the action bar). A playback
+ * error asks for a fresh signed URL once (expired signature), then shows the browser's limit.
+ * Swiping is disabled while playing so the controls can be dragged. Videos are never written to
+ * the offline image cache.
+ */
+function VideoSlide({
+  photo,
+  detail,
+  active,
+  isAdmin,
+  onPlaying,
+}: {
+  photo: PhotoSummary;
+  detail: Photo | undefined;
+  active: boolean;
+  isAdmin: boolean;
+  onPlaying: (playing: boolean) => void;
+}) {
+  const { baby } = useCurrentBaby();
+  const timeZone = useProfileTimeZone();
+  const refresh = useRefreshUrls(photo.babyId);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // The element's `src`/`poster` are latched for its lifetime: every detail refetch (focus, the
+  // pending poll, the carousel prefetch) signs new URLs, and swapping `src` mid-play reloads the
+  // element and stops playback. They only change on a playback error (fresh signature), or when
+  // the latched URL has expired and nothing is playing.
+  const [media, setMedia] = useState<{
+    src: string;
+    poster: string | undefined;
+    expiresAt: number | null;
+  } | null>(null);
+  const src = media?.src ?? null;
+  const [failedPlayback, setFailedPlayback] = useState(false);
+  const refreshed = useRef(false);
+  const status = detail?.renditionStatus ?? photo.renditionStatus;
+  const displayUrl = detail?.displayUrl ?? null;
+  const posterUrl = displayUrl ?? photo.thumbUrl ?? undefined;
+  const name = baby ? baby.nickname?.trim() || baby.name : t("app.name");
+
+  const videoUrl = detail?.videoUrl ?? null;
+  const urlExpiresAt = detail?.urlExpiresAt ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the poster is latched with the url; re-signed poster URLs alone must not re-latch
+  useEffect(() => {
+    if (!videoUrl) return;
+    setMedia((cur) => {
+      if (cur && cur.src === videoUrl) return cur;
+      const expired = cur?.expiresAt !== null && cur !== null && cur.expiresAt <= Date.now();
+      const playing = !!videoRef.current && !videoRef.current.paused;
+      // First URL, a failure to clear, or an expired signature while idle: take the new one.
+      if (cur && !failedPlayback && !(expired && !playing)) return cur;
+      refreshed.current = false;
+      return {
+        src: videoUrl,
+        poster: posterUrl,
+        expiresAt: urlExpiresAt ? Date.parse(urlExpiresAt) : null,
+      };
+    });
+  }, [videoUrl, urlExpiresAt, failedPlayback]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: src is the trigger; a new latched URL resets the failure flag
+  useEffect(() => {
+    // A new latched URL clears an earlier failure.
+    setFailedPlayback(false);
+  }, [src]);
+
+  // Leaving the slide pauses it (and re-enables swiping).
+  useEffect(() => {
+    if (!active) {
+      videoRef.current?.pause();
+      onPlaying(false);
+    }
+  }, [active, onPlaying]);
+
+  async function onError() {
+    if (!refreshed.current && src) {
+      refreshed.current = true;
+      const fresh = await refresh(photo.id);
+      if (fresh?.videoUrl && fresh.videoUrl !== src) {
+        setMedia({
+          src: fresh.videoUrl,
+          poster: fresh.displayUrl ?? posterUrl,
+          expiresAt: fresh.urlExpiresAt ? Date.parse(fresh.urlExpiresAt) : null,
+        });
+        return;
+      }
+    }
+    setFailedPlayback(true);
+    onPlaying(false);
+  }
+
+  const overlay = (text: string, testId: string, busy: boolean) => (
+    <div
+      className="pointer-events-none absolute inset-0 flex items-end justify-center pb-16"
+      data-testid={testId}
+    >
+      <p role="status" className="ll-viewer-round max-w-[90%] px-4 py-2 text-center text-sm">
+        {busy ? (
+          <span
+            aria-hidden
+            className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent align-[-3px]"
+          />
+        ) : null}
+        {text}
+      </p>
+    </div>
+  );
+
+  return (
+    <div
+      className="relative flex h-full w-full items-center justify-center"
+      data-testid="video-slide"
+    >
+      {status === "ready" && src && !failedPlayback ? (
+        // biome-ignore lint/a11y/useMediaCaption: family clips have no caption track
+        <video
+          ref={videoRef}
+          data-testid={`viewer-video-${photo.id}`}
+          controls
+          playsInline
+          preload="metadata"
+          poster={media?.poster}
+          src={src}
+          aria-label={t("viewer.video.label", { name })}
+          className="max-h-full max-w-full bg-black"
+          onPlay={() => onPlaying(true)}
+          onPause={() => onPlaying(false)}
+          onEnded={() => onPlaying(false)}
+          onError={() => void onError()}
+        />
+      ) : (
+        <>
+          <PhotoImage
+            photo={detail ?? photo}
+            kind={displayUrl ? "display" : "thumb"}
+            displayUrl={displayUrl}
+            baby={baby}
+            timeZone={timeZone}
+            eager
+            className="max-h-full max-w-full object-contain"
+          />
+          {status === "pending"
+            ? overlay(t("viewer.video.pending"), "video-pending", true)
+            : status === "failed"
+              ? overlay(
+                  t(isAdmin ? "viewer.video.failedAdmin" : "viewer.video.failed"),
+                  "video-failed",
+                  false,
+                )
+              : failedPlayback
+                ? overlay(t("viewer.video.unsupported"), "video-unsupported", false)
+                : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Slide({
   photo,
   near,
   active,
   milestoneName,
+  isAdmin,
+  onPlaying,
 }: {
   photo: PhotoSummary;
   near: boolean;
   active: boolean;
   milestoneName: string | null;
+  isAdmin: boolean;
+  onPlaying: (playing: boolean) => void;
 }) {
   const { baby } = useCurrentBaby();
   const timeZone = useProfileTimeZone();
   const detail = usePhoto(near ? photo.id : undefined);
   const displayUrl = detail.data?.displayUrl ?? null;
   const source = detail.data ?? photo;
+  if (photo.mediaKind === "video") {
+    return (
+      <VideoSlide
+        photo={photo}
+        detail={detail.data}
+        active={active}
+        isAdmin={isAdmin}
+        onPlaying={onPlaying}
+      />
+    );
+  }
   return (
     <div className="swiper-zoom-container">
       <PhotoImage
@@ -207,6 +383,11 @@ function ViewerBody({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const swiperRef = useRef<SwiperType | null>(null);
+  // A playing video owns the touch surface (its controls); swiping resumes when it pauses.
+  const onPlaying = useCallback((playing: boolean) => {
+    const s = swiperRef.current;
+    if (s && !s.destroyed) s.allowTouchMove = !playing;
+  }, []);
 
   // Controls over the photo fade after 2 s of no interaction; any pointer/key/focus brings them
   // back. They stay interactive while faded (so keyboard and assistive tech never lose them);
@@ -434,6 +615,8 @@ function ViewerBody({
                     near={Math.abs(i - index) <= 1}
                     active={i === index}
                     milestoneName={milestoneName(p.milestoneId)}
+                    isAdmin={isAdmin}
+                    onPlaying={onPlaying}
                   />
                 </SwiperSlide>
               ))}

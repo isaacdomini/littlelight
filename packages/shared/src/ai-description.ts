@@ -356,10 +356,27 @@ export function looksLikeCoordinates(text: string): boolean {
 
 const takenAtSchema = z.union([z.iso.date(), z.iso.datetime({ offset: true, local: true })]);
 
+/** Most images (poster + keyframes) one video item sends in a single vision request. */
+export const AI_VIDEO_MAX_FRAMES = 4;
+
 /**
- * Per-photo prompt context (FR-5.4). Strict: there is no coordinate, name-of-baby or account
+ * Video item context (docs/plans/step-12.md 2.3, 2.7): the per-item user text tells the model
+ * that the `frameCount` images are frames sampled from one `durationSeconds`-second clip. Part of
+ * the per-item text, not of the cached system prompt, so prompt v1's pinned hash stays. Photos
+ * omit it.
+ */
+export const aiVisionMediaSchema = z.strictObject({
+  kind: z.literal("video"),
+  durationSeconds: z.number().int().min(1).max(86_400),
+  frameCount: z.number().int().min(1).max(AI_VIDEO_MAX_FRAMES),
+});
+export type AiVisionMedia = z.infer<typeof aiVisionMediaSchema>;
+
+/**
+ * Per-item prompt context (FR-5.4). Strict: there is no coordinate, name-of-baby or account
  * field to put anything else in. `placeLabel` and `parentNotes` that look like coordinates are
  * rejected (`looksLikeCoordinates`); the request builder blanks them instead of failing.
+ * `media` (optional) is present for video items only (`aiVisionMediaSchema`).
  */
 export const aiVisionContextSchema = z
   .strictObject({
@@ -373,6 +390,8 @@ export const aiVisionContextSchema = z
       .max(AI_VISION_CONTEXT_LIMITS.people),
     milestone: z.string().trim().max(AI_VISION_CONTEXT_LIMITS.milestone).nullable(),
     parentNotes: z.string().trim().max(AI_VISION_CONTEXT_LIMITS.note).nullable(),
+    /** Video items only: duration and the number of frames sent (step 12). */
+    media: aiVisionMediaSchema.optional(),
   })
   .superRefine((ctx, issues) => {
     for (const field of AI_CONTEXT_COORDINATE_FIELDS) {
@@ -388,3 +407,9 @@ export const aiVisionContextSchema = z
     }
   });
 export type AiVisionContext = z.infer<typeof aiVisionContextSchema>;
+
+/**
+ * Alias named as in docs/plans/step-12.md 2.3 ("`aiRequestContextSchema` += `media`"): the
+ * per-item request context is `aiVisionContextSchema`.
+ */
+export const aiRequestContextSchema = aiVisionContextSchema;

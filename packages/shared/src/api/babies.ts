@@ -42,6 +42,13 @@ export const freeTierSchema = z.object({
   used: z.number().int().nonnegative(),
   limit: z.literal(FREE_TIER_PHOTO_LIMIT),
   familyAlbums: z.number().int().min(1),
+  /**
+   * Step 12 (Q3): live videos across the family's free albums (`free_tier_pool_videos()`), inside
+   * `used`, out of `videoLimit` (the effective `free_tier_video_limit()`, `FREE_TIER_VIDEO_LIMIT`
+   * by default). Usage line: "{used} of 1,000 ({videos} of 100 videos)".
+   */
+  videos: z.number().int().nonnegative(),
+  videoLimit: z.number().int().min(1),
 });
 export type FreeTier = z.infer<typeof freeTierSchema>;
 

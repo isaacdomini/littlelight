@@ -478,7 +478,15 @@ export interface ImportItemsRow {
   batch_id: string;
   baby_id: string;
   provider_item_id: string;
-  mime_hint: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  mime_hint:
+    | "image/jpeg"
+    | "image/png"
+    | "image/heic"
+    | "image/heif"
+    | "image/webp"
+    | "video/mp4"
+    | "video/quicktime"
+    | null;
   width: number | null;
   height: number | null;
   taken_at_hint: Date | null;
@@ -494,11 +502,14 @@ export interface ImportItemsRow {
     | "not_member"
     | "baby_trashed"
     | "pending_limit"
+    | "video_too_long"
     | null;
   storage_key: string;
   photo_id: string | null;
   created_at: Date;
   updated_at: Date;
+  media_kind: "photo" | "video";
+  duration_ms_hint: number | null;
 }
 
 export interface ImportItemsInsert {
@@ -506,7 +517,15 @@ export interface ImportItemsInsert {
   batch_id: string;
   baby_id: string;
   provider_item_id: string;
-  mime_hint?: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  mime_hint?:
+    | "image/jpeg"
+    | "image/png"
+    | "image/heic"
+    | "image/heif"
+    | "image/webp"
+    | "video/mp4"
+    | "video/quicktime"
+    | null;
   width?: number | null;
   height?: number | null;
   taken_at_hint?: Date | null;
@@ -522,10 +541,13 @@ export interface ImportItemsInsert {
     | "not_member"
     | "baby_trashed"
     | "pending_limit"
+    | "video_too_long"
     | null;
   photo_id?: string | null;
   created_at?: Date;
   updated_at?: Date;
+  media_kind?: "photo" | "video";
+  duration_ms_hint?: number | null;
 }
 
 export interface ImportSourcesRow {
@@ -716,7 +738,7 @@ export interface PhotoAiOverridesInsert {
 
 export interface PhotoDerivativesRow {
   photo_id: string;
-  kind: "thumb" | "display" | "analysis";
+  kind: "thumb" | "display" | "analysis" | "web" | "keyframe1" | "keyframe2" | "keyframe3";
   storage_key: string;
   width: number;
   height: number;
@@ -726,7 +748,7 @@ export interface PhotoDerivativesRow {
 
 export interface PhotoDerivativesInsert {
   photo_id: string;
-  kind: "thumb" | "display" | "analysis";
+  kind: "thumb" | "display" | "analysis" | "web" | "keyframe1" | "keyframe2" | "keyframe3";
   storage_key: string;
   width: number;
   height: number;
@@ -836,7 +858,15 @@ export interface PhotosRow {
   width: number | null;
   height: number | null;
   bytes: string | null;
-  mime: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  mime:
+    | "image/jpeg"
+    | "image/png"
+    | "image/heic"
+    | "image/heif"
+    | "image/webp"
+    | "video/mp4"
+    | "video/quicktime"
+    | null;
   status: "uploaded" | "ingested" | "queued" | "analyzing" | "ready" | "failed" | "duplicate";
   approval: "pending" | "approved" | "rejected";
   approved_by: string | null;
@@ -851,6 +881,11 @@ export interface PhotosRow {
   quarantined_at: Date | null;
   sort_at: Date;
   ai_retry_requested_at: Date | null;
+  media_kind: "photo" | "video";
+  duration_ms: number | null;
+  video_codec: "h264" | "hevc" | null;
+  has_audio: boolean | null;
+  rendition_status: "none" | "pending" | "ready" | "failed";
 }
 
 export interface PhotosInsert {
@@ -864,7 +899,15 @@ export interface PhotosInsert {
   width?: number | null;
   height?: number | null;
   bytes?: string | null;
-  mime?: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  mime?:
+    | "image/jpeg"
+    | "image/png"
+    | "image/heic"
+    | "image/heif"
+    | "image/webp"
+    | "video/mp4"
+    | "video/quicktime"
+    | null;
   status?: "uploaded" | "ingested" | "queued" | "analyzing" | "ready" | "failed" | "duplicate";
   approval?: "pending" | "approved" | "rejected";
   approved_by?: string | null;
@@ -878,6 +921,11 @@ export interface PhotosInsert {
   deleted_at?: Date | null;
   quarantined_at?: Date | null;
   ai_retry_requested_at?: Date | null;
+  media_kind?: "photo" | "video";
+  duration_ms?: number | null;
+  video_codec?: "h264" | "hevc" | null;
+  has_audio?: boolean | null;
+  rendition_status?: "none" | "pending" | "ready" | "failed";
 }
 
 export interface ProfilesRow {
@@ -1080,7 +1128,15 @@ export interface UploadFilesRow {
   client_id: string | null;
   declared_bytes: string;
   client_sha256: Buffer | null;
-  client_mime: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  client_mime:
+    | "image/jpeg"
+    | "image/png"
+    | "image/heic"
+    | "image/heif"
+    | "image/webp"
+    | "video/mp4"
+    | "video/quicktime"
+    | null;
   taken_at_hint: Date | null;
   tz_offset_hint_minutes: number | null;
   storage_key: string;
@@ -1097,11 +1153,15 @@ export interface UploadFilesRow {
     | "storage_error"
     | "upload_incomplete"
     | "pending_limit"
+    | "video_too_long"
+    | "transcode_failed"
     | null;
   photo_id: string | null;
   duplicate_of_photo_id: string | null;
   created_at: Date;
   updated_at: Date;
+  media_kind: "photo" | "video";
+  declared_duration_ms: number | null;
 }
 
 export interface UploadFilesInsert {
@@ -1111,7 +1171,15 @@ export interface UploadFilesInsert {
   client_id?: string | null;
   declared_bytes: string;
   client_sha256?: Buffer | null;
-  client_mime?: "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "image/webp" | null;
+  client_mime?:
+    | "image/jpeg"
+    | "image/png"
+    | "image/heic"
+    | "image/heif"
+    | "image/webp"
+    | "video/mp4"
+    | "video/quicktime"
+    | null;
   taken_at_hint?: Date | null;
   tz_offset_hint_minutes?: number | null;
   storage_key: string;
@@ -1128,11 +1196,15 @@ export interface UploadFilesInsert {
     | "storage_error"
     | "upload_incomplete"
     | "pending_limit"
+    | "video_too_long"
+    | "transcode_failed"
     | null;
   photo_id?: string | null;
   duplicate_of_photo_id?: string | null;
   created_at?: Date;
   updated_at?: Date;
+  media_kind?: "photo" | "video";
+  declared_duration_ms?: number | null;
 }
 
 export interface UploadSessionsRow {

@@ -75,6 +75,9 @@ function toChatPhoto(p: PhotoSummary): ChatPhoto {
     urlExpiresAt: p.urlExpiresAt,
     caption: p.caption,
     milestoneId: p.milestoneId,
+    // Step 12: the grid badges a video tile with its duration.
+    mediaKind: p.mediaKind,
+    durationMs: p.durationMs,
   };
 }
 

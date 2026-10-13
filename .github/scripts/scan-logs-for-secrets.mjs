@@ -46,6 +46,19 @@
 //   picker-uri-field      a `pickerUri` / `baseUrl` field with a real value (a "[redacted]" censor,
 //                         null or empty is fine)
 //   native-upload-path    `ll-uploads/<file>` (the iOS upload cache)
+// Passkey patterns (docs/plans/step-13.md 2.7, 4 "log tap: no credential material"; task 13.8),
+// for the passkey gate's api + worker (+ auth) logs:
+//   webauthn-field  a WebAuthn field with a real value, JSON or pino-pretty form: clientDataJSON,
+//                   attestationObject, authenticatorData, signature, rawId, userHandle, challenge,
+//                   challengeId / challenge_id, credential (also the snake_case forms; a
+//                   "[redacted]" censor, null or empty is fine). Message text such as "passkey
+//                   challenge expired" has no `:`/`=` after the word and does not match.
+// Video patterns (docs/plans/step-12.md 2.10 "video-hygiene", 4.4 step 9; task 12.11), for the
+// video gate's api + worker logs (`X-Amz-Signature` is the presign pattern above):
+//   scratch-path        `/scratch/<anything>` (a staged original or rendition path; the worker
+//                       logs ids, byte counts and durations, never paths)
+//   quicktime-location  `com.apple.quicktime.location…` or `ISO6709` (the QuickTime GPS tag
+//                       name; its value is a coordinate pair, caught by `coordinate` too)
 // Personal data, opt-in with `--pii` (docs/plans/step-11.md 4.3 / 4.4 step 8, task 11.9b; the
 // abuse gate's api + worker logs). Not on by default: the other gates' logs were never held to it.
 //   email     an email address `local@domain.tld` (alphabetic TLD of 2+ letters, so package
@@ -126,6 +139,12 @@ const PATTERNS = [
     /(?<![A-Za-z0-9_])["']?(pickerUri|baseUrl|picker_uri|base_url)["']?\s*[:=]\s*(?!["']?\[redacted\])(?!["']?\s*[,}\]]|\s*$|null\b)["']?[^\s"',}]/i,
   ],
   ["native-upload-path", /(?<![\w-])ll-uploads\/[^\s"'<>]+/],
+  ["scratch-path", /(?<![\w-])\/scratch\/[^\s"'<>]+/],
+  ["quicktime-location", /com\.apple\.quicktime\.location|iso6709/i],
+  [
+    "webauthn-field",
+    /(?<![A-Za-z0-9_])["']?(clientDataJSON|client_data_json|attestationObject|attestation_object|authenticatorData|authenticator_data|signature|rawId|raw_id|userHandle|user_handle|challenge|challengeId|challenge_id|credential)["']?\s*[:=]\s*(?!["']?\[redacted\])(?!["']?\s*[,}\]]|\s*$|null\b)["']?[^\s"',}]/i,
+  ],
 ];
 
 const IPV4 = /(?<![\w.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\w|\.\w)/g;
@@ -204,5 +223,5 @@ required.forEach((re, k) => {
 });
 if (fail) process.exit(1);
 console.log(
-  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL or upload-cache path${pii ? ", email address or IPv4 address" : ""} in the logs`,
+  `ok: no JWT, presign part, bearer, APNs/FCM token, token field, coordinate, lat/lng value, export key, Google/fake token or code, media/picker URL, upload-cache path, scratch path, QuickTime location tag or WebAuthn field value${pii ? ", email address or IPv4 address" : ""} in the logs`,
 );

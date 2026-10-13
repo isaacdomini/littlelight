@@ -29,8 +29,11 @@ export class AiConfigError extends Error {
 /**
  * Categories of a request the adapters refuse to send. Thrown before any network call.
  * - `not_paid`: `request.plan !== "paid"` (free-tier photos are never sent to a model).
- * - `image_*`: not a valid 768 px analysis copy (never an original or display derivative).
- * - `invalid_context`: the per-photo context does not satisfy `aiVisionContextSchema`.
+ * - `image_*`: not a valid 768 px analysis copy (never an original or display derivative). Each
+ *   frame of a video item (poster + keyframes) is checked on its own.
+ * - `too_many_images`: a video item carries more than `AI_VIDEO_MAX_FRAMES` images (step 12).
+ * - `invalid_context`: the per-photo context does not satisfy `aiVisionContextSchema` (for a
+ *   video, also when `media.frameCount` disagrees with the images actually attached).
  * - `invalid_photo_id` / `duplicate_photo_id`: not usable as a batch `custom_id`.
  * - `batch_empty` / `batch_too_large`: the worker splits batches over `AI_BATCH_MAX_BYTES`.
  * - `unsupported_version`: a prompt/schema version this package has no prompt for.
@@ -42,6 +45,7 @@ export type AiRequestErrorCode =
   | "image_bad_dimensions"
   | "image_bad_type"
   | "image_dimensions_mismatch"
+  | "too_many_images"
   | "invalid_context"
   | "invalid_photo_id"
   | "duplicate_photo_id"

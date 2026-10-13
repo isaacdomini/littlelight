@@ -6,8 +6,9 @@ import { t } from "../../i18n";
 import type { SearchParams } from "../../lib/queries/search";
 import { Button } from "../ui";
 
-type Chip = "date" | "age" | "milestone" | "person" | "place" | "tag";
-const CHIPS: Chip[] = ["date", "age", "milestone", "person", "place", "tag"];
+type Chip = "media" | "date" | "age" | "milestone" | "person" | "place" | "tag";
+const CHIPS: Chip[] = ["media", "date", "age", "milestone", "person", "place", "tag"];
+const MEDIA = ["photo", "video"] as const;
 const DAYS_PER_MONTH = 30.4375;
 
 const toDays = (months: string) => String(Math.round(Number(months) * DAYS_PER_MONTH));
@@ -34,6 +35,8 @@ function summary(chip: Chip, p: SearchParams, facets: SearchFacetsResponse | und
       return p.place || null;
     case "tag":
       return p.tag || null;
+    case "media":
+      return p.media === "photo" || p.media === "video" ? t(`search.media.${p.media}`) : null;
   }
 }
 
@@ -51,6 +54,8 @@ function clearChip(chip: Chip, p: SearchParams): SearchParams {
       return { ...p, place: "" };
     case "tag":
       return { ...p, tag: "" };
+    case "media":
+      return { ...p, media: "" };
   }
 }
 
@@ -160,6 +165,12 @@ export function FilterChips({
           key: x.tag,
           label: t("search.optionCount", { name: x.tag, n: x.count }),
           apply: () => ({ ...params, tag: x.tag }),
+        }));
+      case "media":
+        return MEDIA.map((m) => ({
+          key: m,
+          label: t(`search.media.${m}`),
+          apply: () => ({ ...params, media: m }),
         }));
       default:
         return [];

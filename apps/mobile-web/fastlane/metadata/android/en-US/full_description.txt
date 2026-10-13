@@ -1,15 +1,15 @@
-Tinyglow is a private photo album for your baby's first years. Add your photos, and Tinyglow keeps them organised by your baby's age so you can find any moment later without scrolling for hours.
+Tinyglow is a private photo and video album for your baby's first years. Add your photos and short videos, and Tinyglow keeps them organised by your baby's age so you can find any moment later without scrolling for hours.
 
 PRIVATE BY DEFAULT
 - Nothing is ever public. Every photo is private to you and the people you invite.
 - No ads. No tracking. We never sell your data.
-- Your photos are never used to train AI models.
+- Your photos and videos are never used to train AI models.
 - No face recognition.
 
 A CALM TIMELINE
 - Your photos grouped by your baby's age: first week, first month, six months and so on.
 - Photo-first design with large, quiet grids and a full-screen viewer.
-- Add photos from your library or take one with the camera. Uploads continue in the background.
+- Add photos and short videos from your library or take a photo with the camera. Uploads continue in the background, and large videos wait for Wi-Fi unless you say otherwise.
 - Import your existing photos from Google Photos.
 - Add milestones, measurements and notes to any photo.
 
@@ -24,9 +24,9 @@ SHARE WITH FAMILY, ON YOUR TERMS
 
 YOU STAY IN CONTROL
 - Delete a photo or your whole account from inside the app.
-- Photos travel over encrypted connections, and the location stored in photos is encrypted and never shown to people you share with.
+- Photos and videos travel over encrypted connections, and the location stored in them is encrypted and never shown to people you share with.
 
 ABOUT AI
-Optional AI features use our model provider to describe your photos so you can search them and ask questions about them. Photos are only analysed when AI features are turned on for an album. Your photos are never used to train models, and we delete the files from the provider once the descriptions are made.
+Optional AI features use our model provider to describe your photos and videos (a few still frames of each clip, never the sound) so you can search them and ask questions about them. Photos are only analysed when AI features are turned on for an album. Your photos are never used to train models, and we delete the files from the provider once the descriptions are made.
 
 Tinyglow is for parents and guardians aged 18 and over.

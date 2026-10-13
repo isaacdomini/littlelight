@@ -7,6 +7,7 @@ import {
   babySchema,
   babyUpdateSchema,
   FREE_TIER_PHOTO_LIMIT,
+  FREE_TIER_VIDEO_LIMIT,
   type FreeTier,
   idParamsSchema,
   type Plan,
@@ -61,7 +62,10 @@ const BABY_COLUMNS = `${SUMMARY_COLUMNS},
   CASE WHEN b.plan = 'free' AND b.deleted_at IS NULL
        THEN public.free_tier_pool_used(b.id) END AS pool_used,
   CASE WHEN b.plan = 'free' AND b.deleted_at IS NULL
-       THEN public.free_tier_pool_albums(b.id) END AS pool_albums`;
+       THEN public.free_tier_pool_albums(b.id) END AS pool_albums,
+  CASE WHEN b.plan = 'free' AND b.deleted_at IS NULL
+       THEN public.free_tier_pool_videos(b.id) END AS pool_videos,
+  public.free_tier_video_limit() AS video_limit`;
 
 /** The caller's babies with their role; RLS filters out trashed babies for non-admins. */
 const BABY_FROM = `
@@ -84,6 +88,9 @@ interface BabyRow {
   /** Only in `BABY_COLUMNS` queries; null for Plus or trashed albums. */
   pool_used?: number | null;
   pool_albums?: number | null;
+  /** Step 12 (Q3): live videos in the family's pool and the effective `free_tier_video_limit()`. */
+  pool_videos?: number | null;
+  video_limit?: number | null;
 }
 
 /** The pool numbers of a free, live album; `null` for Plus or trashed ones. */
@@ -94,6 +101,8 @@ function toFreeTier(r: BabyRow): FreeTier | null {
     limit: FREE_TIER_PHOTO_LIMIT,
     // ≥ 1: this album is in its family's pool (the function answers 0 only for a non-member).
     familyAlbums: Math.max(1, r.pool_albums ?? 1),
+    videos: Math.max(0, r.pool_videos ?? 0),
+    videoLimit: Math.max(1, r.video_limit ?? FREE_TIER_VIDEO_LIMIT),
   };
 }
 

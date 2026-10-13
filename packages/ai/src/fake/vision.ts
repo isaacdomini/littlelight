@@ -3,12 +3,16 @@
  * D1). No key, no network. Runs the same lifecycle as the real adapters (describe → poll →
  * results → delete) with schema-valid outputs and real price-table costs (1,400 input / 700
  * cached / 400 output tokens per photo on the configured model's batch tier ⇒ $0.0001385 on
- * `gpt-6-luna`), and enforces the same runtime checks (`plan === "paid"`, 768 px analysis
- * copy, context schema + coordinate tripwire).
+ * `gpt-6-luna`; a video item adds 600 input tokens per extra frame, so a 4-image video is 3,200
+ * input / 700 cached / 400 output ⇒ $0.0002285, the plan's ≈ $0.00023 per video), and enforces
+ * the same runtime checks (`plan === "paid"`, 768 px analysis copy for every frame, context
+ * schema + coordinate tripwire). The output is keyed on the item id (its first image's id), so
+ * a video gets one deterministic description like a photo.
  *
  * Persistence: with `dir` (`FAKE_VISION_DIR`) set, each batch writes
  * - `<dir>/<batchId>.jsonl`: the request lines MINUS image bytes and text (photo id, plan,
- *   versions, image type/dimensions/byte count, context field lengths), for the gate;
+ *   versions, every image's type/dimensions/byte count (`images`, `image_count`: 1 for a photo,
+ *   up to 4 for a video), the video `media` facts, context field lengths), for the gate;
  * - `<dir>/<batchId>.state.json`: photo ids, scripted outcomes and the poll count, so a batch
  *   submitted by one process (`run-job ai.flush`) can be polled by another (`run-job ai.poll`).
  * Without `dir`, batches live in memory only.
@@ -23,7 +27,7 @@ import { sumUsage } from "../batch-state";
 import { DEFAULT_VISION_MODEL } from "../defaults";
 import { AiNotConfiguredError } from "../errors";
 import { assertPriced, costUsd, type PriceTierName } from "../pricing";
-import { checkVisionBatch, checkVisionRequest } from "../request";
+import { checkVisionBatch, checkVisionRequest, visionImages } from "../request";
 import type {
   AiLogger,
   ModelUsage,
@@ -55,11 +59,17 @@ export interface FakeVisionOptions {
 export interface FakeRecordedRequest {
   photoId: string;
   plan: string;
-  /** Byte count of the analysis copy. */
+  /** Byte count of the analysis copy (a video's poster). */
   imageBytes: number;
   width: number;
   height: number;
   mimeType: string;
+  /** Images in the request: 1 for a photo, up to `AI_VIDEO_MAX_FRAMES` for a video (step 12). */
+  imageCount: number;
+  /** Byte count of every image, in send order. */
+  imageBytesEach: number[];
+  /** Video facts of the context (null for a photo). */
+  media: { kind: "video"; durationSeconds: number; frameCount: number } | null;
   /** Context keys that carried a value (non-null, non-empty). */
   contextKeys: string[];
   promptVersion: string;
@@ -83,16 +93,35 @@ interface FakeBatchState {
   schemaVersion: string;
   photoIds: string[];
   outcomes: Record<string, FakeOutcome>;
+  /** Images per item (absent in state files written before step 12 ⇒ 1). */
+  imageCounts?: Record<string, number>;
   polls: number;
   cancelled: boolean;
   deleted: boolean;
 }
 
-/** Usage the fake reports per answered request. */
+/** Usage the fake reports per answered single-image request. */
 export const FAKE_USAGE = { inputTokens: 1400, cachedInputTokens: 700, outputTokens: 400 } as const;
 
-function fakeUsage(model: string, tier: PriceTierName, outputTokens: number): ModelUsage {
-  const u = { ...FAKE_USAGE, outputTokens };
+/**
+ * Input tokens the fake adds per image beyond the first (PRD "Image compression for the model":
+ * ~600 image tokens for a 768 px frame). A 4-image video item reports 3,200 input tokens.
+ */
+export const FAKE_TOKENS_PER_EXTRA_IMAGE = 600;
+
+/**
+ * Cost model documented for the budget (docs/plans/step-12.md 2.7), gpt-6-luna Batch:
+ * photo = 700 uncached + 700 cached + 400 out ⇒ $0.0001385; video (4 images) = 2,500 uncached
+ * + 700 cached + 400 out ⇒ $0.0002285 (≈ $0.00023, about 2.3× a photo).
+ */
+function fakeUsage(
+  model: string,
+  tier: PriceTierName,
+  outputTokens: number,
+  imageCount = 1,
+): ModelUsage {
+  const extra = Math.max(0, imageCount - 1) * FAKE_TOKENS_PER_EXTRA_IMAGE;
+  const u = { ...FAKE_USAGE, inputTokens: FAKE_USAGE.inputTokens + extra, outputTokens };
   return { ...u, reasoningTokens: 0, costUsd: costUsd(model, tier, u) };
 }
 
@@ -104,19 +133,34 @@ function contextKeys(r: VisionRequest): string[] {
     .map(([k]) => k);
 }
 
+function imageMeta(image: VisionRequest["image"]) {
+  return {
+    mime_type: image.mimeType,
+    width: image.width,
+    height: image.height,
+    bytes: image.bytes.byteLength,
+  };
+}
+
 function dumpLine(r: VisionRequest): string {
   const c = r.context;
+  const images = visionImages(r);
   return JSON.stringify({
     custom_id: r.photoId,
     plan: r.plan,
     prompt_version: r.promptVersion,
     schema_version: r.schemaVersion,
-    image: {
-      mime_type: r.image.mimeType,
-      width: r.image.width,
-      height: r.image.height,
-      bytes: r.image.bytes.byteLength,
-    },
+    // `image` is the first image (kept for older readers); `images` lists every one sent.
+    image: imageMeta(r.image),
+    image_count: images.length,
+    images: images.map(imageMeta),
+    media: c.media
+      ? {
+          kind: c.media.kind,
+          duration_seconds: c.media.durationSeconds,
+          frame_count: c.media.frameCount,
+        }
+      : null,
     context_lengths: {
       babyAgeDays: c.babyAgeDays === null ? 0 : 1,
       takenAt: c.takenAt?.length ?? 0,
@@ -133,6 +177,7 @@ function resultFor(
   outcome: FakeOutcome,
   model: string,
   tier: PriceTierName,
+  imageCount = 1,
 ): VisionResult | null {
   switch (outcome) {
     case "ok":
@@ -140,17 +185,22 @@ function resultFor(
         photoId,
         ok: true,
         raw: fakeDescription(photoId),
-        usage: fakeUsage(model, tier, 400),
+        usage: fakeUsage(model, tier, 400, imageCount),
       };
     case "invalid_output":
-      return { photoId, ok: true, raw: { caption: 42 }, usage: fakeUsage(model, tier, 400) };
+      return {
+        photoId,
+        ok: true,
+        raw: { caption: 42 },
+        usage: fakeUsage(model, tier, 400, imageCount),
+      };
     case "refusal":
       return {
         photoId,
         ok: false,
         failure: "refusal",
         detail: "refusal",
-        usage: fakeUsage(model, tier, 20),
+        usage: fakeUsage(model, tier, 20, imageCount),
       };
     case "provider_error":
       return { photoId, ok: false, failure: "provider_error", detail: "server_error" };
@@ -190,6 +240,9 @@ export function createFakeVisionDescriber(options: FakeVisionOptions = {}): Fake
       width: r.image.width,
       height: r.image.height,
       mimeType: r.image.mimeType,
+      imageCount: visionImages(r).length,
+      imageBytesEach: visionImages(r).map((i) => i.bytes.byteLength),
+      media: r.context.media ? { ...r.context.media } : null,
       contextKeys: contextKeys(r),
       promptVersion: r.promptVersion,
       schemaVersion: r.schemaVersion,
@@ -238,6 +291,7 @@ export function createFakeVisionDescriber(options: FakeVisionOptions = {}): Fake
       schemaVersion: first.schemaVersion,
       photoIds: checked.map((r) => r.photoId),
       outcomes: Object.fromEntries(checked.map((r) => [r.photoId, nextOutcome(r.photoId)])),
+      imageCounts: Object.fromEntries(checked.map((r) => [r.photoId, visionImages(r).length])),
       polls: 0,
       cancelled: false,
       deleted: false,
@@ -297,7 +351,13 @@ export function createFakeVisionDescriber(options: FakeVisionOptions = {}): Fake
     const results: VisionResult[] = [];
     let expired = 0;
     for (const photoId of state.photoIds) {
-      const r = resultFor(photoId, state.outcomes[photoId] ?? "ok", state.model, "batch");
+      const r = resultFor(
+        photoId,
+        state.outcomes[photoId] ?? "ok",
+        state.model,
+        "batch",
+        state.imageCounts?.[photoId] ?? 1,
+      );
       if (r) results.push(r);
       else expired++;
     }
@@ -348,7 +408,7 @@ export function createFakeVisionDescriber(options: FakeVisionOptions = {}): Fake
     const { request } = checkVisionRequest(input);
     record(request, null);
     const outcome = nextOutcome(request.photoId);
-    const r = resultFor(request.photoId, outcome, model, "standard");
+    const r = resultFor(request.photoId, outcome, model, "standard", visionImages(request).length);
     if (!r) return { photoId: request.photoId, ok: false, failure: "expired", detail: "expired" };
     return r.ok ? { ...r, latencyMs: 0 } : r;
   }

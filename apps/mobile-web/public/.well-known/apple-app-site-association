@@ -6,5 +6,8 @@
         "components": [{ "/": "/invite/*" }, { "/": "/s/*" }, { "/": "/signin/native*" }]
       }
     ]
+  },
+  "webcredentials": {
+    "apps": ["APPLE_TEAM_ID.app.tinyglow"]
   }
 }

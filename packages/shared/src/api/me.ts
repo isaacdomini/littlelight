@@ -85,6 +85,11 @@ export const deletionPreviewResponseSchema = z.object({
   freshSignIn: z.boolean(),
   /** A Google Photos import connection exists; it is revoked at Google and removed on deletion. */
   googlePhotosConnected: z.boolean().optional(),
+  /**
+   * Passkeys registered on the account (step 13, docs/plans/step-13.md 2.4); they go with the
+   * GoTrue user. Counted via GoTrue, best effort: 0 when passkeys are off or GoTrue is unreachable.
+   */
+  passkeys: z.number().int().nonnegative().optional(),
 });
 export type DeletionPreviewResponse = z.infer<typeof deletionPreviewResponseSchema>;
 

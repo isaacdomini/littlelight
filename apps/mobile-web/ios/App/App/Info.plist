@@ -35,7 +35,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Tinyglow saves photos you download from your album to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Tinyglow uses your photo library to upload the photos you choose. If you turn on album sync, it also imports new photos from the one album you pick, so you don't have to add them by hand.</string>
+	<string>Tinyglow uses your photo library to upload the photos and videos you choose. If you turn on album sync, it also imports new photos and videos from the one album you pick, so you don't have to add them by hand.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

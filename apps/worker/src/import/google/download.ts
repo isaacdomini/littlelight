@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   type GoogleMediaAllowList,
+  googleMediaDownloadUrl,
   IMPORT_MEDIA_MAX_REDIRECTS,
-  mediaDownloadUrl,
+  importMaxBytesFor,
+  type MediaKind,
   parseAllowedMediaUrl,
   resolveMediaRedirect,
 } from "@tinyglow/shared";
@@ -20,6 +22,10 @@ import {
 
 // Guarded download of one picked original (docs/plans/step-10.md 2.7 step 5, D6, R5, R6).
 //
+// - Step 12 (docs/plans/step-12.md 2.6): a `VIDEO` item downloads `baseUrl=dv`
+//   (`googleMediaDownloadUrl`), is capped at the smaller of `maxVideoBytes` (the album plan's
+//   per-clip limit) and `IMPORT_MAX_VIDEO_BYTES`, and is staged in `videoTmpDir` (the disk-backed
+//   scratch folder) instead of the 1 GiB `/tmp` tmpfs.
 // - SSRF guard: the `baseUrl=d` download URL must pass `parseAllowedMediaUrl` (https + host
 //   suffix allow-list; in `fake` mode the fake's exact origin) and the worker fetches the `href`
 //   the guard returned (the exact string that was checked). `redirect: "manual"`: a 3xx is
@@ -87,9 +93,12 @@ export interface DownloadedFile {
 
 export interface DownloadDeps {
   allowList: GoogleMediaAllowList;
+  /** Size cap of a photo download (`IMPORT_MAX_FILE_BYTES`). */
   maxBytes: number;
-  /** Staging directory (default `importTmpDir()`). */
+  /** Staging directory of photo downloads (default `importTmpDir()`). */
   tmpDir?: string;
+  /** Staging directory of video downloads (default `tmpDir`); production: under `WORKER_SCRATCH_PATH`. */
+  videoTmpDir?: string;
   fetchImpl?: FetchLike;
   sleep?: SleepFn;
   attempts?: number;
@@ -126,21 +135,41 @@ class AttemptError extends Error {
   }
 }
 
+export interface DownloadItemOptions {
+  /** `photo` (default): `baseUrl=d`, `maxBytes`, `tmpDir`; `video`: `=dv`, the video cap, `videoTmpDir`. */
+  kind?: MediaKind;
+  /** Video cap (bytes), e.g. the album plan's `videoLimitsFor(plan).maxBytes`; never above `IMPORT_MAX_VIDEO_BYTES`. */
+  maxVideoBytes?: number;
+}
+
 /**
- * Download `baseUrl=d` for item `itemId` into the staging dir. Throws `DownloadError` on every
- * failure, after removing any partial file.
+ * Download the original of item `itemId` (`baseUrl=d`, or `=dv` for a video) into the staging
+ * dir. Throws `DownloadError` on every failure, after removing any partial file.
  */
 export async function downloadMedia(
   deps: DownloadDeps,
   token: AccessTokenSource,
   itemId: string,
   baseUrl: string,
+  item: DownloadItemOptions = {},
 ): Promise<DownloadedFile> {
-  const { allowList, maxBytes } = deps;
+  const { allowList } = deps;
+  const kind: MediaKind = item.kind ?? "photo";
+  const maxBytes =
+    kind === "video"
+      ? Math.min(importMaxBytesFor("video"), item.maxVideoBytes ?? importMaxBytesFor("video"))
+      : deps.maxBytes;
   const guard = { exactOrigins: allowList.exactOrigins };
-  const start = parseAllowedMediaUrl(mediaDownloadUrl(baseUrl), allowList.hostSuffixes, guard);
+  const start = parseAllowedMediaUrl(
+    googleMediaDownloadUrl(baseUrl, kind),
+    allowList.hostSuffixes,
+    guard,
+  );
   if (!start) throw new DownloadError("disallowed_url");
-  const tmpDir = deps.tmpDir ?? importTmpDir();
+  const tmpDir =
+    kind === "video"
+      ? (deps.videoTmpDir ?? deps.tmpDir ?? importTmpDir())
+      : (deps.tmpDir ?? importTmpDir());
   await mkdir(tmpDir, { recursive: true, mode: 0o700 });
   const file = stagedPath(tmpDir, itemId);
   const fetchImpl: FetchLike = deps.fetchImpl ?? ((input, init) => fetch(input, init));

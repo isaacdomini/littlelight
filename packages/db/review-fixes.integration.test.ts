@@ -58,21 +58,23 @@ describe.skipIf(!databaseUrl)("review fixes: migrations 18 and 19", () => {
   });
 
   // -----------------------------------------------------------------------------------------
-  describe("migration round trip (down 4, up 4)", () => {
-    it("reverts 21, 20, 19 and 18 cleanly and re-applies them, restoring the previous policies in between", async () => {
+  describe("migration round trip (down 5, up 5)", () => {
+    it("reverts 22, 21, 20, 19 and 18 cleanly and re-applies them, restoring the previous policies in between", async () => {
       const probe = new (await import("pg")).default.Client({ connectionString: databaseUrl });
       await probe.connect();
       const q = async (sql: string) => (await probe.query(sql)).rows as Record<string, unknown>[];
       try {
         const downed = await runMigrations({
           direction: "down",
-          count: 4,
+          // step 12 added migration 22 (video) on top: it comes down first.
+          count: 5,
           bootstrap: false,
           databaseUrl,
           env,
           log: quiet,
         });
         expect(downed.map((m) => m.name)).toEqual([
+          expect.stringContaining("video"),
           expect.stringContaining("free-tier-abuse"),
           expect.stringContaining("photo-import"),
           expect.stringContaining("data-exports"),
@@ -95,7 +97,7 @@ describe.skipIf(!databaseUrl)("review fixes: migrations 18 and 19", () => {
       } finally {
         await runMigrations({ direction: "up", databaseUrl, env, log: quiet });
         const n = (await q("SELECT count(*)::int AS n FROM public.pgmigrations"))[0]?.n;
-        expect(n).toBe(21);
+        expect(n).toBe(22);
         // The backfill of migration 21 re-homed the fixtures' admin-less trashed albums into
         // families of their own: rebuild the fixtures so the rest of the suite sees family A.
         await createFixtures(db.admin);

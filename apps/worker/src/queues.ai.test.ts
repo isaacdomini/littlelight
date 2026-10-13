@@ -52,6 +52,15 @@ function pipeline() {
   } satisfies AiPipeline;
 }
 
+const VIDEO = {
+  ffmpegPath: "ffmpeg",
+  ffprobePath: "ffprobe",
+  scratchPath: "/tmp/ll-scratch-test",
+  threads: 1,
+  timeoutSec: 60,
+  concurrency: 1,
+};
+
 describe("AI queue definitions (step 6)", () => {
   it("ai.flush and ai.poll are exclusive cron singletons with no retry; expiry just under the flush window", () => {
     for (const name of [JOBS.aiFlush, JOBS.aiPoll]) {
@@ -69,9 +78,9 @@ describe("AI queue definitions (step 6)", () => {
     });
   });
 
-  it("there are exactly sixteen queues, one per job name", () => {
+  it("there are exactly seventeen queues, one per job name (step 12 adds video.transcode)", () => {
     expect(Object.keys(QUEUES).sort()).toEqual(Object.values(JOBS).sort());
-    expect(Object.keys(QUEUES)).toHaveLength(16);
+    expect(Object.keys(QUEUES)).toHaveLength(17);
   });
 
   it("schedules(config) adds the two AI crons and the search reconcile and the share reconcile to the four fixed ones (8 total)", () => {
@@ -213,6 +222,8 @@ describe("startWorkers registers the AI handlers", () => {
       dataExport: {} as never,
       ai,
       indexer: indexerStub(),
+      // step 12: with the video deps the video.transcode handler is registered too
+      video: VIDEO,
       log,
       ingestConcurrency: 1,
     });

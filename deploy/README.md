@@ -14,6 +14,9 @@ servers/tinyglow/
   postgres/   DB_DATA_PATH  Postgres PGDATA        owner 999:999 (postgres in the image), 700
   photos/     STORAGE_PATH  MinIO data             owner root (MinIO runs as root), 700
   backups/    BACKUP_PATH   nightly pg_dump files  owner root (backup job runs as root), 700
+  scratch/    WORKER_SCRATCH_PATH  worker video staging (original + rendition while ffmpeg runs;
+                            emptied after each job, not backed up)  owner 1000:1000 (node in the
+                            worker image), 700; keep >= 6 GB free on its filesystem
 ```
 
 There are no named volumes: `docker compose down -v` deletes nothing on disk. Each folder must
@@ -38,6 +41,7 @@ cp app/.env.example .env && chmod 600 .env && $EDITOR .env
 sudo install -d -m 755 /mnt/data/tinyglow
 sudo install -d -m 700 -o 999 -g 999 /mnt/data/tinyglow/postgres
 sudo install -d -m 700 /mnt/data/tinyglow/photos /mnt/data/tinyglow/backups
+sudo install -d -m 700 -o 1000 -g 1000 /mnt/data/tinyglow/scratch
 
 # 4. Start (builds api, worker, web and db-tools images on the server)
 docker compose up -d --build --wait
@@ -93,4 +97,5 @@ container or on another machine, with both ports firewalled to cloudflared only.
   0 5 1 * *  root OFFSITE_ENV=/home/<user>/servers/tinyglow/.env.offsite /home/<user>/servers/tinyglow/app/docker/backup/offsite-restore-test.sh >>/var/log/tinyglow-offsite.log 2>&1
   ```
   The restore test reads the stack's `.env` from `servers/tinyglow/.env` (or `STACK_ENV=`).
-- `postgres/` is not copied raw: the nightly dump is the consistent copy.
+- `postgres/` is not copied raw: the nightly dump is the consistent copy. `scratch/` is never
+  copied (work files only).

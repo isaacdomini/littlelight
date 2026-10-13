@@ -38,6 +38,14 @@
 # S3 multipart with 16 MiB parts (pre-signed per part, docs/plans/step-4.md D1; the PRD's limit
 # is <= 50 MB) straight to files.tinyglow...; nginx also caps /api/ bodies at 50 MB.
 # CORS for those browser PUTs is MinIO's (MINIO_API_CORS_ALLOW_ORIGIN = PUBLIC_URL on storage).
+# Videos (docs/plans/step-12.md 2.10): the same 16 MiB parts, so a 2 GB clip is ~128 PUTs and
+# no single request body approaches the cap. Cloudflare's 100 s origin response timeout applies
+# per part PUT: a part must finish within it, i.e. the client needs >= ~1.4 Mbps upstream
+# (16 MiB x 8 / 100 s); slower links see the part fail and the uploader retries it. Playback
+# fetches the MP4 rendition (derivatives/<id>/web.mp4) with HTTP range requests through this
+# hostname; responses have no size cap, each range is a normal short GET, and the cache-bypass
+# rule below keeps them (and the 30-minute presigned URLs) out of the edge cache. Chunked
+# streaming of the whole file is never needed.
 #
 # REQUIRED production action (share links, docs/plans/step-8.md D6): add a Cloudflare Cache
 # Rule that bypasses the cache for the files. hostname, so no photo is ever stored at the edge

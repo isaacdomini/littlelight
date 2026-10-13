@@ -167,7 +167,10 @@ export const DEMO_IDS = {
    * SHA-256). Real tokens are 22 base64url chars; this one is longer but fits `shareTokenSchema`.
    */
   shareToken: "demo-grandparents-share-token",
-  /** The 12 seeded photos, `…-000000000301` through `…-000000000312`. */
+  /**
+   * The 13 seeded media items: 12 photos `…-000000000301` through `…-000000000312` and, from
+   * step 12, the one demo clip `…-000000000313` (`video/mp4`, 4 s, h264, no audio, `ready`).
+   */
   photos: [
     "00000000-0000-4000-8000-000000000301",
     "00000000-0000-4000-8000-000000000302",
@@ -181,7 +184,10 @@ export const DEMO_IDS = {
     "00000000-0000-4000-8000-000000000310",
     "00000000-0000-4000-8000-000000000311",
     "00000000-0000-4000-8000-000000000312",
+    "00000000-0000-4000-8000-000000000313",
   ],
+  /** The demo clip (step 12): the 13th entry of `photos`. */
+  video: "00000000-0000-4000-8000-000000000313",
 } as const;
 
 /** Number of photos the perf seed creates (`PERF_IDS.photo(0)` .. `PERF_IDS.photo(9999)`). */
@@ -339,13 +345,20 @@ export const SHARE_VIEWER_PAGE_SIZE = 100;
 export const SHARE_VIEWER_PAGE_MAX = 200;
 /** Ids per `POST /share/photos/urls`. */
 export const SHARE_VIEWER_URLS_MAX = 200;
-/** Lifetime of a viewer download URL (the `display` derivative as an attachment). */
+/** Lifetime of a viewer download URL (the `display` derivative, or a video's `web` rendition, as an attachment). */
 export const SHARE_DOWNLOAD_URL_TTL_SEC = 60;
 /**
- * The only derivative kinds a viewer is ever handed a URL for. Downloads are `display` (1600 px,
- * metadata-free), never the original (D9).
+ * Lifetime of a viewer `web` (video rendition) URL (docs/plans/step-12.md 2.3): a 5-minute URL
+ * dies mid-playback, so videos get 30 minutes; the player also re-fetches on error. Capped at the
+ * link's expiry like every viewer URL.
  */
-export const SHARE_VIEWER_MEDIA_KINDS = ["thumb", "display"] as const;
+export const SHARE_VIDEO_URL_TTL_SEC = 1800;
+/**
+ * The only derivative kinds a viewer is ever handed a URL for. Downloads are `display` (1600 px,
+ * metadata-free), never the original (D9); for videos the `web` rendition (step 12, Q9), never
+ * the original. `web` is signed only for `media_kind = 'video'` rows (the derivatives RLS policy).
+ */
+export const SHARE_VIEWER_MEDIA_KINDS = ["thumb", "display", "web"] as const;
 
 // ---------------------------------------------------------------------------------------------
 // Data export (docs/plans/review-fixes.md 2.2, 2.3, 2.5; PRD FR-10.1 "Export all originals + a

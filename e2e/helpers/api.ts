@@ -8,6 +8,14 @@ export function uniqueEmail(tag: string): string {
   return `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${tag}@example.com`;
 }
 
+let ipCounter = Math.floor(Math.random() * 200);
+/** A fresh TEST-NET-3 address (`203.0.113.0/24` rolls into `198.51.100.0/24`) per API client. */
+export function nextClientIp(): string {
+  ipCounter += 1;
+  const n = ipCounter % 500;
+  return n < 250 ? `203.0.113.${1 + n}` : `198.51.100.${1 + (n - 250)}`;
+}
+
 /** Mirror of the API's maskEmail for the first-letter + domain shape: `o***@example.com`. */
 export function masked(email: string): string {
   const [local, domain] = email.split("@");
@@ -37,9 +45,16 @@ export class ApiClient {
     storageState?: Awaited<ReturnType<APIRequestContext["storageState"]>>,
     extraHeaders: Record<string, string> = {},
   ): Promise<ApiClient> {
+    // Each client gets its own client IP unless the caller chose one: the api throttles OTP
+    // requests per IP (30 / h), and a full `pnpm e2e` run signs in far more accounts than that
+    // from one machine. nginx passes CF-Connecting-IP through unchanged on the dev stack.
+    const headers: Record<string, string> = { "X-Tinyglow-Client": "web", ...extraHeaders };
+    if (!Object.keys(headers).some((h) => h.toLowerCase() === "cf-connecting-ip")) {
+      headers["CF-Connecting-IP"] = nextClientIp();
+    }
     const ctx = await request.newContext({
       baseURL: BASE,
-      extraHTTPHeaders: { "X-Tinyglow-Client": "web", ...extraHeaders },
+      extraHTTPHeaders: headers,
       ...(storageState ? { storageState } : {}),
     });
     return new ApiClient(ctx, email);

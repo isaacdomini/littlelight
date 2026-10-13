@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { apiErrorSchema, babySchema, sessionResponseSchema } from "@tinyglow/shared";
+import {
+  apiErrorSchema,
+  babySchema,
+  FREE_TIER_VIDEO_LIMIT,
+  sessionResponseSchema,
+} from "@tinyglow/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHarness, databaseUrl, type Harness, type TestUser } from "../testing/integration";
 import { gotrueSession } from "../testing/support";
@@ -256,6 +261,8 @@ describe.skipIf(!databaseUrl)("family start (POST /babies)", () => {
         used: 0,
         limit: 1000,
         familyAlbums: 1,
+        videos: 0,
+        videoLimit: FREE_TIER_VIDEO_LIMIT,
       });
       const two = await create(u, nextIp(), "Two");
       await h.member(one.json().id, guest, "contributor");
@@ -266,6 +273,8 @@ describe.skipIf(!databaseUrl)("family start (POST /babies)", () => {
         used: 0,
         limit: 1000,
         familyAlbums: 2,
+        videos: 0,
+        videoLimit: FREE_TIER_VIDEO_LIMIT,
       });
       // Plus and trashed albums are outside the pool
       await h.admin.query("UPDATE public.babies SET plan = 'plus' WHERE id = $1", [two.json().id]);
@@ -414,7 +423,13 @@ describe.skipIf(!databaseUrl)("family start: the hard per-network cap and its re
         );
       const got = babySchema.parse((await h.inject(guest, "GET", `/babies/${a}`)).json());
       expect(got.role).toBe("contributor");
-      expect(got.freeTier).toEqual({ used: 8, limit: 1000, familyAlbums: 2 });
+      expect(got.freeTier).toEqual({
+        used: 8,
+        limit: 1000,
+        familyAlbums: 2,
+        videos: 0,
+        videoLimit: FREE_TIER_VIDEO_LIMIT,
+      });
     } finally {
       await h.close();
     }

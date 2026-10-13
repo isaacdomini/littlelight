@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
+  type MediaFilter,
   originalUrlResponseSchema,
   PHOTO_BATCH_MAX,
   type Photo,
@@ -63,6 +64,8 @@ export interface TimelineOptions {
   view?: PhotosView;
   /** Only photos tagged with this milestone. */
   milestoneId?: string;
+  /** Only photos or only videos (step 12); undefined = both. */
+  media?: MediaFilter;
   /** Group cursor from the summary: starts the stream there (scrubber jump). */
   startCursor?: string;
 }
@@ -78,6 +81,7 @@ export const timelineKey = (babyId: string, o: TimelineOptions = {}) =>
     "timeline",
     o.view ?? "album",
     o.milestoneId ?? null,
+    o.media ?? null,
     o.startCursor ?? null,
   ] as const;
 
@@ -87,7 +91,7 @@ export const timelineKey = (babyId: string, o: TimelineOptions = {}) =>
  * memory for 24 h so scrolling back and the offline banner still show the grid (D9).
  */
 export function useTimeline(babyId: string | undefined, options: TimelineOptions = {}) {
-  const { view = "album", milestoneId, startCursor } = options;
+  const { view = "album", milestoneId, media, startCursor } = options;
   return useInfiniteQuery<
     PhotosListResponse,
     Error,
@@ -102,6 +106,7 @@ export function useTimeline(babyId: string | undefined, options: TimelineOptions
       const qs = new URLSearchParams({ view, limit: "200", dir: pageParam.dir });
       if (pageParam.cursor) qs.set("cursor", pageParam.cursor);
       if (milestoneId) qs.set("milestoneId", milestoneId);
+      if (media) qs.set("media", media);
       return apiFetch(`/babies/${babyId}/photos?${qs.toString()}`, {
         schema: photosListResponseSchema,
       });
@@ -119,26 +124,36 @@ export function useTimeline(babyId: string | undefined, options: TimelineOptions
 }
 
 /** Age groups with counts and jump cursors, plus the total, for the scrubber and headers. */
-export function useTimelineSummary(babyId: string | undefined, view: PhotosView = "album") {
+export function useTimelineSummary(
+  babyId: string | undefined,
+  view: PhotosView = "album",
+  media?: MediaFilter,
+) {
   return useQuery({
-    queryKey: [...photosRoot(babyId ?? "none"), "summary", view] as const,
+    queryKey: [...photosRoot(babyId ?? "none"), "summary", view, media ?? null] as const,
     enabled: !!babyId,
     staleTime: 5 * 60_000,
     gcTime: DAY_MS,
-    queryFn: () =>
-      apiFetch(`/babies/${babyId}/photos/summary?view=${view}`, {
+    queryFn: () => {
+      const qs = new URLSearchParams({ view });
+      if (media) qs.set("media", media);
+      return apiFetch(`/babies/${babyId}/photos/summary?${qs.toString()}`, {
         schema: photosSummaryResponseSchema,
-      }),
+      });
+    },
   });
 }
 
 /** AI states in which the analysis result is expected soon: the detail refetches every 30 s. */
 const AI_POLL_MS = 30_000;
+/** A video whose `web` rendition is still being built: the open viewer polls every 10 s. */
+const RENDITION_POLL_MS = 10_000;
 const isAiInFlight = (status: string | undefined) => status === "queued" || status === "analyzing";
 
 /**
  * Full photo (display URL, EXIF, details, measurements, `canEdit`, `ai`). Polls every 30 s only
- * while `ai.status` is queued/analyzing, and mirrors a changed `aiStatus` into the cached lists.
+ * while `ai.status` is queued/analyzing (10 s while a video's rendition is `pending`), and
+ * mirrors a changed `aiStatus` / `renditionStatus` into the cached lists.
  */
 export function usePhoto(photoId: string | null | undefined) {
   const queryClient = useQueryClient();
@@ -147,7 +162,11 @@ export function usePhoto(photoId: string | null | undefined) {
     enabled: !!photoId,
     staleTime: PHOTOS_STALE_MS,
     gcTime: DAY_MS,
-    refetchInterval: (query) => (isAiInFlight(query.state.data?.ai.status) ? AI_POLL_MS : false),
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (d?.mediaKind === "video" && d.renditionStatus === "pending") return RENDITION_POLL_MS;
+      return isAiInFlight(d?.ai.status) ? AI_POLL_MS : false;
+    },
     queryFn: async () => {
       const photo = await apiFetch(`/photos/${photoId}`, { schema: photoSchema });
       queryClient.setQueriesData(
@@ -156,8 +175,18 @@ export function usePhoto(photoId: string | null | undefined) {
         },
         (old: unknown) =>
           patchPages(old, (p) =>
-            p.id === photo.id && (p.aiStatus !== photo.aiStatus || p.caption !== photo.caption)
-              ? { ...p, aiStatus: photo.aiStatus, caption: photo.caption }
+            p.id === photo.id &&
+            (p.aiStatus !== photo.aiStatus ||
+              p.caption !== photo.caption ||
+              p.renditionStatus !== photo.renditionStatus ||
+              p.durationMs !== photo.durationMs)
+              ? {
+                  ...p,
+                  aiStatus: photo.aiStatus,
+                  caption: photo.caption,
+                  renditionStatus: photo.renditionStatus,
+                  durationMs: photo.durationMs,
+                }
               : undefined,
           ),
       );
@@ -246,6 +275,7 @@ async function flushRefresh(queryClient: QueryClient, babyId: string, pending: P
                 ...old,
                 thumbUrl: u.thumbUrl,
                 displayUrl: u.displayUrl,
+                videoUrl: u.videoUrl,
                 urlExpiresAt: u.urlExpiresAt,
               }
             : old,

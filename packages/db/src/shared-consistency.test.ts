@@ -14,10 +14,10 @@ describe("@tinyglow/shared DEMO_IDS match the seed's DEMO", () => {
     expect(DEMO_IDS.shareLink).toBe(DEMO.shareLink);
   });
 
-  it("the 12 photo ids, in order", () => {
-    expect(DEMO_IDS.photos).toHaveLength(12);
-    expect([...DEMO_IDS.photos]).toEqual(Array.from({ length: 12 }, (_, i) => DEMO.photo(i + 1)));
-    expect(new Set(DEMO_IDS.photos).size).toBe(12);
+  it("the 13 demo item ids (12 photos + the step-12 video), in order", () => {
+    expect(DEMO_IDS.photos).toHaveLength(13);
+    expect([...DEMO_IDS.photos]).toEqual(Array.from({ length: 13 }, (_, i) => DEMO.photo(i + 1)));
+    expect(new Set(DEMO_IDS.photos).size).toBe(13);
   });
 });
 

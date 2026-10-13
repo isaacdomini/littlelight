@@ -4,6 +4,7 @@ import {
   type ShareSessionResponse,
   shareSessionResponseSchema,
   type ViewerDownloadResponse,
+  type ViewerMediaKind,
   type ViewerPhotosResponse,
   type ViewerUrlsResponse,
   viewerDownloadResponseSchema,
@@ -127,10 +128,8 @@ export function fetchSharePhotos(cursor?: string): Promise<ViewerPhotosResponse>
   return request(`/photos?${q.toString()}`, { schema: viewerPhotosResponseSchema });
 }
 
-export function fetchShareUrls(
-  ids: string[],
-  kind: "thumb" | "display",
-): Promise<ViewerUrlsResponse> {
+/** One kind per call (`thumb` / `display` posters, `web` = a video's playable rendition). */
+export function fetchShareUrls(ids: string[], kind: ViewerMediaKind): Promise<ViewerUrlsResponse> {
   return request("/photos/urls", {
     method: "POST",
     body: { ids, kind },

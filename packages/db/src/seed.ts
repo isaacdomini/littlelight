@@ -6,9 +6,11 @@
  * the flag in production it exits 1 without touching the database.
  *
  * Every row has a fixed id and is upserted, so any number of runs yields identical counts. No image
- * bytes are written here: every original is `image/jpeg` at `babies/<baby>/originals/<photo>.jpg`,
- * and in dev the worker's `ensureDemoMedia()` (step 9) puts metadata-free JPEG illustrations of
- * non-real babies at those keys and writes the derivatives. GPS / home coordinates are stored only
+ * or video bytes are written here: every photo original is `image/jpeg` at
+ * `babies/<baby>/originals/<photo>.jpg` and the one demo clip (photo 13, step 12) is `video/mp4`
+ * at `…/originals/<photo>.mp4` with a `web` rendition row; in dev the worker's `ensureDemoMedia()`
+ * (step 9, extended in step 12) puts metadata-free illustrations of non-real babies and the
+ * rendered clip at those keys and writes the derivatives. GPS / home coordinates are stored only
  * through `encrypt_coord`, with `DATA_ENCRYPTION_KEY` passed as a bind parameter
  * (`set_config('app.data_key', $1, true)`), never in statement text. Nothing here logs
  * coordinates, notes or keys; the only secret-looking thing printed is the fixed dev share token.
@@ -76,6 +78,13 @@ interface DemoPhoto {
   note?: string;
   /** Only one photo carries (encrypted) GPS; the value never appears in logs. */
   gps?: { lat: number; lng: number; placeLabel: string };
+  /**
+   * Set for the one demo clip (step 12): a `media_kind = 'video'` row with a ready rendition.
+   * The original is `video/mp4` at `babies/<baby>/originals/<id>.mp4`; the worker's
+   * `ensureDemoMedia()` renders the clip (SVG frames -> ffmpeg), its poster (thumb/display/
+   * analysis) and the `web` rendition at the seeded keys.
+   */
+  video?: { durationMs: number; codec: "h264" | "hevc"; hasAudio: boolean };
 }
 
 /**
@@ -194,7 +203,21 @@ const PHOTOS: readonly DemoPhoto[] = [
     tags: ["walking", "toy", "indoor"],
     approval: "pending",
   },
+  // The demo clip (step 12, docs/plans/step-12.md 2.6): one approved 4-second video so the
+  // timeline, viewer and store-review account show a video tile. Not shared on the demo link.
+  {
+    nn: 13,
+    uploadedBy: "mom",
+    takenAt: "2026-07-12T10:30:00Z",
+    caption: "Maya claps along to a song on the living-room rug, then laughs.",
+    tags: ["clapping", "laughing", "indoor", "video"],
+    approval: "approved",
+    video: { durationMs: 4000, codec: "h264", hasAudio: false },
+  },
 ];
+
+/** Original key: `.jpg` for every photo, `.mp4` for the demo clip. */
+const DEMO_VIDEO_MIME = "video/mp4";
 
 const COUNT_TABLES = [
   "profiles",
@@ -313,6 +336,9 @@ function searchText(p: DemoPhoto, milestoneName: string | undefined, relationshi
   if (p.people?.length) parts.push(`With ${p.people.join(" and ")}.`);
   parts.push(p.caption);
   if (p.note) parts.push(`Note from ${relationship}: '${p.note}'`);
+  // Mirrors buildSearchDocument (step 12): the clause exists for videos only, so photo
+  // documents are unchanged.
+  if (p.video) parts.push(`Video clip, ${Math.round(p.video.durationMs / 1000)} seconds.`);
   return parts.join(" ");
 }
 
@@ -451,26 +477,32 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
 
     for (const p of PHOTOS) {
       const id = DEMO.photo(p.nn);
-      const key = `babies/${DEMO.baby}/originals/${id}.jpg`;
+      const key = `babies/${DEMO.baby}/originals/${id}.${p.video ? "mp4" : "jpg"}`;
       const approved = p.approval === "approved";
       // width/height/bytes: placeholders on first insert only (deliberately absent from the
-      // DO UPDATE list); the worker's demo-media step writes the real original's sizes.
+      // DO UPDATE list); the worker's demo-media step writes the real original's sizes. The clip
+      // is a portrait phone video; its media columns are part of the upsert so an older seed row
+      // becomes the clip (photos_media_shape keeps them consistent with media_kind).
       await q(
         `INSERT INTO public.photos (id, baby_id, uploaded_by, storage_key_original, sha256, width, height, bytes, mime,
-           status, approval, approved_by, approved_at, taken_at, age_days, is_sensitive, deleted_at)
-         VALUES ($1, $2, $3, $4, $5, 3024, 4032, 2480000, $6,
-           $14, $7, $8, $9, $10::timestamptz, $11, $12, $13)
+           status, approval, approved_by, approved_at, taken_at, age_days, is_sensitive, deleted_at,
+           media_kind, duration_ms, video_codec, has_audio, rendition_status)
+         VALUES ($1, $2, $3, $4, $5, $15, $16, $17, $6,
+           $14, $7, $8, $9, $10::timestamptz, $11, $12, $13,
+           $18, $19, $20, $21, $22)
          ON CONFLICT (id) DO UPDATE SET uploaded_by = EXCLUDED.uploaded_by, storage_key_original = EXCLUDED.storage_key_original,
            sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, status = EXCLUDED.status, approval = EXCLUDED.approval,
            approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at, taken_at = EXCLUDED.taken_at,
-           age_days = EXCLUDED.age_days, is_sensitive = EXCLUDED.is_sensitive, deleted_at = EXCLUDED.deleted_at`,
+           age_days = EXCLUDED.age_days, is_sensitive = EXCLUDED.is_sensitive, deleted_at = EXCLUDED.deleted_at,
+           media_kind = EXCLUDED.media_kind, duration_ms = EXCLUDED.duration_ms, video_codec = EXCLUDED.video_codec,
+           has_audio = EXCLUDED.has_audio, rendition_status = EXCLUDED.rendition_status`,
         [
           id,
           DEMO.baby,
           DEMO.users[p.uploadedBy],
           key,
           sha256(`demo-photo-${p.nn}`),
-          DEMO_MIME,
+          p.video ? DEMO_VIDEO_MIME : DEMO_MIME,
           p.approval,
           approved ? DEMO.users.mom : null,
           approved ? p.takenAt : null,
@@ -480,6 +512,14 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
           p.deleted ? new Date(Date.now() - 3 * 86_400_000) : null,
           // The described photo is `ready` (its photo_ai row below); every other one is ingested.
           p.sensitive ? "ready" : "ingested",
+          p.video ? 1080 : 3024,
+          p.video ? 1920 : 4032,
+          p.video ? 1_800_000 : 2_480_000,
+          p.video ? "video" : "photo",
+          p.video?.durationMs ?? null,
+          p.video?.codec ?? null,
+          p.video?.hasAudio ?? null,
+          p.video ? "ready" : "none",
         ],
       );
       await q(
@@ -507,17 +547,32 @@ export async function seed(options: SeedOptions = {}): Promise<SeedResult> {
       // width/height/bytes to the real objects, so a re-seed must not reset them: an existing row
       // is left alone unless its key was changed, in which case it is restored whole (the sizes
       // then describe another object, and the worker corrects them again on its next run).
-      for (const [kind, w, h, bytes] of [
-        ["thumb", 300, 400, 24_000],
-        ["display", 1536, 2048, 310_000],
-      ] as const) {
+      // The clip's thumb/display are its poster frame; `web` is the playable rendition (.mp4).
+      const derivatives: readonly (readonly [string, number, number, number])[] = p.video
+        ? [
+            ["thumb", 300, 400, 24_000],
+            ["display", 1152, 2048, 290_000],
+            ["web", 1080, 1920, 1_500_000],
+          ]
+        : [
+            ["thumb", 300, 400, 24_000],
+            ["display", 1536, 2048, 310_000],
+          ];
+      for (const [kind, w, h, bytes] of derivatives) {
         await q(
           `INSERT INTO public.photo_derivatives (photo_id, kind, storage_key, width, height, bytes)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (photo_id, kind) DO UPDATE SET storage_key = EXCLUDED.storage_key, width = EXCLUDED.width,
              height = EXCLUDED.height, bytes = EXCLUDED.bytes
            WHERE public.photo_derivatives.storage_key IS DISTINCT FROM EXCLUDED.storage_key`,
-          [id, kind, `babies/${DEMO.baby}/derivatives/${id}/${kind}.jpg`, w, h, bytes],
+          [
+            id,
+            kind,
+            `babies/${DEMO.baby}/derivatives/${id}/${kind}.${kind === "web" ? "mp4" : "jpg"}`,
+            w,
+            h,
+            bytes,
+          ],
         );
       }
       if (p.milestoneId || p.note || p.people || p.locationLabel) {

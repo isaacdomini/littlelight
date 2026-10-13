@@ -5,7 +5,12 @@ import {
   OTP_CAPTCHA_AFTER_ATTEMPTS,
   otpRequestSchema,
   otpResponseSchema,
+  PASSKEY_CAPTCHA_AFTER_FAILURES,
   PRIVACY_VERSION,
+  passkeyOptionsFromGoTrue,
+  passkeyOptionsRequestSchema,
+  passkeyOptionsResponseSchema,
+  passkeyVerifyRequestSchema,
   pkceExchangeRequestSchema,
   refreshRequestSchema,
   sessionResponseSchema,
@@ -15,15 +20,23 @@ import {
 } from "@tinyglow/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { passkeysEnabled } from "../config";
 import { ApiError, forbidden, rateLimited, safeErrorLog } from "../lib/errors";
 import { clientIp, clientKindHeader, upstreamClientHeaders } from "../lib/request";
 import { audit, withClaims } from "./context";
 import { isSuspendedEmail } from "./family-guards";
-import { GoTrueError, type GoTrueSession, hasReviewLinks } from "./gotrue";
+import { GoTrueError, type GoTrueSession, hasPasskeys, hasReviewLinks } from "./gotrue";
 import { csrfRejected, requireAuth } from "./plugin";
 import { countOtherFamilies, isReviewEmail, type ReviewAccount, verifyReviewCode } from "./review";
 import type { AuthRuntime } from "./runtime";
 import { clearSessionCookies, type IssueOptions, issueSession } from "./session";
+import {
+  assertionHasUserVerification,
+  mapPasskeyError,
+  passkeyDisabled,
+  passkeyFailed,
+  passkeyUpstreamUnavailable,
+} from "./webauthn";
 
 // `/auth/*` routes of the API (docs/plans/step-3.md 2.3, 2.4, 2.9). Registered without the
 // `/api` prefix (nginx/Vite strip it). Bodies are validated by the shared zod schemas; the
@@ -72,11 +85,23 @@ async function logoutPresentedSession(
   }
 }
 
+/** The OAuth provider GoTrue reports for a session, as a `SignInMethod`; undefined when unknown. */
+function oauthMethodOf(session: GoTrueSession): IssueOptions["method"] {
+  const p = session.user.provider;
+  return p === "apple" || p === "google" ? p : undefined;
+}
+
 interface SignInOptions {
-  /** `review`: the store-review sign-in, recorded in the audit metadata (D4). */
-  method?: IssueOptions["method"];
+  /**
+   * Recorded as `method` in the `auth.sign_in` audit metadata: a fixed value (`otp`, `review`,
+   * `passkey`, a native id-token provider) or, for the PKCE exchange, a function of the session
+   * GoTrue returned (`oauthMethodOf`; undefined when the provider cannot be told).
+   */
+  method?: IssueOptions["method"] | ((session: GoTrueSession) => IssueOptions["method"]);
   /** The exchange must yield this user (store-review sign-in: the id `generate_link` returned). */
   expectUserId?: string;
+  /** How an exchange failure becomes the response; default `mapExchangeError` (OTP/OAuth). */
+  mapError?: (err: unknown) => ApiError;
 }
 
 async function signIn(
@@ -90,7 +115,7 @@ async function signIn(
   try {
     session = await exchange();
   } catch (err) {
-    throw mapExchangeError(err, request);
+    throw opts.mapError ? opts.mapError(err) : mapExchangeError(err, request);
   }
   if (opts.expectUserId !== undefined && session.user.id.toLowerCase() !== opts.expectUserId) {
     // Cannot happen with a well-behaved GoTrue; never hand out a session for another user.
@@ -103,9 +128,10 @@ async function signIn(
     throw upstreamUnavailable();
   }
   await logoutPresentedSession(request, runtime);
+  const method = typeof opts.method === "function" ? opts.method(session) : opts.method;
   return issueSession(request, reply, session, {
     kind: "sign_in",
-    ...(opts.method ? { method: opts.method } : {}),
+    ...(method ? { method } : {}),
   });
 }
 
@@ -169,9 +195,30 @@ async function reviewSignIn(
   return result;
 }
 
+// `POST /auth/passkey/options` body: the shared `passkeyOptionsRequestSchema` (the Turnstile
+// token, required only after `PASSKEY_CAPTCHA_AFTER_FAILURES` failed verifies from the IP, 403
+// `captcha_required` like OTP); an absent body parses as `{}`. An empty-string token is treated
+// as absent below.
+
+/** Fastify hands an absent JSON body to the validator as `null`; normalise before validation. */
+async function emptyBodyAsObject(request: FastifyRequest): Promise<void> {
+  if (request.body === null || request.body === undefined) request.body = {};
+}
+
+/** Window-length `Retry-After` for a limit read with `count()` (the throttle exposes no oldest hit). */
+function windowRetryAfterSec(windowMs: number): number {
+  return Math.max(1, Math.ceil(windowMs / 1000));
+}
+
 export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
   const { config, gotrue, throttles, turnstile, review } = runtime;
+  const passkeys = passkeysEnabled(config);
+
+  /** Runs before body validation so a disabled feature is 404 whatever the body (step 13, 2.4). */
+  const requirePasskeysEnabled = async (): Promise<void> => {
+    if (!passkeys) throw passkeyDisabled();
+  };
 
   r.route({
     method: "GET",
@@ -182,7 +229,109 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
       turnstileSiteKey: turnstile ? (config.TURNSTILE_SITE_KEY ?? null) : null,
       termsVersion: TERMS_VERSION,
       privacyVersion: PRIVACY_VERSION,
+      passkeys,
     }),
+  });
+
+  // Passkey sign-in (docs/plans/step-13.md 2.1, 2.4; decisions c, d, g). Both routes are public:
+  // GoTrue's discoverable-credential ceremony needs no email. Logs carry `{ outcome }` and GoTrue
+  // status/code only: never the challenge id, the credential, or any WebAuthn material (the
+  // logger also redacts those body fields).
+  r.route({
+    method: "POST",
+    url: "/auth/passkey/options",
+    schema: {
+      body: passkeyOptionsRequestSchema,
+      response: { 200: passkeyOptionsResponseSchema },
+    },
+    preValidation: [requirePasskeysEnabled, emptyBodyAsObject],
+    handler: async (request) => {
+      if (!hasPasskeys(gotrue)) throw passkeyUpstreamUnavailable();
+      const ip = clientIp(request);
+      // Turnstile once this IP has failed `PASSKEY_CAPTCHA_AFTER_FAILURES` verifies in 15 min;
+      // inert without the secret (same shape as the OTP threshold).
+      if (
+        turnstile &&
+        throttles.passkeyVerifyFailuresPerIp.count(ip) >= PASSKEY_CAPTCHA_AFTER_FAILURES
+      ) {
+        const token = request.body.captchaToken;
+        if (!token) throw new ApiError(403, "captcha_required", "Please complete the verification");
+        if (!(await turnstile.verify(token, ip))) {
+          throw new ApiError(403, "captcha_failed", "Verification failed, try again");
+        }
+      }
+      const byIp = throttles.passkeyOptionsPerIp.hit(ip);
+      if (!byIp.allowed) {
+        request.log.info({ outcome: "rate_limited" }, "passkey options refused");
+        throw rateLimited(byIp.retryAfterSec, "Too many attempts, try again later");
+      }
+      let options: Awaited<ReturnType<typeof gotrue.passkeyAuthOptions>>;
+      try {
+        // Decision d: the client headers go upstream so GoTrue's own 30 / 5 min limiter keys on
+        // the browser IP, not on the api container.
+        options = await gotrue.passkeyAuthOptions(upstreamClientHeaders(request));
+      } catch (err) {
+        throw mapPasskeyError(err, request.log, "sign_in");
+      }
+      request.log.info({ outcome: "issued" }, "passkey options");
+      return passkeyOptionsFromGoTrue(options);
+    },
+  });
+
+  r.route({
+    method: "POST",
+    url: "/auth/passkey/verify",
+    schema: { body: passkeyVerifyRequestSchema, response: { 200: sessionResponseSchema } },
+    preValidation: requirePasskeysEnabled,
+    handler: async (request, reply) => {
+      if (!hasPasskeys(gotrue)) throw passkeyUpstreamUnavailable();
+      const ip = clientIp(request);
+      // Decision c: GoTrue has no limiter on this route, so the API caps total attempts per IP
+      // per hour and failures per IP per 15 minutes. Both answer 429.
+      const total = throttles.passkeyVerifyPerIp.hit(ip);
+      if (!total.allowed) {
+        request.log.info({ outcome: "rate_limited" }, "passkey verify refused");
+        throw rateLimited(total.retryAfterSec, "Too many attempts, try again later");
+      }
+      const failures = throttles.passkeyVerifyFailuresPerIp;
+      if (failures.count(ip) >= failures.limit) {
+        request.log.info({ outcome: "rate_limited" }, "passkey verify refused");
+        throw rateLimited(
+          windowRetryAfterSec(failures.windowMs),
+          "Too many failed attempts, use your email code or try again later",
+        );
+      }
+      const { challengeId, credential } = request.body;
+      // Decision g: user verification is required by the API, not left to GoTrue's `preferred`.
+      // Checked BEFORE any upstream call; the refusal is the same generic `passkey_failed`.
+      if (!assertionHasUserVerification(credential)) {
+        failures.hit(ip);
+        request.log.info({ outcome: "no_user_verification" }, "passkey verify refused");
+        throw passkeyFailed();
+      }
+      const result = await signIn(
+        request,
+        reply,
+        runtime,
+        () => gotrue.passkeyAuthVerify({ challengeId, credential }, upstreamClientHeaders(request)),
+        {
+          method: "passkey",
+          mapError: (err) => {
+            const mapped = mapPasskeyError(err, request.log, "sign_in");
+            // Only a genuine refusal (401 `passkey_failed`) counts towards the failure throttle
+            // and the Turnstile threshold; GoTrue 5xx/transport (503), `passkey_disabled` (404)
+            // and anything else are not the caller's doing and must not lock an IP out.
+            if (mapped.status === 401 && mapped.code === "passkey_failed") failures.hit(ip);
+            request.log.info({ outcome: mapped.code }, "passkey verify refused");
+            return mapped;
+          },
+        },
+      );
+      // GoTrue's own audit row (`login { passkey_id }`) names the passkey; the API's
+      // `auth.sign_in` records `method: "passkey"` (the response carries no passkey id).
+      request.log.info({ outcome: "signed_in" }, "passkey sign-in");
+      return result;
+    },
   });
 
   r.route({
@@ -264,19 +413,28 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
           throttles.verifyPerEmail.reset(body.email);
           return result;
         }
-        const result = await signIn(request, reply, runtime, () =>
-          gotrue.verify({ kind: "code", email: body.email, token: body.code }, upstream),
+        const result = await signIn(
+          request,
+          reply,
+          runtime,
+          () => gotrue.verify({ kind: "code", email: body.email, token: body.code }, upstream),
+          { method: "otp" },
         );
         throttles.verifyPerEmail.reset(body.email);
         return result;
       }
-      // Magic link (web fallback): the single-use token_hash from the URL fragment.
+      // Magic link (web fallback): the single-use token_hash from the URL fragment. Same
+      // `method` as the code: both are the email sign-in (`SIGN_IN_METHODS` has no `magiclink`).
       const attempt = throttles.verifyPerIp.hit(clientIp(request));
       if (!attempt.allowed) {
         throw rateLimited(attempt.retryAfterSec, "Too many attempts, request a new code");
       }
-      return signIn(request, reply, runtime, () =>
-        gotrue.verify({ kind: "token_hash", tokenHash: body.tokenHash }, upstream),
+      return signIn(
+        request,
+        reply,
+        runtime,
+        () => gotrue.verify({ kind: "token_hash", tokenHash: body.tokenHash }, upstream),
+        { method: "otp" },
       );
     },
   });
@@ -290,8 +448,13 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
         throw new ApiError(400, "provider_disabled", "Social sign-in is not available");
       }
       const { code, codeVerifier } = request.body;
-      return signIn(request, reply, runtime, () =>
-        gotrue.exchangePkce({ authCode: code, codeVerifier }, upstreamClientHeaders(request)),
+      // The PKCE body names no provider; GoTrue's session user does (`GoTrueUser.provider`).
+      return signIn(
+        request,
+        reply,
+        runtime,
+        () => gotrue.exchangePkce({ authCode: code, codeVerifier }, upstreamClientHeaders(request)),
+        { method: oauthMethodOf },
       );
     },
   });
@@ -306,11 +469,16 @@ export function authRoutes(app: FastifyInstance, runtime: AuthRuntime): void {
       if (!enabled) {
         throw new ApiError(400, "provider_disabled", "That sign-in method is not available");
       }
-      return signIn(request, reply, runtime, () =>
-        gotrue.signInWithIdToken(
-          { provider, idToken, nonce, accessToken },
-          upstreamClientHeaders(request),
-        ),
+      return signIn(
+        request,
+        reply,
+        runtime,
+        () =>
+          gotrue.signInWithIdToken(
+            { provider, idToken, nonce, accessToken },
+            upstreamClientHeaders(request),
+          ),
+        { method: provider },
       );
     },
   });

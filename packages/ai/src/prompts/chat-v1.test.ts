@@ -13,7 +13,8 @@ describe("chat prompt v1", () => {
     expect(CHAT_PROMPT_VERSION).toBe("v1");
     const sha = createHash("sha256").update(CHAT_SYSTEM_RULES_V1, "utf8").digest("hex");
     expect(CHAT_PROMPT_V1_SHA256).toBe(sha);
-    expect(sha).toBe("6cd8a820888e88c1b25e2b129a773128f2e159101711df47f0fb64524a3bd87f");
+    // Re-pinned in step 12 (rule 9: videos); still v1, no backfill (docs/plans/step-12.md 2.7).
+    expect(sha).toBe("e80b0eaae63cdbeb53a3b0f70ef9d58810ef74ea2483e08a906e889536fa4b81");
   });
 
   it("states the no-medical-interpretation and data-not-instructions rules", () => {

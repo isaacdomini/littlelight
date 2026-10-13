@@ -1,10 +1,17 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { HeadObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import {
   DEMO_IDS,
   type DerivativeKind,
   derivativeKey,
+  type ImageDerivativeKind,
   type IngestJob,
   originalKey,
+  type VideoKeyframeKind,
+  videoKeyframeTimes,
+  videoPosterSeconds,
 } from "@tinyglow/shared";
 import exifr from "exifr";
 import { errorCategory } from "../clients";
@@ -14,6 +21,11 @@ import { decodeImage } from "../ingest/decode";
 import { renderDerivative } from "../ingest/derivatives";
 import type { WorkerLog } from "../log-types";
 import type { ObjectStorage } from "../storage";
+import { runProcess } from "../video/ffmpeg";
+import { probeVideo, type VideoProbe } from "../video/ffprobe";
+import { extractFrameOrFirst } from "../video/frames";
+import { remuxArgs } from "../video/transcode";
+import { renderDemoClip } from "./clip";
 import { demoScene, renderScene, reviewScene, type Scene } from "./illustrations";
 
 // Demo media (docs/plans/step-9.md 2.11, task 9.12; user decision D5).
@@ -34,11 +46,42 @@ import { demoScene, renderScene, reviewScene, type Scene } from "./illustrations
 //   dedupe, EXIF, then AI on Plus through the usual pipeline). Rows with any other key (another
 //   baby's prefix, a real upload's extension-less key, anything else) are never touched.
 // * `checkDemoMedia`: read-only verification for `pnpm demo:media --check`.
+// * Step 12 (docs/plans/step-12.md 2.6): the 13th demo item is a 4-second clip (`DEMO_IDS.video`)
+//   rendered in code by ffmpeg (`demo/clip.ts`): the original `.mp4`, the poster frame as
+//   thumb/display/analysis, the `web` rendition (a tag-free remux) and `keyframe1..3`, with
+//   `photos.duration_ms` / `video_codec` / `has_audio` corrected from ffprobe.
 //
 // Runs as `pipeline` (the worker's DB role) with the worker's S3 credentials. Logs ids and counts
-// only. The JPEGs carry no metadata (checked by `checkDemoMedia` and the unit tests).
+// only. The JPEGs carry no metadata (checked by `checkDemoMedia` and the unit tests); the clip
+// and its rendition carry no container tags (ffprobe-checked the same way).
 
-const KINDS: readonly DerivativeKind[] = ["thumb", "display", "analysis"];
+const KINDS: readonly ImageDerivativeKind[] = ["thumb", "display", "analysis"];
+/** Derivatives of the demo clip: poster sizes, the rendition and the three keyframes. */
+export const VIDEO_KINDS: readonly DerivativeKind[] = [
+  "thumb",
+  "display",
+  "analysis",
+  "web",
+  "keyframe1",
+  "keyframe2",
+  "keyframe3",
+];
+/** Number of derivative objects the dev demo family has once ensured (12 photos × 3 + the clip's 7). */
+export const EXPECTED_DEMO_DERIVATIVES =
+  (DEMO_IDS.photos.length - 1) * KINDS.length + VIDEO_KINDS.length;
+
+export interface DemoVideoTools {
+  ffmpegPath: string;
+  ffprobePath: string;
+  threads: number;
+}
+
+/** Defaults: the binaries by name (the worker image's), two threads. */
+export const DEFAULT_VIDEO_TOOLS: DemoVideoTools = {
+  ffmpegPath: "ffmpeg",
+  ffprobePath: "ffprobe",
+  threads: 2,
+};
 
 export interface DemoMediaDeps {
   pool: PipelinePool;
@@ -47,6 +90,8 @@ export interface DemoMediaDeps {
   bucket: string;
   storage: ObjectStorage;
   log: WorkerLog;
+  /** ffmpeg/ffprobe for the demo clip (default `DEFAULT_VIDEO_TOOLS`). */
+  video?: DemoVideoTools;
 }
 
 /**
@@ -63,7 +108,7 @@ export function demoMediaEnabled(
 // --- SQL ---------------------------------------------------------------------------------------
 
 export const DEMO_PHOTOS_SQL = `
-SELECT id, baby_id, storage_key_original, width, height, bytes
+SELECT id, baby_id, storage_key_original, width, height, bytes, media_kind, duration_ms
 FROM photos
 WHERE baby_id = $1 AND id = ANY($2::uuid[])
 ORDER BY id`;
@@ -76,6 +121,13 @@ WHERE photo_id = ANY($1::uuid[])`;
 export const UPDATE_PHOTO_SIZE_SQL = `
 UPDATE photos SET width = $2, height = $3, bytes = $4
 WHERE id = $1 AND (width IS DISTINCT FROM $2 OR height IS DISTINCT FROM $3 OR bytes IS DISTINCT FROM $4)`;
+
+/** The clip's probed columns (step 12); `media_kind` is the seed's, `rendition_status` stays `ready`. */
+export const UPDATE_VIDEO_SIZE_SQL = `
+UPDATE photos SET width = $2, height = $3, bytes = $4, duration_ms = $5, video_codec = $6, has_audio = $7
+WHERE id = $1 AND media_kind = 'video'
+  AND (width IS DISTINCT FROM $2 OR height IS DISTINCT FROM $3 OR bytes IS DISTINCT FROM $4
+       OR duration_ms IS DISTINCT FROM $5 OR video_codec IS DISTINCT FROM $6 OR has_audio IS DISTINCT FROM $7)`;
 
 /** Review rows waiting for ingest, oldest first (the order `REVIEW_SCENES` follows). */
 export const REVIEW_PHOTOS_SQL = `
@@ -91,6 +143,8 @@ interface PhotoRow {
   width: number | null;
   height: number | null;
   bytes: number | string | null;
+  media_kind?: string;
+  duration_ms?: number | null;
 }
 
 interface DerivativeRow {
@@ -185,9 +239,38 @@ export interface EnsureResult {
   failed: number;
 }
 
-/** Seed photo number (1..12) of a demo photo id, from `DEMO_IDS.photos`. */
+/** Seed item number (1..13) of a demo photo id, from `DEMO_IDS.photos`; 13 is the clip. */
 function demoNumber(photoId: string): number {
   return (DEMO_IDS.photos as readonly string[]).indexOf(photoId) + 1;
+}
+
+/** True for the one demo clip (`DEMO_IDS.video`). */
+export function isDemoClip(photoId: string): boolean {
+  return photoId === DEMO_IDS.video;
+}
+
+/** Tag keys the clip and its rendition must not carry (same tripwire as `video/transcode.ts`). */
+const FORBIDDEN_TAG = /location|iso6709|creation_time|creationdate|gps|make$|model$/i;
+
+/** True when ffprobe finds no forbidden container tag on a video file. */
+export function isVideoMetadataFree(probe: VideoProbe): boolean {
+  return Object.keys(probe.tags).every((k) => !FORBIDDEN_TAG.test(k));
+}
+
+/** Write bytes to a private temp file and run `fn` on its path; the file is removed afterwards. */
+async function withTempFile<T>(
+  buf: Buffer,
+  ext: string,
+  fn: (file: string) => Promise<T>,
+): Promise<T> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "ll-demo-media-"));
+  try {
+    const file = path.join(dir, `media.${ext}`);
+    await writeFile(file, buf, { mode: 0o600 });
+    return await fn(file);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 async function loadDemoRows(
@@ -229,7 +312,7 @@ async function ensureOne(
 
   // 2. Which derivatives (object + row) are missing or out of step with each other. A freshly
   //    written original makes every derivative stale (they may come from an older drawing).
-  const stale: DerivativeKind[] = [];
+  const stale: ImageDerivativeKind[] = [];
   const sizes = new Map<DerivativeKind, number | null>();
   for (const kind of KINDS) {
     const key = derivativeKey(babyId, photo.id, kind);
@@ -292,6 +375,131 @@ async function ensureOne(
   }
 }
 
+/** The demo clip (step 12): original `.mp4`, poster derivatives, `web` remux, keyframes, row sizes. */
+async function ensureClip(
+  deps: DemoMediaDeps,
+  photo: PhotoRow,
+  rows: Map<DerivativeKind, DerivativeRow> | undefined,
+  result: EnsureResult,
+): Promise<void> {
+  const tools = deps.video ?? DEFAULT_VIDEO_TOOLS;
+  const babyId = photo.baby_id;
+  // 1. Original.
+  let original: Buffer | undefined;
+  let originalBytes = await headSize(deps, photo.storage_key_original);
+  if (originalBytes === null) {
+    const clip = await renderDemoClip({ ffmpegPath: tools.ffmpegPath, threads: tools.threads });
+    await deps.storage.putObject(photo.storage_key_original, clip.buffer, "video/mp4");
+    original = clip.buffer;
+    originalBytes = clip.bytes;
+    result.originalsWritten++;
+  }
+
+  // 2. Which derivatives are missing or out of step.
+  const stale: DerivativeKind[] = [];
+  const sizes = new Map<DerivativeKind, number | null>();
+  for (const kind of VIDEO_KINDS) {
+    const key = derivativeKey(babyId, photo.id, kind);
+    const row = rows?.get(kind);
+    const size = await headSize(deps, key);
+    sizes.set(kind, size);
+    if (
+      original !== undefined ||
+      !row ||
+      row.storage_key !== key ||
+      size === null ||
+      Number(row.bytes) !== size
+    ) {
+      stale.push(kind);
+    }
+  }
+  const rowStale =
+    photo.bytes === null ||
+    Number(photo.bytes) !== originalBytes ||
+    photo.width === null ||
+    photo.height === null ||
+    photo.duration_ms === null;
+  if (stale.length === 0 && !rowStale) {
+    result.unchanged++;
+    return;
+  }
+
+  // 3. Render from the stored original, staged in a private temp file for ffmpeg/ffprobe.
+  const buf = original ?? (await deps.storage.getObject(photo.storage_key_original));
+  await withTempFile(buf, "mp4", async (file) => {
+    const probe = await probeVideo(tools.ffprobePath, file);
+    const frameOpts = { ffmpegPath: tools.ffmpegPath, threads: tools.threads };
+    const put = async (
+      kind: DerivativeKind,
+      buffer: Buffer,
+      w: number,
+      h: number,
+      mime: string,
+    ) => {
+      const key = derivativeKey(babyId, photo.id, kind);
+      if (original !== undefined || sizes.get(kind) !== buffer.byteLength) {
+        await deps.storage.putObject(key, buffer, mime, { cacheControl: CACHE_CONTROL });
+        result.derivativesWritten++;
+      } else {
+        result.derivativeRowsFixed++;
+      }
+      await runAsPipeline(deps.pool, {}, async (c) => {
+        await c.query(UPSERT_DERIVATIVE_SQL, [photo.id, kind, key, w, h, buffer.byteLength]);
+      });
+    };
+    const posterKinds = stale.filter((k): k is ImageDerivativeKind =>
+      KINDS.includes(k as ImageDerivativeKind),
+    );
+    if (posterKinds.length > 0) {
+      const poster = await extractFrameOrFirst(
+        file,
+        videoPosterSeconds(probe.durationMs),
+        frameOpts,
+      );
+      try {
+        for (const kind of posterKinds) {
+          const d = await renderDerivative(poster, kind);
+          await put(kind, d.buffer, d.width, d.height, "image/jpeg");
+        }
+      } finally {
+        poster.release();
+      }
+    }
+    if (stale.includes("web")) {
+      const out = path.join(path.dirname(file), "web.mp4");
+      await runProcess(tools.ffmpegPath, remuxArgs(file, out, probe, tools.threads), {
+        timeoutMs: 120_000,
+      });
+      const web = await readFile(out);
+      const webProbe = await probeVideo(tools.ffprobePath, out);
+      await put("web", web, webProbe.width, webProbe.height, "video/mp4");
+    }
+    const keyframes = videoKeyframeTimes(probe.durationMs).filter((k) => stale.includes(k.kind));
+    for (const { kind, seconds } of keyframes) {
+      const frame = await extractFrameOrFirst(file, seconds, frameOpts);
+      try {
+        const d = await renderDerivative(frame, "analysis");
+        await put(kind as VideoKeyframeKind, d.buffer, d.width, d.height, "image/jpeg");
+      } finally {
+        frame.release();
+      }
+    }
+    const updated = await runAsPipeline(deps.pool, {}, async (c) => {
+      const r = await c.query(UPDATE_VIDEO_SIZE_SQL, [
+        photo.id,
+        probe.width,
+        probe.height,
+        buf.byteLength,
+        probe.durationMs,
+        probe.codec,
+        probe.hasAudio,
+      ]);
+      return r.rowCount ?? 0;
+    });
+    result.photoRowsUpdated += updated;
+  });
+}
+
 /**
  * Make the seeded demo photos real (dev only; the caller checks `SEED_DEMO_FAMILY` and
  * `NODE_ENV`). Never throws for one photo: a failure is counted and logged by id, and the next
@@ -313,7 +521,8 @@ export async function ensureDemoMedia(deps: DemoMediaDeps): Promise<EnsureResult
     const nn = demoNumber(photo.id);
     if (nn < 1) continue;
     try {
-      await ensureOne(deps, photo, demoScene(nn), derivs.get(photo.id), result);
+      if (isDemoClip(photo.id)) await ensureClip(deps, photo, derivs.get(photo.id), result);
+      else await ensureOne(deps, photo, demoScene(nn), derivs.get(photo.id), result);
     } catch (err) {
       result.failed++;
       deps.log.warn({ photoId: photo.id, err: errorCategory(err) }, "demo media: photo failed");
@@ -339,33 +548,52 @@ export interface CheckResult {
 /** Read-only: every demo original and derivative exists, matches its row and has no metadata. */
 export async function checkDemoMedia(deps: DemoMediaDeps): Promise<CheckResult> {
   const { photos, derivs } = await loadDemoRows(deps);
+  const tools = deps.video ?? DEFAULT_VIDEO_TOOLS;
   const out: CheckResult = {
     photos: photos.length,
     expectedPhotos: DEMO_IDS.photos.length,
     originals: 0,
     derivatives: 0,
-    expectedDerivatives: DEMO_IDS.photos.length * KINDS.length,
+    expectedDerivatives: EXPECTED_DEMO_DERIVATIVES,
     rowsMatching: 0,
     metadataFree: 0,
     objectsChecked: 0,
   };
+  const videoClean = (buf: Buffer) =>
+    withTempFile(buf, "mp4", async (file) => {
+      const probe = await probeVideo(tools.ffprobePath, file);
+      return { probe, clean: isVideoMetadataFree(probe) };
+    });
   for (const photo of photos) {
+    const clip = isDemoClip(photo.id);
     const size = await headSize(deps, photo.storage_key_original);
     if (size !== null) {
       out.originals++;
       const buf = await deps.storage.getObject(photo.storage_key_original);
       out.objectsChecked++;
-      if (await isMetadataFree(buf)) out.metadataFree++;
-      const meta = await decodeImage(buf, "image/jpeg");
-      if (
-        Number(photo.bytes) === size &&
-        photo.width === meta.width &&
-        photo.height === meta.height
-      )
-        out.rowsMatching++;
-      meta.release();
+      if (clip) {
+        const { probe, clean } = await videoClean(buf);
+        if (clean) out.metadataFree++;
+        if (
+          Number(photo.bytes) === size &&
+          photo.width === probe.width &&
+          photo.height === probe.height &&
+          photo.duration_ms === probe.durationMs
+        )
+          out.rowsMatching++;
+      } else {
+        if (await isMetadataFree(buf)) out.metadataFree++;
+        const meta = await decodeImage(buf, "image/jpeg");
+        if (
+          Number(photo.bytes) === size &&
+          photo.width === meta.width &&
+          photo.height === meta.height
+        )
+          out.rowsMatching++;
+        meta.release();
+      }
     }
-    for (const kind of KINDS) {
+    for (const kind of clip ? VIDEO_KINDS : KINDS) {
       const row = derivs.get(photo.id)?.get(kind);
       const key = derivativeKey(photo.baby_id, photo.id, kind);
       if (!row || row.storage_key !== key) continue;
@@ -374,7 +602,9 @@ export async function checkDemoMedia(deps: DemoMediaDeps): Promise<CheckResult> 
       out.derivatives++;
       const buf = await deps.storage.getObject(key);
       out.objectsChecked++;
-      if (await isMetadataFree(buf)) out.metadataFree++;
+      if (kind === "web") {
+        if ((await videoClean(buf)).clean) out.metadataFree++;
+      } else if (await isMetadataFree(buf)) out.metadataFree++;
     }
   }
   return out;

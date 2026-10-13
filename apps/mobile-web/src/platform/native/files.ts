@@ -1,3 +1,4 @@
+import { readVideoDurationFromUrl } from "../../lib/upload/validate";
 import { convertFileSrc } from "../platform";
 import type { NativeFileRef } from "../uploader";
 
@@ -22,7 +23,21 @@ function extensionOf(name: string, mime: string): string {
   if (mime === "image/heic" || mime === "image/heif") return "heic";
   if (mime === "image/png") return "png";
   if (mime === "image/webp") return "webp";
+  if (mime === "video/quicktime") return "mov";
+  if (mime === "video/mp4") return "mp4";
   return "jpg";
+}
+
+async function uploadCacheTarget(src: { name: string; mime: string }) {
+  const { Filesystem, Directory } = await import("@capacitor/filesystem");
+  await Filesystem.mkdir({ path: UPLOAD_DIR, directory: Directory.Cache, recursive: true }).catch(
+    () => undefined,
+  );
+  return {
+    Filesystem,
+    Directory,
+    to: `${UPLOAD_DIR}/${newId()}.${extensionOf(src.name, src.mime)}`,
+  };
 }
 
 /** Copies a picker/camera file into `Caches/ll-uploads` and returns the stable reference. */
@@ -31,17 +46,65 @@ export async function copyIntoUploadCache(src: {
   name: string;
   mime: string;
   size: number;
+  durationMs?: number;
 }): Promise<NativeFileRef> {
-  const { Filesystem, Directory } = await import("@capacitor/filesystem");
-  await Filesystem.mkdir({ path: UPLOAD_DIR, directory: Directory.Cache, recursive: true }).catch(
-    () => undefined,
-  );
-  const to = `${UPLOAD_DIR}/${newId()}.${extensionOf(src.name, src.mime)}`;
+  const { Filesystem, Directory, to } = await uploadCacheTarget(src);
   const res = await Filesystem.copy({ from: src.path, to, toDirectory: Directory.Cache });
-  return { path: res.uri, name: src.name, mime: src.mime, size: src.size };
+  return {
+    path: res.uri,
+    name: src.name,
+    mime: src.mime,
+    size: src.size,
+    ...(src.durationMs !== undefined ? { durationMs: src.durationMs } : {}),
+  };
 }
 
-/** Reads one working copy into a `File` (for SHA-256 + EXIF; never kept longer than needed). */
+/**
+ * Moves a picker temp file into `Caches/ll-uploads` (videos, step 12 / NATIVE.md "Picking
+ * videos"): the picker already made one temp copy, so a 2 GB clip never needs a second one.
+ * Falls back to a copy when the rename fails (another volume).
+ */
+export async function moveIntoUploadCache(src: {
+  path: string;
+  name: string;
+  mime: string;
+  size: number;
+  durationMs?: number;
+}): Promise<NativeFileRef> {
+  const { Filesystem, Directory, to } = await uploadCacheTarget(src);
+  try {
+    await Filesystem.rename({ from: src.path, to, toDirectory: Directory.Cache });
+  } catch {
+    return copyIntoUploadCache(src);
+  }
+  const { uri } = await Filesystem.getUri({ path: to, directory: Directory.Cache });
+  return {
+    path: uri,
+    name: src.name,
+    mime: src.mime,
+    size: src.size,
+    ...(src.durationMs !== undefined ? { durationMs: src.durationMs } : {}),
+  };
+}
+
+/**
+ * A native video's duration (ms) without reading the clip: a `<video preload="metadata">` on the
+ * WebView file URL (`convertFileSrc`), which streams by range. Capacitor iOS answers a full-file
+ * `fetch` of a mov/mp4 with a plain `URLResponse` (status 0), so `fileFromRef` must never be used
+ * for videos; the native ranged `putFile` streams the bytes from disk instead.
+ */
+export function nativeVideoDuration(ref: NativeFileRef): Promise<number | undefined> {
+  try {
+    return readVideoDurationFromUrl(convertFileSrc(ref.path));
+  } catch {
+    return Promise.resolve(undefined);
+  }
+}
+
+/**
+ * Reads one working copy into a `File` (photos only: SHA-256 + EXIF; never kept longer than
+ * needed). Not for videos, see `nativeVideoDuration`.
+ */
 export async function fileFromRef(ref: NativeFileRef): Promise<File> {
   const res = await fetch(convertFileSrc(ref.path));
   if (!res.ok) throw new Error("native file unreadable");

@@ -19,7 +19,8 @@ import { SHARE_PATH } from "./constants";
 //    are replaced, and so are (step 10, photo import) Google OAuth tokens and codes, the fake
 //    Picker's token shapes, Google media / Picker URLs, OAuth `code=`/`state=` pairs, native
 //    upload-cache, share-staging and album-sync paths, photo-library paths and PHAsset
-//    identifiers; strings are capped at `TELEMETRY_MAX_STRING_CHARS`;
+//    identifiers, and (step 12, video) worker scratch paths, QuickTime location tags and ISO 6709
+//    coordinate strings; strings are capped at `TELEMETRY_MAX_STRING_CHARS`;
 // 4. walks at most `TELEMETRY_MAX_DEPTH` levels (deeper values become a marker), caps arrays and
 //    objects, cuts cycles, and copies: the input is never mutated.
 // The output of `scrubTelemetryEvent` is stable under a second pass (idempotent).
@@ -154,8 +155,31 @@ export const TELEMETRY_SCRUB_PATTERNS = Object.freeze({
   photoLibraryPath: /(\/var\/mobile\/Media)\/(?!\[)[^\s"'<>()[\]{}]+/,
   /** A PHAsset local identifier (`<UUID>/L0/001`): never leaves the device (D3). */
   phAssetId: /\b[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\/L0\/\d{3}\b/i,
+  /**
+   * A file under the worker's video scratch folder (`/scratch/<photoId>.orig`, `/scratch/…/web.mp4`;
+   * docs/plans/step-12.md 2.3, Q8): group 1 (the folder) is kept, the rest of the path replaced.
+   */
+  scratchPath: /(\/scratch)\/(?!\[)[^\s"'<>()[\]{}]+/,
+  /**
+   * A QuickTime location tag with whatever follows it (`com.apple.quicktime.location.ISO6709=+47.6-122.3/`,
+   * `com.apple.quicktime.location.accuracy.horizontal: 5`): the key is kept, the value replaced.
+   */
+  quicktimeLocationTag: /\bcom\.apple\.quicktime\.location(?!\[)[^\s"'<>()[\]{}]*/,
+  /**
+   * An ISO 6709 coordinate string as QuickTime writes it: `±DD.DDDD±DDD.DDDD[±AAA.AAA]/`
+   * (latitude, longitude, optional altitude).
+   */
+  iso6709: /[+-]\d{2}\.\d+[+-]\d{3}\.\d+(?:[+-]\d+(?:\.\d+)?)?\/?/,
   /** `Authorization` credentials written out: `Bearer <token>`, `Basic <base64>`. */
   authCredential: /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/i,
+  /**
+   * WebAuthn material written as `key=value` / `key: value` / `"key":"value"` (step 13,
+   * docs/plans/step-13.md 2.3): `clientDataJSON`, `attestationObject`, `authenticatorData`,
+   * `signature`, `rawId`, `userHandle`, `challenge`, `challenge_id` / `challengeId`. Group 1 (the
+   * key) and 2 (the separator) are kept; the value is replaced.
+   */
+  webauthnPair:
+    /\b(clientDataJSON|attestationObject|authenticatorData|signature|rawId|userHandle|challenge(?:_?id)?)(["']?\s*[:=]\s*["']?)(?!\[)[^\s"'&,;)}\]]+/i,
   /** Presigned-URL parameters: `X-Amz-Signature=…`, `X-Amz-Credential=…`, SigV2 `Signature=…`. */
   amzParam: /\b(X-Amz-[A-Za-z-]+|AWSAccessKeyId|Signature|Credential)=[^&\s"'<>]+/i,
   /**
@@ -272,7 +296,11 @@ const STRING_RULES: ReadonlyArray<readonly [RegExp, Replacer]> = [
   [withGlobalFlag(P.nativeUploadPath), (_m, dir) => `${dir}/${REDACTED}`],
   [withGlobalFlag(P.photoLibraryPath), (_m, dir) => `${dir}/${REDACTED}`],
   [withGlobalFlag(P.phAssetId), () => "[asset-id]"],
+  [withGlobalFlag(P.scratchPath), (_m, dir) => `${dir}/${REDACTED}`],
+  [withGlobalFlag(P.quicktimeLocationTag), () => `com.apple.quicktime.location${REDACTED}`],
+  [withGlobalFlag(P.iso6709), () => "[coords]"],
   [withGlobalFlag(P.authCredential), (_m, scheme) => `${scheme} ${REDACTED}`],
+  [withGlobalFlag(P.webauthnPair), (_m, key, sep) => `${key}${sep}${REDACTED}`],
   [withGlobalFlag(P.amzParam), (_m, name) => `${name}=${REDACTED}`],
   [withGlobalFlag(P.secretPair), (_m, key, sep) => `${key}${sep}${REDACTED}`],
   [withGlobalFlag(P.pgRowDetail), (_m, lead, space) => `${lead}${space}(${REDACTED})`],
@@ -358,6 +386,16 @@ const SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   "credential",
   "credentials",
   "signedurl",
+  // Passkeys (step 13): WebAuthn credential material and challenge ids (`credential`, `signature` above).
+  "clientdatajson",
+  "attestationobject",
+  "authenticatordata",
+  "rawid",
+  "userhandle",
+  "challenge",
+  "challengeid",
+  "publickey",
+  "credentialid",
   // Photo import (step 10): Google capabilities and identifiers, device-only identifiers, parent text.
   "baseurl",
   "pickeruri",
@@ -411,6 +449,8 @@ const SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   "exif",
   "rawjson",
   "raw",
+  // Video (step 12): the QuickTime location tag's value key as ffprobe spells it.
+  "iso6709",
   // Parent text and model traffic.
   "note",
   "notes",

@@ -8,10 +8,15 @@
  * Read-only (`BEGIN READ ONLY`) with the superuser `DATABASE_URL`. Six sections:
  * 1. family starts per network: `family_starts` grouped by keyed IP hash (first 12 hex characters
  *    shown) in the window, 3 or more starts, most first;
- * 2. families near or over the pool: approved, counting photos across each family's free, live
+ * 2. families near or over the pool: approved, counting items across each family's free, live
  *    albums (the `photos_free_tier_cap` predicate), 800 or more, fullest first, `OVER` past 1,000;
+ *    `videos` = the counting videos (Q3 sub-cap, `free_tier_video_limit()`), `VIDEOS` at or over it.
+ *    Families under 800 items but at or over the video limit are listed too;
  * 3. top storage: albums and families by bytes of originals (every stored photo row: pending,
- *    trashed, Plus and quarantined included, until purged), top `--limit`;
+ *    trashed, Plus and quarantined included, until purged), top `--limit`, with `videos` and
+ *    `video_bytes` (originals of `media_kind = 'video'`); a family at or over the Plus fair-use
+ *    total (`PLUS_FAIR_USE_BYTES_PER_FAMILY`, 200 GiB, step 12 Q4) is marked `FAIR-USE` (operator
+ *    information only, nothing is enforced);
  * 4. recent family starts (window): ledger rows with flags `plus_tag`, `dots_folded`,
  *    `canonical_dup` (another live account shares the founder's canonical inbox) and `suspended`
  *    (the founder or any parent of the family);
@@ -46,6 +51,11 @@ export const MIN_STARTS_PER_NETWORK = 3;
 /** Section 2 threshold: 80 % of the 1,000-photo family pool. */
 export const POOL_WATCH_FROM = 800;
 export const FREE_TIER_PHOTO_LIMIT = 1000;
+/**
+ * Step 12 Q4: Plus fair-use total per family (200 GiB of originals), shown as a marker in
+ * section 3 only; `PLUS_FAIR_USE_BYTES_PER_FAMILY` in `@tinyglow/shared` mirrors it.
+ */
+export const PLUS_FAIR_USE_BYTES_PER_FAMILY = 200 * 1024 * 1024 * 1024;
 /** Section 5 threshold: this fraction of `pending_photo_limit()` (D-K). */
 export const PENDING_WATCH_FRACTION = 0.5;
 /** Text output lists at most this many rows of sections 4-6 (JSON lists all). */
@@ -127,15 +137,19 @@ export interface FamilyPoolRow {
   /** Distinct admins across the family's albums (trashed albums included). */
   parents: number;
   freeAlbums: number;
-  /** Approved, counting photos across the free, live albums. */
+  /** Approved, counting items (photos and videos) across the free, live albums. */
   photos: number;
+  /** Of those, videos (the Q3 sub-cap). */
+  videos: number;
   /** Live pending photos across the family's live albums (any uploader). */
   pending: number;
-  /** Bytes of the counting photos. */
+  /** Bytes of the counting items. */
   bytes: number;
-  /** Percent of the 1,000-photo pool, one decimal. */
+  /** Percent of the 1,000-item pool, one decimal. */
   pct: number;
   over: boolean;
+  /** At or over `free_tier_video_limit()`. */
+  videosOver: boolean;
   /** Parents' addresses, comma-joined (`--show-emails` only). */
   emails?: string | null;
 }
@@ -144,10 +158,14 @@ export interface StorageAlbumRow {
   babyId: string;
   familyId: string;
   plan: "free" | "plus";
-  /** Every stored photo row of the album. */
+  /** Every stored photo row of the album (videos included). */
   photos: number;
+  /** Of those, `media_kind = 'video'`. */
+  videos: number;
   pending: number;
   bytes: number;
+  /** Bytes of the video originals. */
+  videoBytes: number;
   trashed: boolean;
   emails?: string | null;
 }
@@ -157,7 +175,11 @@ export interface StorageFamilyRow {
   parents: number;
   albums: number;
   photos: number;
+  videos: number;
   bytes: number;
+  videoBytes: number;
+  /** `bytes >= PLUS_FAIR_USE_BYTES_PER_FAMILY` (Q4; information only). */
+  fairUse: boolean;
   emails?: string | null;
 }
 
@@ -203,6 +225,10 @@ export interface AbuseReport {
   showEmails: boolean;
   /** `pending_photo_limit()` at report time. */
   pendingLimit: number;
+  /** `free_tier_video_limit()` at report time (Q3). */
+  videoLimit: number;
+  /** `PLUS_FAIR_USE_BYTES_PER_FAMILY` (Q4), for the reader of the JSON. */
+  fairUseBytes: number;
   familyStartsPerNetwork: NetworkRow[];
   families: FamilyPoolRow[];
   topStorage: { albums: StorageAlbumRow[]; families: StorageFamilyRow[] };
@@ -243,31 +269,38 @@ const SQL_NETWORKS = `
   HAVING count(*) >= ${MIN_STARTS_PER_NETWORK}
    ORDER BY starts DESC, last_at DESC`;
 
+/** A video row (step 12; `photos.media_kind`). */
+const VIDEO = `p.media_kind = 'video'`;
+
 const SQL_FAMILIES = `
   WITH pool AS (
     SELECT b.family_id,
            count(DISTINCT b.id)::int AS free_albums,
            count(p.id)::int AS photos,
+           (count(p.id) FILTER (WHERE ${VIDEO}))::int AS videos,
            COALESCE(sum(p.bytes), 0)::text AS bytes
       FROM public.babies b
       LEFT JOIN public.photos p ON p.baby_id = b.id AND ${COUNTING}
      WHERE b.plan = 'free' AND b.deleted_at IS NULL
      GROUP BY b.family_id
     HAVING count(p.id) >= ${POOL_WATCH_FROM}
+        OR count(p.id) FILTER (WHERE ${VIDEO}) >= $2::int
   )
-  SELECT pool.family_id, pool.free_albums, pool.photos, pool.bytes,
+  SELECT pool.family_id, pool.free_albums, pool.photos, pool.videos, pool.bytes,
          ${parentsCount("pool.family_id")} AS parents,
          (SELECT count(*)::int FROM public.babies b JOIN public.photos p ON p.baby_id = b.id
            WHERE b.family_id = pool.family_id AND b.deleted_at IS NULL AND ${PENDING}) AS pending,
          ${parentEmails("pool.family_id", "$1::boolean")} AS emails
     FROM pool
-   ORDER BY pool.photos DESC, pool.family_id`;
+   ORDER BY pool.photos DESC, pool.videos DESC, pool.family_id`;
 
 const SQL_TOP_ALBUMS = `
   SELECT b.id AS baby_id, b.family_id, b.plan,
          count(p.id)::int AS photos,
+         (count(p.id) FILTER (WHERE ${VIDEO}))::int AS videos,
          (count(p.id) FILTER (WHERE ${PENDING}))::int AS pending,
          COALESCE(sum(p.bytes), 0)::text AS bytes,
+         COALESCE(sum(p.bytes) FILTER (WHERE ${VIDEO}), 0)::text AS video_bytes,
          (b.deleted_at IS NOT NULL) AS trashed,
          CASE WHEN $2::boolean THEN (SELECT string_agg(u.email::text, ', ' ORDER BY u.email::text)
             FROM public.baby_members m JOIN auth.users u ON u.id = m.user_id
@@ -283,14 +316,17 @@ const SQL_TOP_FAMILIES = `
     SELECT b.family_id,
            count(DISTINCT b.id)::int AS albums,
            count(p.id)::int AS photos,
-           COALESCE(sum(p.bytes), 0) AS bytes
+           (count(p.id) FILTER (WHERE ${VIDEO}))::int AS videos,
+           COALESCE(sum(p.bytes), 0) AS bytes,
+           COALESCE(sum(p.bytes) FILTER (WHERE ${VIDEO}), 0) AS video_bytes
       FROM public.babies b
       LEFT JOIN public.photos p ON p.baby_id = b.id
      GROUP BY b.family_id
      ORDER BY COALESCE(sum(p.bytes), 0) DESC, count(p.id) DESC, b.family_id
      LIMIT $1
   )
-  SELECT fam.family_id, fam.albums, fam.photos, fam.bytes::text AS bytes,
+  SELECT fam.family_id, fam.albums, fam.photos, fam.videos, fam.bytes::text AS bytes,
+         fam.video_bytes::text AS video_bytes,
          ${parentsCount("fam.family_id")} AS parents,
          ${parentEmails("fam.family_id", "$2::boolean")} AS emails
     FROM fam
@@ -354,10 +390,11 @@ export function pendingWatchFrom(limit: number): number {
 
 /** Run the six sections inside one read-only transaction on `client`. */
 export async function collectReport(client: Queryable, args: ReportArgs): Promise<AbuseReport> {
-  const limitRow = await client.query<{ limit: number }>(
-    'SELECT public.pending_photo_limit() AS "limit"',
+  const limitRow = await client.query<{ limit: number; video_limit: number }>(
+    'SELECT public.pending_photo_limit() AS "limit", public.free_tier_video_limit() AS video_limit',
   );
   const pendingLimit = limitRow.rows[0]?.limit ?? 200;
+  const videoLimit = limitRow.rows[0]?.video_limit ?? 100;
   const networks = await client.query<{
     network: string;
     starts: number;
@@ -369,18 +406,21 @@ export async function collectReport(client: Queryable, args: ReportArgs): Promis
     family_id: string;
     free_albums: number;
     photos: number;
+    videos: number;
     bytes: string;
     parents: number;
     pending: number;
     emails: string | null;
-  }>(SQL_FAMILIES, [args.showEmails]);
+  }>(SQL_FAMILIES, [args.showEmails, videoLimit]);
   const albums = await client.query<{
     baby_id: string;
     family_id: string;
     plan: "free" | "plus";
     photos: number;
+    videos: number;
     pending: number;
     bytes: string;
+    video_bytes: string;
     trashed: boolean;
     emails: string | null;
   }>(SQL_TOP_ALBUMS, [args.limit, args.showEmails]);
@@ -388,7 +428,9 @@ export async function collectReport(client: Queryable, args: ReportArgs): Promis
     family_id: string;
     albums: number;
     photos: number;
+    videos: number;
     bytes: string;
+    video_bytes: string;
     parents: number;
     emails: string | null;
   }>(SQL_TOP_FAMILIES, [args.limit, args.showEmails]);
@@ -429,6 +471,8 @@ export async function collectReport(client: Queryable, args: ReportArgs): Promis
     limit: args.limit,
     showEmails: args.showEmails,
     pendingLimit,
+    videoLimit,
+    fairUseBytes: PLUS_FAIR_USE_BYTES_PER_FAMILY,
     familyStartsPerNetwork: networks.rows.map((r) => ({
       network: r.network,
       starts: r.starts,
@@ -443,10 +487,12 @@ export async function collectReport(client: Queryable, args: ReportArgs): Promis
           parents: r.parents,
           freeAlbums: r.free_albums,
           photos: r.photos,
+          videos: r.videos,
           pending: r.pending,
           bytes: num(r.bytes),
           pct: Math.round((r.photos / FREE_TIER_PHOTO_LIMIT) * 1000) / 10,
           over: r.photos > FREE_TIER_PHOTO_LIMIT,
+          videosOver: r.videos >= videoLimit,
         },
         r.emails,
       ),
@@ -459,8 +505,10 @@ export async function collectReport(client: Queryable, args: ReportArgs): Promis
             familyId: r.family_id,
             plan: r.plan,
             photos: r.photos,
+            videos: r.videos,
             pending: r.pending,
             bytes: num(r.bytes),
+            videoBytes: num(r.video_bytes),
             trashed: r.trashed,
           },
           r.emails,
@@ -473,7 +521,10 @@ export async function collectReport(client: Queryable, args: ReportArgs): Promis
             parents: r.parents,
             albums: r.albums,
             photos: r.photos,
+            videos: r.videos,
             bytes: num(r.bytes),
+            videoBytes: num(r.video_bytes),
+            fairUse: num(r.bytes) >= PLUS_FAIR_USE_BYTES_PER_FAMILY,
           },
           r.emails,
         ),
@@ -564,8 +615,10 @@ const NUMERIC = new Set([
   "free_albums",
   "albums",
   "photos",
+  "videos",
   "pending",
   "bytes",
+  "video_bytes",
   "pct",
   "families",
 ]);
@@ -607,7 +660,7 @@ export function renderText(report: AbuseReport): string {
   );
 
   out.push(
-    `2. Families near or over the pool (${POOL_WATCH_FROM} or more of ${FREE_TIER_PHOTO_LIMIT} approved photos)`,
+    `2. Families near or over the pool (${POOL_WATCH_FROM} or more of ${FREE_TIER_PHOTO_LIMIT} approved items, or ${report.videoLimit} or more videos)`,
   );
   out.push(
     ...formatTable(
@@ -616,6 +669,7 @@ export function renderText(report: AbuseReport): string {
         "parents",
         "free_albums",
         "photos",
+        "videos",
         "pending",
         "bytes",
         "pct",
@@ -627,10 +681,11 @@ export function renderText(report: AbuseReport): string {
         String(r.parents),
         String(r.freeAlbums),
         String(r.photos),
+        String(r.videos),
         String(r.pending),
         formatBytes(r.bytes),
         `${r.pct.toFixed(1)}%`,
-        r.over ? "OVER" : "",
+        [r.over ? "OVER" : "", r.videosOver ? "VIDEOS" : ""].filter(Boolean).join(","),
         ...emails(r.emails),
       ]),
       NUMERIC,
@@ -639,19 +694,32 @@ export function renderText(report: AbuseReport): string {
   );
 
   out.push(
-    `3. Top storage (originals; every stored photo incl. pending, trashed and Plus; top ${report.limit})`,
+    `3. Top storage (originals; every stored photo and video incl. pending, trashed and Plus; top ${report.limit}; FAIR-USE at ${formatBytes(report.fairUseBytes)} per family, information only)`,
   );
   out.push("   Albums");
   out.push(
     ...formatTable(
-      ["baby_id", "family_id", "plan", "photos", "pending", "bytes", "trashed", ...emailHeader],
+      [
+        "baby_id",
+        "family_id",
+        "plan",
+        "photos",
+        "videos",
+        "pending",
+        "bytes",
+        "video_bytes",
+        "trashed",
+        ...emailHeader,
+      ],
       report.topStorage.albums.map((r) => [
         r.babyId,
         r.familyId,
         r.plan,
         String(r.photos),
+        String(r.videos),
         String(r.pending),
         formatBytes(r.bytes),
+        formatBytes(r.videoBytes),
         r.trashed ? "yes" : "",
         ...emails(r.emails),
       ]),
@@ -661,13 +729,26 @@ export function renderText(report: AbuseReport): string {
   out.push("   Families");
   out.push(
     ...formatTable(
-      ["family_id", "parents", "albums", "photos", "bytes", ...emailHeader],
+      [
+        "family_id",
+        "parents",
+        "albums",
+        "photos",
+        "videos",
+        "bytes",
+        "video_bytes",
+        "",
+        ...emailHeader,
+      ],
       report.topStorage.families.map((r) => [
         r.familyId,
         String(r.parents),
         String(r.albums),
         String(r.photos),
+        String(r.videos),
         formatBytes(r.bytes),
+        formatBytes(r.videoBytes),
+        r.fairUse ? "FAIR-USE" : "",
         ...emails(r.emails),
       ]),
       NUMERIC,

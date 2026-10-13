@@ -6,6 +6,7 @@ import { FlowPage } from "../../components/Page";
 import { Button, Message } from "../../components/ui";
 import { t } from "../../i18n";
 import { exchangePkce, verifyTokenHash } from "../../lib/authApi";
+import { offerPasskeyPrompt } from "../../lib/passkeyPrompt";
 import { pendingInvite, pkceVerifier } from "../../lib/session";
 
 /**
@@ -44,7 +45,11 @@ export function CallbackPage() {
     }
 
     exchange
-      .then(() => refetchMe())
+      .then(() => {
+        // A magic-link / OAuth sign-in may show the one-time "Add a passkey" card.
+        offerPasskeyPrompt();
+        return refetchMe();
+      })
       .then((me) => navigate(nextOnboardingRoute(me, pendingInvite.get()), { replace: true }))
       .catch(() => setFailed(true));
   }, [navigate, refetchMe]);
